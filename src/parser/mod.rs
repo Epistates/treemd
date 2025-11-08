@@ -1,3 +1,8 @@
+//! Markdown parsing and document structure extraction.
+//!
+//! This module provides functions to parse markdown files and extract
+//! their heading structure into a hierarchical tree.
+
 mod document;
 
 pub use document::{Document, Heading, HeadingNode};
@@ -5,13 +10,33 @@ pub use document::{Document, Heading, HeadingNode};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use std::path::Path;
 
-/// Parse a markdown file and extract its structure
+/// Parse a markdown file and extract its structure.
+///
+/// # Arguments
+///
+/// * `path` - Path to the markdown file
+///
+/// # Returns
+///
+/// A `Document` containing the file content and extracted headings.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read.
 pub fn parse_file(path: &Path) -> std::io::Result<Document> {
     let content = std::fs::read_to_string(path)?;
     Ok(parse_markdown(&content))
 }
 
-/// Parse markdown content and extract headings
+/// Parse markdown content and extract headings.
+///
+/// # Arguments
+///
+/// * `content` - Markdown content as a string
+///
+/// # Returns
+///
+/// A `Document` containing the content and extracted headings.
 pub fn parse_markdown(content: &str) -> Document {
     let parser = Parser::new(content);
     let mut headings = Vec::new();

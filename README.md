@@ -1,68 +1,52 @@
 # treemd
 
+[![Crates.io](https://img.shields.io/crates/v/treemd.svg)](https://crates.io/crates/treemd)
+[![Documentation](https://docs.rs/treemd/badge.svg)](https://docs.rs/treemd)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/epistates/treemd/ci.yml?branch=main)](https://github.com/epistates/treemd/actions)
+
 A markdown navigator with tree-based structural navigation. Like `tree`, but interactive—navigate markdown documents using an expandable/collapsible heading tree with a synchronized content view.
+
+## Overview
+
+**treemd** is a modern markdown viewer that combines the structural clarity of the `tree` command with powerful interactive navigation. Whether you're exploring large documentation files, analyzing markdown structure, or just reading comfortably in your terminal, treemd provides both CLI tools for scripting and a beautiful TUI for interactive exploration.
 
 ## Features
 
-### Phase 1: CLI Mode ✅
+### 🎨 Interactive TUI
 
-- **List headings**: Quick overview of document structure
-- **Tree view**: Hierarchical visualization with box-drawing
-- **Section extraction**: Extract specific sections by heading name
-- **Filtering**: Filter by text or heading level
-- **Multiple output formats**: Plain text, JSON
-- **Heading statistics**: Count headings by level
-
-### Phase 2: TUI Mode ✅
-
-- **Interactive dual-pane interface** - Outline + content view
-- **Scrollbars** - Visual scrolling indicators for both panes
-- **Help overlay** - Press `?` for keyboard shortcuts
-- **Rich styling** - Color-coded headings by level
-- **Basic markdown rendering** - Headings, lists, blockquotes, code blocks
+- **Dual-pane interface** - Navigate outline while viewing content
+- **Syntax highlighting** - 50+ languages with full syntect integration
 - **Vim-style navigation** - j/k, g/G, d/u for efficient browsing
-- **Smart content display** - Auto-focus on selected section
-- **Status bar** - Shows position, percentage, and quick help
+- **Search & filter** - Press `/` to filter headings in real-time
+- **Collapsible tree** - Expand/collapse sections with Space/Enter
+- **Bookmarks** - Mark positions (`m`) and jump back (`'`)
+- **Adjustable layout** - Toggle outline visibility, resize panes
+- **Rich rendering** - Bold, italic, inline code, lists, blockquotes, code blocks
 
-### Phase 3: Enhanced Rendering ✅
+### ⚡ CLI Mode
 
-- **Syntax-highlighted code blocks** - Full syntect integration with 50+ languages
-- **Inline formatting** - Bold (`**text**`), italic (`*text*`), inline code (`` `code` ``)
-- **Search/filter overlay** - Press `/` to filter headings in real-time
-- **Enhanced markdown** - Beautiful rendering of all common elements
-- **Theme support** - Base16 Ocean Dark for code highlighting
-- **Performance optimized** - Efficient rendering pipeline
-
-### Phase 3.5: UX Polish ✅
-
-- **Toggle outline visibility** - Press `w` for full-width content reading
-- **Adjustable pane split** - Press `[`/`]` to resize outline (20%, 30%, 40%)
-- **Jump to heading by number** - Press `1-9` for instant navigation
-- **Bookmark system** - Press `m` to mark, `'` to return
-- **Enhanced title bar** - Shows heading count
-- **Smart status bar** - Displays outline width, bookmark indicator ⚑
-
-### Planned (Phase 4+)
-
-- OFM (Obsidian Flavored Markdown) callouts and wikilinks
-- Multiple color themes (Nord, Dracula, Solarized)
-- Theme switcher (`t` key)
-- Configuration file (`~/.config/treemd/config.toml`)
-- Fuzzy search with nucleo
-- Tables with box-drawing
-- Watch mode (auto-reload on file change)
+- **List headings** - Quick overview of document structure
+- **Tree visualization** - Hierarchical display with box-drawing
+- **Section extraction** - Extract specific sections by heading name
+- **Smart filtering** - Filter by text or heading level
+- **Multiple formats** - Plain text, JSON output
+- **Statistics** - Count headings by level
 
 ## Installation
 
+### From crates.io
+
 ```bash
-cargo install --path .
+cargo install treemd
 ```
 
-Or build from source:
+### From source
 
 ```bash
-cargo build --release
-./target/release/treemd
+git clone https://github.com/epistates/treemd
+cd treemd
+cargo install --path .
 ```
 
 ## Usage
@@ -194,68 +178,20 @@ Total: 12
 treemd -l -o json README.md
 ```
 
-## Development Roadmap
+## Contributing
 
-- [x] **Phase 1: Core Parser & CLI**
-  - [x] Markdown parsing with pulldown-cmark
-  - [x] Heading tree extraction
-  - [x] CLI commands (`-l`, `--tree`, `-s`, `--count`)
-  - [x] Filtering and level selection
-  - [x] JSON output
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-- [x] **Phase 2: TUI Foundation**
-  - [x] Ratatui dual-pane layout
-  - [x] Outline view with collapsible tree
-  - [x] Content view with markdown rendering
-  - [x] Vim-style navigation keybindings
-  - [x] Scrollbars for both panes
-  - [x] Help overlay popup
-  - [x] Rich styling and colors
-  - [x] Status bar with progress indicators
+## Roadmap
 
-- [x] **Phase 3: Enhanced Rendering**
-  - [x] Syntax highlighting for code blocks (syntect)
-  - [x] Inline formatting (bold, italic, inline code)
-  - [x] Search/filter overlay with real-time filtering
-  - [x] Enhanced markdown rendering pipeline
-  - [x] Theme integration (Base16 Ocean Dark)
-
-- [ ] **Phase 4: Advanced Features**
-  - [ ] OFM callouts and wikilinks
-  - [ ] OFM callouts with icons
-  - [ ] Wikilink styling
-
-- [ ] Phase 4: Search & UX Polish
-  - [ ] Fuzzy search overlay
-  - [ ] Multiple color themes
-  - [ ] Configuration file support
-  - [ ] Help overlay
-
-- [ ] Phase 5: Advanced Features
-  - [ ] Multiple file tabs
-  - [ ] Link following (open [[linked]] files)
-  - [ ] Watch mode (auto-reload on file change)
-
-## Architecture
-
-```
-treemd/
-├── src/
-│   ├── main.rs          # CLI entry, mode selection
-│   ├── parser/
-│   │   ├── mod.rs       # Markdown parsing facade
-│   │   └── document.rs  # Document model (headings tree)
-│   ├── cli/
-│   │   ├── mod.rs
-│   │   └── commands.rs  # CLI argument definitions
-│   └── tui/
-│       ├── mod.rs
-│       ├── app.rs       # TUI application state
-│       ├── ui.rs        # Rendering logic
-│       ├── syntax.rs    # Syntax highlighting
-│       └── theme.rs     # Color theme configuration
-└── Cargo.toml
-```
+Future enhancements planned:
+- Obsidian Flavored Markdown (callouts, wikilinks)
+- Multiple color themes (Nord, Dracula, Solarized)
+- Configuration file support
+- Fuzzy search
+- Multiple file tabs
+- Link following
+- Watch mode (auto-reload on file change)
 
 ## Why treemd?
 

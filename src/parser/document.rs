@@ -1,21 +1,34 @@
+//! Document model for markdown files.
+//!
+//! This module defines the core data structures for representing
+//! markdown documents and their heading hierarchy.
+
 use indextree::{Arena, NodeId};
 use serde::Serialize;
 
-/// A markdown document with its content and structure
+/// A markdown document with its content and structure.
+///
+/// Contains the original markdown content and a list of extracted headings.
 #[derive(Debug, Clone)]
 pub struct Document {
     pub content: String,
     pub headings: Vec<Heading>,
 }
 
-/// A heading in a markdown document
+/// A heading in a markdown document.
+///
+/// Represents a single heading with its level (1-6) and text content.
 #[derive(Debug, Clone, Serialize)]
 pub struct Heading {
+    /// Heading level (1 for #, 2 for ##, etc.)
     pub level: usize,
+    /// Heading text content
     pub text: String,
 }
 
-/// A node in the heading tree
+/// A node in the heading tree.
+///
+/// Represents a heading and its child headings in a hierarchical structure.
 #[derive(Debug, Clone)]
 pub struct HeadingNode {
     pub heading: Heading,

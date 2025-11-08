@@ -2,12 +2,16 @@
 name = "treemd"
 version = "0.4.0"
 edition = "2021"
-authors = ["Nick Paterno"]
+authors = ["epistates, inc. <nick@epistates.com>"]
 description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
 license = "MIT"
 keywords = ["markdown", "tui", "viewer", "navigator", "pager"]
 categories = ["command-line-utilities", "text-processing"]
 repository = "https://github.com/epistates/treemd"
+homepage = "https://github.com/epistates/treemd"
+documentation = "https://docs.rs/treemd"
+readme = "README.md"
+rust-version = "1.81"
 
 [dependencies]
 # CLI framework

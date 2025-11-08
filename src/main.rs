@@ -1,3 +1,33 @@
+//! # treemd
+//!
+//! A markdown navigator with tree-based structural navigation and syntax highlighting.
+//!
+//! ## Features
+//!
+//! - Interactive TUI with dual-pane interface (outline + content)
+//! - CLI mode for scripting and automation
+//! - Syntax-highlighted code blocks (50+ languages)
+//! - Tree-based navigation with expand/collapse
+//! - Search and filter headings
+//! - Multiple output formats (plain, JSON, tree)
+//!
+//! ## Usage
+//!
+//! Launch the interactive TUI:
+//! ```sh
+//! treemd README.md
+//! ```
+//!
+//! List all headings:
+//! ```sh
+//! treemd -l README.md
+//! ```
+//!
+//! Show heading tree:
+//! ```sh
+//! treemd --tree README.md
+//! ```
+
 mod cli;
 mod parser;
 mod tui;
