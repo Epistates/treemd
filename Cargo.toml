@@ -1,0 +1,57 @@
+[package]
+name = "treemd"
+version = "0.4.0"
+edition = "2021"
+authors = ["Nick Paterno"]
+description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
+license = "MIT"
+keywords = ["markdown", "tui", "viewer", "navigator", "pager"]
+categories = ["command-line-utilities", "text-processing"]
+repository = "https://github.com/epistates/treemd"
+
+[dependencies]
+# CLI framework
+clap = { version = "4.5", features = ["derive"] }
+
+# Markdown parsing
+pulldown-cmark = "0.12"
+
+# Tree data structure for heading hierarchy
+indextree = "4.7"
+
+# Terminal styling for CLI mode
+termimad = "0.30"
+
+# Serialization for JSON output
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# TUI framework
+ratatui = "0.29"
+crossterm = "0.28"
+color-eyre = "0.6"
+
+# Syntax highlighting
+syntect = "5.2"
+
+# Fuzzy search
+nucleo-matcher = "0.3"
+
+# Clipboard support
+arboard = { version = "3.4", features = ["wayland-data-control"] }
+
+[profile.release]
+# Enable Link Time Optimization for better performance and smaller binary
+lto = true
+
+# Optimize for size (use "3" for speed instead)
+opt-level = "z"
+
+# Single codegen unit for better optimization (slower compile, better runtime)
+codegen-units = 1
+
+# Strip symbols from binary to reduce size
+strip = true
+
+# Abort on panic for smaller binary size
+panic = "abort"
