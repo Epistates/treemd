@@ -29,15 +29,13 @@
 //! ```
 
 mod cli;
-mod parser;
-mod tui;
 
 use clap::Parser as ClapParser;
 use cli::{Cli, OutputFormat};
 use color_eyre::Result;
-use parser::{parse_file, Document};
 use std::collections::HashMap;
 use std::process;
+use treemd::{parser, Document};
 
 fn main() -> Result<()> {
     color_eyre::install()?;
@@ -45,7 +43,7 @@ fn main() -> Result<()> {
     let args = Cli::parse();
 
     // Parse the markdown file
-    let doc = match parse_file(&args.file) {
+    let doc = match parser::parse_file(&args.file) {
         Ok(doc) => doc,
         Err(e) => {
             eprintln!("Error reading file: {}", e);
@@ -61,8 +59,8 @@ fn main() -> Result<()> {
         && args.command.is_none()
     {
         let mut terminal = ratatui::init();
-        let app = tui::App::new(doc);
-        let result = tui::run(&mut terminal, app);
+        let app = treemd::App::new(doc);
+        let result = treemd::tui::run(&mut terminal, app);
         ratatui::restore();
         return result;
     }

@@ -1,7 +1,7 @@
 [package]
 name = "treemd"
-version = "0.1.0"
-edition = "2021"
+version = "0.1.1"
+edition = "2024"
 authors = ["epistates, inc. <nick@epistates.com>"]
 description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
 license = "MIT"
@@ -11,7 +11,15 @@ repository = "https://github.com/epistates/treemd"
 homepage = "https://github.com/epistates/treemd"
 documentation = "https://docs.rs/treemd"
 readme = "README.md"
-rust-version = "1.81"
+rust-version = "1.85"
+
+[lib]
+name = "treemd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "treemd"
+path = "src/main.rs"
 
 [dependencies]
 # CLI framework

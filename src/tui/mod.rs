@@ -9,6 +9,19 @@ use color_eyre::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
 
+/// Run the TUI application.
+///
+/// This function handles the main event loop for the interactive terminal interface.
+/// It processes keyboard events and renders the UI until the user quits.
+///
+/// # Arguments
+///
+/// * `terminal` - A mutable reference to a ratatui terminal
+/// * `app` - The App instance to run
+///
+/// # Returns
+///
+/// Returns `Ok(())` on successful exit, or an error if something goes wrong.
 pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     let mut app = app;
 

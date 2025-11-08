@@ -7,6 +7,8 @@
 
 A markdown navigator with tree-based structural navigation. Like `tree`, but interactive—navigate markdown documents using an expandable/collapsible heading tree with a synchronized content view.
 
+<img src="assets/screenshot.png" alt="treemd" style="width: 100%; max-width: 100%; margin: 20px 0;"/>
+
 ## Overview
 
 **treemd** is a modern markdown viewer that combines the structural clarity of the `tree` command with powerful interactive navigation. Whether you're exploring large documentation files, analyzing markdown structure, or just reading comfortably in your terminal, treemd provides both CLI tools for scripting and a beautiful TUI for interactive exploration.
