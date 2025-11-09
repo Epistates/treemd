@@ -79,57 +79,92 @@ jobs:
             echo "bin=treemd" >> $GITHUB_OUTPUT
           fi
 
-      # Import Apple certificate (requires GitHub Secrets to be configured)
+      # macOS Code Signing (optional - requires secrets to be configured)
       - name: Import Apple Code Signing Certificate
-        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_BASE64 != ''
+        if: runner.os == 'macOS'
+        continue-on-error: true
         uses: Apple-Actions/import-codesign-certs@v2
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
-      # Code sign with Developer ID (production path)
-      - name: Code sign macOS binary with Developer ID
-        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_BASE64 != ''
+      - name: Code sign and notarize macOS binary
+        if: runner.os == 'macOS'
         run: |
-          codesign --deep --force --verify --verbose \
-            --timestamp --options runtime \
-            --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
-            target/${{ matrix.target }}/release/treemd
-          codesign -v target/${{ matrix.target }}/release/treemd
+          CERT_IMPORTED=false
 
-      # Notarize the binary (production path)
-      - name: Notarize macOS binary
-        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_BASE64 != ''
+          # Check if certificate was imported (if secrets exist, cert should be imported)
+          if security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
+            CERT_IMPORTED=true
+          fi
+
+          if [ "$CERT_IMPORTED" = true ]; then
+            echo "Signing with Developer ID..."
+            codesign --deep --force --verify --verbose \
+              --timestamp --options runtime \
+              --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
+              target/${{ matrix.target }}/release/treemd
+            codesign -v target/${{ matrix.target }}/release/treemd
+
+            echo "Notarizing with Apple..."
+            ditto -c -k --sequesterRsrc target/${{ matrix.target }}/release/treemd treemd-notarize.zip
+
+            xcrun notarytool submit treemd-notarize.zip \
+              --apple-id "${{ secrets.APPLE_ID }}" \
+              --password "${{ secrets.APPLE_ID_PASSWORD }}" \
+              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+              --wait \
+              --timeout 30m
+
+            xcrun stapler staple target/${{ matrix.target }}/release/treemd
+            spctl -a -v target/${{ matrix.target }}/release/treemd || true
+            echo "✓ Binary signed and notarized"
+          else
+            echo "Developer ID certificate not configured. Using ad-hoc signing..."
+            codesign --remove-signature target/${{ matrix.target }}/release/treemd || true
+            codesign -s - target/${{ matrix.target }}/release/treemd
+            codesign -v target/${{ matrix.target }}/release/treemd
+            echo "⚠ Binary ad-hoc signed (users may see Gatekeeper warning)"
+          fi
+
+      # Windows Code Signing (optional - requires secrets to be configured)
+      - name: Code sign Windows binary
+        if: runner.os == 'Windows'
+        shell: powershell
         run: |
-          # Create a temporary zip for notarization (Apple requires this)
-          ditto -c -k --sequesterRsrc target/${{ matrix.target }}/release/treemd treemd-notarize.zip
+          $trustedSigningConfigured = @("${{ secrets.TRUSTED_SIGNING_ACCOUNT_NAME }}") -ne ""
+          $certificateConfigured = @("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}") -ne ""
 
-          # Submit for notarization and wait for approval
-          xcrun notarytool submit treemd-notarize.zip \
-            --apple-id "${{ secrets.APPLE_ID }}" \
-            --password "${{ secrets.APPLE_ID_PASSWORD }}" \
-            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-            --wait \
-            --timeout 30m
+          if ($trustedSigningConfigured) {
+            Write-Output "Trusted Signing is configured, but must be done via action step"
+          } elseif ($certificateConfigured) {
+            Write-Output "Signing with EV certificate..."
 
-          # Staple the notarization ticket to the binary
-          xcrun stapler staple target/${{ matrix.target }}/release/treemd
+            # Decode certificate
+            [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}"))
 
-          # Verify notarization
-          spctl -a -v target/${{ matrix.target }}/release/treemd || true
+            # Sign the binary
+            & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" sign `
+              /f certificate.pfx `
+              /p "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" `
+              /t "http://timestamp.comodoca.com/authenticode" `
+              /fd sha256 `
+              target\${{ matrix.target }}\release\treemd.exe
 
-      # Fallback: Ad-hoc signing if no Developer ID certificate is configured
-      - name: Code sign macOS binary with ad-hoc signature (fallback)
-        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_BASE64 == ''
-        run: |
-          codesign --remove-signature target/${{ matrix.target }}/release/treemd || true
-          codesign -s - target/${{ matrix.target }}/release/treemd
-          codesign -v target/${{ matrix.target }}/release/treemd
+            # Verify signature
+            & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" verify /pa target\${{ matrix.target }}\release\treemd.exe
 
-      # Optional: Windows code signing with Microsoft Trusted Signing (Recommended)
-      # Setup guide: https://learn.microsoft.com/en-us/azure/trusted-signing/
+            # Cleanup
+            Remove-Item certificate.pfx
+            Write-Output "✓ Binary signed with EV certificate"
+          } else {
+            Write-Output "⚠ No code signing configured. Binary will run unsigned."
+          }
+
+      # Windows Trusted Signing (if configured)
       - name: Code sign Windows binary with Trusted Signing
-        if: runner.os == 'Windows' && secrets.TRUSTED_SIGNING_ACCOUNT_NAME != ''
+        if: runner.os == 'Windows'
+        continue-on-error: true
         uses: Azure/trusted-signing-action@v0.3.17
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -139,23 +174,6 @@ jobs:
           trusted-signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.TRUSTED_SIGNING_PROFILE_NAME }}
           files-to-sign: target\${{ matrix.target }}\release\treemd.exe
-
-      # Alternative: Traditional code signing with EV certificate (if not using Trusted Signing)
-      - name: Code sign Windows binary with certificate (traditional)
-        if: runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE_BASE64 != '' && secrets.TRUSTED_SIGNING_ACCOUNT_NAME == ''
-        run: |
-          # Decode certificate
-          [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}"))
-
-          # Sign the binary with timestamping
-          & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" sign /f certificate.pfx /p "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" /t "http://timestamp.comodoca.com/authenticode" /fd sha256 target\${{ matrix.target }}\release\treemd.exe
-
-          # Verify signature
-          & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe" verify /pa target\${{ matrix.target }}\release\treemd.exe
-
-          # Cleanup
-          Remove-Item certificate.pfx
-        shell: powershell
 
       - name: Prepare artifacts
         shell: bash
