@@ -76,10 +76,7 @@ impl Document {
 
     /// Get headings at a specific level
     pub fn headings_at_level(&self, level: usize) -> Vec<&Heading> {
-        self.headings
-            .iter()
-            .filter(|h| h.level == level)
-            .collect()
+        self.headings.iter().filter(|h| h.level == level).collect()
     }
 
     /// Find heading by text (case-insensitive)
@@ -180,7 +177,10 @@ impl HeadingNode {
 
         let connector = if is_last { "└─ " } else { "├─ " };
         let marker = "#".repeat(self.heading.level);
-        result.push_str(&format!("{}{}{} {}\n", prefix, connector, marker, self.heading.text));
+        result.push_str(&format!(
+            "{}{}{} {}\n",
+            prefix, connector, marker, self.heading.text
+        ));
 
         let child_prefix = format!("{}{}   ", prefix, if is_last { " " } else { "│" });
 
