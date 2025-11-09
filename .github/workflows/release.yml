@@ -98,7 +98,7 @@ jobs:
             CERT_IMPORTED=true
           fi
 
-          if [ "$CERT_IMPORTED" = true ]; then
+          if [ "$CERT_IMPORTED" = "true" ]; then
             echo "Signing with Developer ID..."
             codesign --deep --force --verify --verbose \
               --timestamp --options runtime \
@@ -116,7 +116,10 @@ jobs:
               --wait \
               --timeout 30m
 
-            xcrun stapler staple target/${{ matrix.target }}/release/treemd
+            echo "Note: Stapling is not applicable to bare CLI binaries"
+            echo "Binary is notarized server-side - users will be verified online"
+
+            echo "Verifying notarization status..."
             spctl -a -v target/${{ matrix.target }}/release/treemd || true
             echo "✓ Binary signed and notarized"
           else
@@ -132,8 +135,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $trustedSigningConfigured = @("${{ secrets.TRUSTED_SIGNING_ACCOUNT_NAME }}") -ne ""
-          $certificateConfigured = @("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}") -ne ""
+          $trustedSigningConfigured = ("${{ secrets.TRUSTED_SIGNING_ACCOUNT_NAME }}" -ne "")
+          $certificateConfigured = ("${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}" -ne "")
 
           if ($trustedSigningConfigured) {
             Write-Output "Trusted Signing is configured, but must be done via action step"
