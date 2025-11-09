@@ -35,15 +35,45 @@ use cli::{Cli, OutputFormat};
 use color_eyre::Result;
 use std::collections::HashMap;
 use std::process;
-use treemd::{parser, Document};
+use treemd::{Document, parser};
 
 fn main() -> Result<()> {
     color_eyre::install()?;
 
+    // Handle dynamic shell completions
+    #[cfg(feature = "unstable-dynamic")]
+    clap_complete::CompleteEnv::with_factory(|| {
+        use clap::CommandFactory;
+        Cli::command()
+    })
+    .complete();
+
     let args = Cli::parse();
 
+    // Handle completion setup
+    #[cfg(feature = "unstable-dynamic")]
+    if args.setup_completions {
+        match cli::setup::setup_completions_interactive("treemd") {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                eprintln!("Error setting up completions: {}", e);
+                cli::setup::print_completion_instructions("treemd");
+                process::exit(1);
+            }
+        }
+    }
+
+    // Ensure file is provided (unless we already handled setup)
+    let file = args.file.clone().unwrap_or_else(|| {
+        eprintln!("Error: markdown file argument is required");
+        eprintln!("\nUsage: treemd <FILE>\n");
+        eprintln!("For shell completion setup, use:");
+        eprintln!("  treemd --setup-completions");
+        std::process::exit(1);
+    });
+
     // Parse the markdown file
-    let doc = match parser::parse_file(&args.file) {
+    let doc = match parser::parse_file(&file) {
         Ok(doc) => doc,
         Err(e) => {
             eprintln!("Error reading file: {}", e);
@@ -57,6 +87,7 @@ fn main() -> Result<()> {
         && !args.count
         && args.section.is_none()
         && args.command.is_none()
+        && !args.setup_completions
     {
         let mut terminal = ratatui::init();
         let app = treemd::App::new(doc);
@@ -88,11 +119,11 @@ fn handle_cli_mode(args: &Cli, doc: &Document) {
     } else if let Some(ref section_name) = args.section {
         extract_section(doc, section_name);
     } else if args.list {
-        print_headings(&headings, &args.output);
+        print_headings(&headings, &args.output, doc);
     }
 }
 
-fn print_headings(headings: &[&parser::Heading], format: &OutputFormat) {
+fn print_headings(headings: &[&parser::Heading], format: &OutputFormat, doc: &Document) {
     match format {
         OutputFormat::Plain => {
             for heading in headings {
@@ -101,7 +132,9 @@ fn print_headings(headings: &[&parser::Heading], format: &OutputFormat) {
             }
         }
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(headings).unwrap();
+            // Use new nested JSON output with markdown intelligence
+            let json_output = parser::build_json_output(doc, None);
+            let json = serde_json::to_string_pretty(&json_output).unwrap();
             println!("{}", json);
         }
         OutputFormat::Tree => {

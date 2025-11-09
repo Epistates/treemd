@@ -1,50 +1,113 @@
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
+#[cfg(feature = "unstable-dynamic")]
+use clap_complete::engine::{ArgValueCandidates, CompletionCandidate};
+
 #[derive(Parser, Debug)]
 #[command(name = "treemd")]
-#[command(version, about = "A markdown navigator with tree-based structural navigation", long_about = None)]
+#[command(version)]
+#[command(about = "A markdown navigator with tree-based structural navigation")]
+#[command(
+    long_about = "treemd - A modern markdown viewer combining tree-based navigation with interactive TUI.\n\n\
+    Launch without flags for interactive mode with dual-pane interface, vim-style navigation,\n\
+    syntax highlighting, and real-time search. Use flags for CLI mode to extract, filter,\n\
+    and analyze markdown structure.\n\n\
+    Examples:\n  \
+    treemd README.md              # Interactive TUI mode\n  \
+    treemd -l README.md           # List all headings\n  \
+    treemd --tree README.md       # Show heading tree\n  \
+    treemd -s Installation doc.md # Extract section\n  \
+    treemd --setup-completions    # Set up shell completions"
+)]
 pub struct Cli {
-    /// Markdown file to view
-    pub file: PathBuf,
+    /// Markdown file to view (.md or .markdown)
+    ///
+    /// Path to the markdown file to open. If no flags are provided,
+    /// launches the interactive TUI for comfortable reading and navigation.
+    #[arg(add = markdown_file_completer())]
+    pub file: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// List all headings (non-interactive)
+    /// List all headings in the document (non-interactive)
+    ///
+    /// Displays all headings with their level indicators (# for h1, ## for h2, etc.).
+    /// Combine with --filter or --level to narrow results.
     #[arg(short = 'l', long = "list")]
     pub list: bool,
 
-    /// Show heading tree structure (non-interactive)
+    /// Show heading tree structure with box-drawing characters (non-interactive)
+    ///
+    /// Renders the document structure as a visual tree using Unicode box-drawing.
+    /// Shows parent-child relationships between headings hierarchically.
     #[arg(long = "tree")]
     pub tree: bool,
 
-    /// Filter headings by text
-    #[arg(long = "filter")]
+    /// Filter headings by text pattern (case-insensitive)
+    ///
+    /// Only shows headings containing the specified text.
+    /// Works with --list or --tree modes.
+    ///
+    /// Example: --filter "install" matches "Installation" and "Installing"
+    #[arg(long = "filter", value_name = "PATTERN")]
     pub filter: Option<String>,
 
     /// Show only headings at specific level (1-6)
-    #[arg(short = 'L', long = "level")]
+    ///
+    /// Filters headings by their level:
+    ///   1 = # (h1), 2 = ## (h2), 3 = ### (h3), etc.
+    ///
+    /// Example: -L 2 shows only ## headings
+    #[arg(short = 'L', long = "level", value_name = "LEVEL")]
     pub level: Option<usize>,
 
-    /// Output format
+    /// Output format for --list and --tree modes
+    ///
+    /// Controls how headings are displayed:
+    ///   plain - Human-readable text (default)
+    ///   json  - JSON array for scripting/parsing
+    ///   tree  - Box-drawing tree structure
     #[arg(short = 'o', long = "output", default_value = "plain")]
     pub output: OutputFormat,
 
     /// Extract specific section by heading name
-    #[arg(short = 's', long = "section")]
+    ///
+    /// Extracts content from a heading until the next heading of same or higher level.
+    /// Useful for pulling specific sections from large documents.
+    ///
+    /// Example: -s "Usage" extracts the Usage section
+    #[arg(short = 's', long = "section", value_name = "HEADING")]
     pub section: Option<String>,
 
-    /// Count headings by level
+    /// Count headings by level (shows statistics)
+    ///
+    /// Displays a summary showing how many headings exist at each level (h1-h6)
+    /// and the total count.
     #[arg(long = "count")]
     pub count: bool,
+
+    /// Set up shell completions interactively
+    ///
+    /// Interactive helper to configure tab completion for your shell (bash/zsh/fish).
+    /// Detects your shell, finds the config file, and offers to add completion setup.
+    /// Completions intelligently filter to show only .md/.markdown files.
+    #[arg(long = "setup-completions")]
+    pub setup_completions: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
     /// Show heading at specific line number
+    ///
+    /// Finds and displays the heading that appears at or before the given line number.
+    /// Useful for jumping to a specific location in the document structure.
     AtLine {
-        /// Line number
+        /// Line number in the markdown file
+        ///
+        /// The line number to search for. Returns the heading at or immediately
+        /// before this line.
         line: usize,
     },
 }
@@ -57,4 +120,42 @@ pub enum OutputFormat {
     Json,
     /// Tree format with box-drawing
     Tree,
+}
+
+#[cfg(feature = "unstable-dynamic")]
+fn markdown_file_completer() -> ArgValueCandidates {
+    ArgValueCandidates::new(|| {
+        // Get current directory files
+        
+
+        std::fs::read_dir(".")
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.filter_map(Result::ok))
+            .filter_map(|entry| {
+                let path = entry.path();
+                let is_dir = path.is_dir();
+                let file_name = path.file_name()?.to_string_lossy().to_string();
+
+                // Include directories and .md/.MD files
+                if is_dir {
+                    Some(CompletionCandidate::new(file_name).help(Some("directory".into())))
+                } else if let Some(ext) = path.extension() {
+                    let ext_lower = ext.to_string_lossy().to_lowercase();
+                    if ext_lower == "md" || ext_lower == "markdown" {
+                        Some(CompletionCandidate::new(file_name))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+}
+
+#[cfg(not(feature = "unstable-dynamic"))]
+fn markdown_file_completer() -> clap::builder::ValueHint {
+    clap::ValueHint::FilePath
 }
