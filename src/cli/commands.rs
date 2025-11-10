@@ -150,7 +150,14 @@ fn markdown_file_completer() -> ArgValueCompleter {
                 prefix = String::new();
             } else {
                 // Partial path, show completions in parent directory
-                search_dir = input_path.parent().unwrap_or(Path::new("."));
+                // NOTE: parent() returns Some("") for simple filenames like "R"
+                // We need to normalize empty paths to "." for correct completion
+                let parent = input_path.parent().unwrap_or(Path::new("."));
+                search_dir = if parent.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    parent
+                };
                 prefix = input_path
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
