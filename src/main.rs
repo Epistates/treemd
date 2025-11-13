@@ -95,7 +95,8 @@ fn main() -> Result<()> {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string();
-        let app = treemd::App::new(doc, filename);
+        let file_path = file.canonicalize().unwrap_or_else(|_| file.clone());
+        let app = treemd::App::new(doc, filename, file_path);
         let result = treemd::tui::run(&mut terminal, app);
         ratatui::restore();
         return result;

@@ -179,9 +179,7 @@ fn markdown_file_completer() -> ArgValueCompleter {
 
                     // Filter by prefix if provided
                     if !prefix.is_empty()
-                        && !file_name
-                            .to_lowercase()
-                            .starts_with(&prefix.to_lowercase())
+                        && !file_name.to_lowercase().starts_with(&prefix.to_lowercase())
                     {
                         return None;
                     }
@@ -201,8 +199,7 @@ fn markdown_file_completer() -> ArgValueCompleter {
                             dir_completion.push('/');
                         }
                         Some(
-                            CompletionCandidate::new(dir_completion)
-                                .help(Some("directory".into())),
+                            CompletionCandidate::new(dir_completion).help(Some("directory".into())),
                         )
                     } else if let Some(ext) = path.extension() {
                         let ext_lower = ext.to_string_lossy().to_lowercase();
