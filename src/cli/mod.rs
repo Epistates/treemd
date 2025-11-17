@@ -1,4 +1,4 @@
 mod commands;
 pub mod setup;
 
-pub use commands::{Cli, OutputFormat};
+pub use commands::{Cli, ColorModeArg, OutputFormat};

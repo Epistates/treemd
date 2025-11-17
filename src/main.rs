@@ -89,6 +89,40 @@ fn main() -> Result<()> {
         && args.command.is_none()
         && !args.setup_completions
     {
+        // Load configuration
+        let mut config = treemd::Config::load();
+
+        // Apply theme override from CLI if provided
+        if let Some(ref theme_name) = args.theme {
+            config.ui.theme = theme_name.clone();
+        }
+
+        // Detect terminal capabilities and determine color mode
+        let caps = treemd::tui::TerminalCapabilities::detect();
+        let color_mode = if let Some(ref mode_arg) = args.color_mode {
+            use cli::ColorModeArg;
+            use treemd::tui::ColorMode;
+            match mode_arg {
+                ColorModeArg::Auto => caps.recommended_color_mode,
+                ColorModeArg::Rgb => ColorMode::Rgb,
+                ColorModeArg::Color256 => ColorMode::Indexed256,
+            }
+        } else {
+            caps.recommended_color_mode
+        };
+
+        // Show compatibility warning if needed (before TUI init)
+        if caps.should_warn && !config.terminal.warned_terminal_app {
+            if let Some(warning) = caps.warning_message() {
+                eprintln!("\n{}\n", warning);
+                // Wait for user to press a key
+                use std::io::{Read, stdin};
+                let _ = stdin().read(&mut [0u8]).unwrap();
+            }
+            // Mark that we've warned the user
+            let _ = config.set_warned_terminal_app();
+        }
+
         let mut terminal = ratatui::init();
         let filename = file
             .file_name()
@@ -96,7 +130,7 @@ fn main() -> Result<()> {
             .unwrap_or("unknown")
             .to_string();
         let file_path = file.canonicalize().unwrap_or_else(|_| file.clone());
-        let app = treemd::App::new(doc, filename, file_path);
+        let app = treemd::App::new(doc, filename, file_path, config, color_mode);
         let result = treemd::tui::run(&mut terminal, app);
         ratatui::restore();
         return result;
