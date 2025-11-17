@@ -5,7 +5,136 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] - 2025-01-16
+## [0.2.2] - 2025-11-17
+
+### Added
+
+- **Theme Persistence** - User theme preferences now persist across sessions
+  - Theme choice automatically saved when changed (press `t` to select theme)
+  - Config file at `~/.config/treemd/config.toml` (Linux/Unix) or `~/Library/Application Support/treemd/config.toml` (macOS)
+  - No need to reset theme every launch - remembered indefinitely
+  - Works for all 8 themes: OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
+
+- **Outline Width Persistence** - Panel width settings now persist
+  - Outline width (20%, 30%, or 40%) saved when cycling with `[` / `]`
+  - Restored automatically on next launch
+  - Seamless UX - interface remembers your preferred layout
+
+- **Terminal Compatibility Detection** - Intelligent color mode selection for optimal rendering
+  - Automatic detection of terminal RGB/true-color capabilities
+  - Special handling for Apple Terminal.app on macOS < 26 (Sequoia and earlier)
+  - Detects macOS version via Darwin kernel (e.g., Darwin 24 = Sequoia, 26 = Tahoe)
+  - One-time warning for Terminal.app users with recommendations for better alternatives
+  - Warning never shown again after first acknowledgment (saved in config)
+  - macOS 26+ (Tahoe and later) uses RGB mode without warnings
+
+- **256-Color Fallback Mode** - Graceful degradation for limited terminals
+  - Automatic RGB → 256-color conversion when needed
+  - Smart color quantization algorithm:
+    - Grayscale detection with dedicated 24-shade ramp (palette 232-255)
+    - RGB cube mapping for colors (palette 16-231)
+    - Preserves theme appearance while ensuring compatibility
+  - All 8 themes work beautifully in both RGB and 256-color modes
+  - Applied automatically for Terminal.app on macOS < 26
+
+- **CLI Theme Override** - Command-line theme selection
+  - `--theme <THEME>` flag to override saved theme for single session
+  - Example: `treemd --theme Nord README.md`
+  - Available themes: OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
+  - Useful for screenshots, demos, or quick theme testing
+
+- **CLI Color Mode Override** - Force specific color mode
+  - `--color-mode <MODE>` flag to override automatic detection
+  - `auto` - Use automatic detection (default)
+  - `rgb` - Force RGB/true-color mode (16M colors)
+  - `256` - Force 256-color mode
+  - Example: `treemd --color-mode 256 README.md`
+  - Power user feature for debugging or preference
+
+### Changed
+
+- **App Initialization** - Enhanced to support configuration and terminal detection
+  - `App::new()` now accepts `Config` and `ColorMode` parameters
+  - Loads user preferences before launching TUI
+  - Applies color mode to theme during initialization
+  - Theme changes now trigger config save automatically
+
+- **Terminal Warning Flow** - User-friendly compatibility notice
+  - Shows one-time warning before TUI launch (not in alternate screen)
+  - Waits for user acknowledgment before continuing
+  - Warning includes:
+    - Clear explanation of Terminal.app RGB limitations
+    - Confirmation of 256-color fallback activation
+    - Recommendations for iTerm2, Kitty, and Alacritty
+    - macOS version information for context
+  - Never blocks users on modern macOS (26+) or other terminals
+
+### Technical
+
+- **New Dependencies**
+  - `dirs 6.0` - Cross-platform config directory paths
+  - `toml 0.9` - Configuration file serialization
+  - `supports-color 3.0` - Terminal color capability detection
+
+- **New Modules**
+  - `src/config.rs` - Configuration management and persistence
+    - TOML-based config with `[ui]` and `[terminal]` sections
+    - Auto-creates config directory if missing
+    - Graceful fallback to defaults if config missing or corrupt
+    - Theme name string ↔ enum conversion
+  - `src/tui/terminal_compat.rs` - Terminal capability detection
+    - `TerminalCapabilities::detect()` - Analyzes terminal and OS
+    - `TERM_PROGRAM` environment variable detection
+    - macOS version detection via `uname -r`
+    - Smart warning logic (only macOS < 26 Terminal.app)
+  - `src/tui/theme.rs` enhancements - Color mode conversion
+    - `Theme::with_color_mode()` - Apply color mode to theme
+    - `rgb_to_256()` - RGB to 256-color quantization
+    - Preserves all theme definitions while adapting output
+
+- **App State Enhancements** (`src/tui/app.rs`)
+  - Added `config: Config` field for persistence
+  - Added `color_mode: ColorMode` field to remember active mode
+  - `apply_selected_theme()` now saves to config and applies color mode
+  - `cycle_outline_width()` now saves to config automatically
+  - Constructor signature updated: `new(doc, filename, path, config, color_mode)`
+
+- **CLI Argument Additions** (`src/cli/commands.rs`)
+  - `--theme` optional flag with theme name validation
+  - `--color-mode` optional flag with enum: Auto, Rgb, Color256
+  - `ColorModeArg` enum exported for use in main
+
+- **Main Initialization Flow** (`src/main.rs`)
+  - Config loaded before TUI initialization
+  - CLI flag overrides applied to config
+  - Terminal capabilities detected and evaluated
+  - Color mode determined from CLI flag or auto-detection
+  - Warning displayed if needed (before TUI init)
+  - Config updated with warning acknowledgment
+
+### Platform-Specific Notes
+
+- **macOS Sequoia (Darwin 24) and earlier**
+  - Terminal.app users see one-time compatibility notice
+  - Automatic 256-color fallback for better rendering
+  - Recommended to use iTerm2, Kitty, or Alacritty for RGB support
+
+- **macOS Tahoe (Darwin 26) and later**
+  - Terminal.app works well with RGB mode
+  - No warnings or fallbacks needed
+  - Full theme fidelity
+
+- **Linux/Unix**
+  - Config at `~/.config/treemd/config.toml` (XDG standard)
+  - Terminal detection respects `supports-color` crate findings
+  - Most modern terminals support RGB
+
+- **All Platforms**
+  - Theme persistence "just works"
+  - CLI overrides respected for all flags
+  - 256-color fallback available when needed
+
+## [0.2.1] - 2025-11-16
 
 ### Fixed
 
@@ -77,7 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **macOS**: Works as before (system manages clipboard, no persistence needed).
 - **Windows**: Works as before (system manages clipboard, no persistence needed).
 
-## [0.2.0] - 2025-01-13
+## [0.2.0] - 2025-11-13
 
 ### Added
 
