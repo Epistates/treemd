@@ -47,6 +47,11 @@
 //! }
 //! ```
 
+/// Configuration module for persisting user preferences.
+///
+/// Provides configuration management for theme choices, UI settings, and terminal preferences.
+pub mod config;
+
 /// Parser module for markdown documents.
 ///
 /// Provides functions to parse markdown files and content into structured documents.
@@ -59,5 +64,6 @@ pub mod parser;
 pub mod tui;
 
 // Re-export commonly used types for convenience
+pub use config::Config;
 pub use parser::{Document, Heading, HeadingNode, parse_file, parse_markdown};
 pub use tui::App;
