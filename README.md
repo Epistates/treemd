@@ -7,7 +7,7 @@
 
 A markdown navigator with tree-based structural navigation. Like `tree`, but interactive—navigate markdown documents using an expandable/collapsible heading tree with a synchronized content view.
 
-<img src="assets/screenshot.png" alt="treemd" style="width: 100%; max-width: 100%; margin: 20px 0;"/>
+<img src="assets/screenshot.webp" alt="treemd" style="width: 100%; max-width: 100%; margin: 20px 0;"/>
 
 ## Overview
 
