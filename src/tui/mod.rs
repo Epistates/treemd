@@ -1,10 +1,12 @@
 mod app;
+mod interactive;
 mod syntax;
 pub mod terminal_compat;
 pub mod theme;
 mod ui;
 
 pub use app::App;
+pub use interactive::InteractiveState;
 pub use terminal_compat::{ColorMode, TerminalCapabilities};
 pub use theme::ThemeName;
 
@@ -80,6 +82,190 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         KeyCode::Char('y') => app.copy_content(),
                         KeyCode::Char('Y') => app.copy_anchor(),
                         KeyCode::Char('q') => return Ok(()),
+                        _ => {}
+                    }
+                }
+                // Handle interactive mode
+                else if app.mode == app::AppMode::Interactive {
+                    // Check if we're in table navigation mode
+                    if app.interactive_state.is_in_table_mode() {
+                        // Table navigation mode - handle hjkl navigation
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.interactive_state.exit_table_mode();
+                                app.status_message = Some(app.interactive_state.status_text());
+                            }
+                            KeyCode::Char('h') | KeyCode::Left => {
+                                // Extract table dimensions first
+                                let (rows, cols) = if let Some(element) = app.interactive_state.current_element() {
+                                    if let crate::tui::interactive::ElementType::Table { rows, cols, .. } = &element.element_type {
+                                        Some((*rows, *cols))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }.unwrap_or((0, 0));
+
+                                if cols > 0 {
+                                    app.interactive_state.table_move_left();
+                                    app.status_message = Some(app.interactive_state.table_status_text(rows + 1, cols));
+                                }
+                            }
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                // Extract table dimensions first
+                                let (rows, cols) = if let Some(element) = app.interactive_state.current_element() {
+                                    if let crate::tui::interactive::ElementType::Table { rows, cols, .. } = &element.element_type {
+                                        Some((*rows, *cols))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }.unwrap_or((0, 0));
+
+                                if rows > 0 {
+                                    app.interactive_state.table_move_down(rows + 1);
+                                    app.status_message = Some(app.interactive_state.table_status_text(rows + 1, cols));
+                                }
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                // Extract table dimensions first
+                                let (rows, cols) = if let Some(element) = app.interactive_state.current_element() {
+                                    if let crate::tui::interactive::ElementType::Table { rows, cols, .. } = &element.element_type {
+                                        Some((*rows, *cols))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }.unwrap_or((0, 0));
+
+                                if rows > 0 {
+                                    app.interactive_state.table_move_up();
+                                    app.status_message = Some(app.interactive_state.table_status_text(rows + 1, cols));
+                                }
+                            }
+                            KeyCode::Char('l') | KeyCode::Right => {
+                                // Extract table dimensions first
+                                let (rows, cols) = if let Some(element) = app.interactive_state.current_element() {
+                                    if let crate::tui::interactive::ElementType::Table { rows, cols, .. } = &element.element_type {
+                                        Some((*rows, *cols))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }.unwrap_or((0, 0));
+
+                                if cols > 0 {
+                                    app.interactive_state.table_move_right(cols);
+                                    app.status_message = Some(app.interactive_state.table_status_text(rows + 1, cols));
+                                }
+                            }
+                            KeyCode::Char('y') => {
+                                // Copy cell
+                                if let Err(e) = app.copy_table_cell() {
+                                    app.status_message = Some(format!("✗ Error: {}", e));
+                                }
+                            }
+                            KeyCode::Char('Y') => {
+                                // Copy row
+                                if let Err(e) = app.copy_table_row() {
+                                    app.status_message = Some(format!("✗ Error: {}", e));
+                                }
+                            }
+                            KeyCode::Char('r') => {
+                                // Copy table as markdown
+                                if let Err(e) = app.copy_table_markdown() {
+                                    app.status_message = Some(format!("✗ Error: {}", e));
+                                }
+                            }
+                            KeyCode::Enter => {
+                                // Enter cell edit mode
+                                if let Err(e) = app.enter_cell_edit_mode() {
+                                    app.status_message = Some(format!("✗ Error: {}", e));
+                                }
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
+                        }
+                    } else {
+                        // Regular interactive mode
+                        // Clear status message on most key presses
+                        if key.code != KeyCode::Tab {
+                            app.status_message = None;
+                        }
+
+                        match key.code {
+                            KeyCode::Esc => app.exit_interactive_mode(),
+                            KeyCode::Tab => {
+                                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                    app.interactive_state.previous();
+                                } else {
+                                    app.interactive_state.next();
+                                }
+                                // Auto-scroll to keep element in view
+                                app.scroll_to_interactive_element(20);
+                                // Update status bar
+                                app.status_message = Some(app.interactive_state.status_text());
+                            }
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                app.interactive_state.next();
+                                // Auto-scroll to keep element in view
+                                app.scroll_to_interactive_element(20);
+                                app.status_message = Some(app.interactive_state.status_text());
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                app.interactive_state.previous();
+                                // Auto-scroll to keep element in view
+                                app.scroll_to_interactive_element(20);
+                                app.status_message = Some(app.interactive_state.status_text());
+                            }
+                            KeyCode::Enter | KeyCode::Char(' ') => {
+                                // Activate the selected element
+                                if let Err(e) = app.activate_interactive_element() {
+                                    app.status_message = Some(format!("✗ Error: {}", e));
+                                }
+                                // Update content metrics after actions that might change content
+                                app.update_content_metrics();
+                            }
+                            KeyCode::Char('y') => {
+                                // Copy action - delegate to activate for code/image elements
+                                if let Err(e) = app.activate_interactive_element() {
+                                    app.status_message = Some(format!("✗ Error: {}", e));
+                                }
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
+                        }
+                    }
+                }
+                // Handle cell edit mode
+                else if app.mode == app::AppMode::CellEdit {
+                    match key.code {
+                        KeyCode::Esc => {
+                            // Cancel editing
+                            app.mode = app::AppMode::Interactive;
+                            app.status_message = Some("Editing cancelled".to_string());
+                        }
+                        KeyCode::Enter => {
+                            // Save the edited cell
+                            match app.save_edited_cell() {
+                                Ok(()) => {
+                                    app.mode = app::AppMode::Interactive;
+                                }
+                                Err(e) => {
+                                    app.status_message = Some(format!("✗ Error saving: {}", e));
+                                }
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            app.cell_edit_value.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.cell_edit_value.push(c);
+                        }
                         _ => {}
                     }
                 }
@@ -197,6 +383,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 }
                             }
                         }
+                        // Interactive element navigation
+                        KeyCode::Char('i') => app.enter_interactive_mode(),
                         // Link following
                         KeyCode::Char('f') => app.enter_link_follow_mode(),
                         KeyCode::Char('b') | KeyCode::Backspace => {
