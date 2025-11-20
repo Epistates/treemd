@@ -3,7 +3,9 @@
 //! Parses markdown content into semantic blocks and inline elements.
 
 use super::output::{Alignment, Block, InlineElement, ListItem};
-use pulldown_cmark::{Alignment as CmarkAlignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    Alignment as CmarkAlignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd,
+};
 
 /// Parse markdown content into structured blocks
 pub fn parse_content(markdown: &str, start_line: usize) -> Vec<Block> {
@@ -71,12 +73,19 @@ fn extract_details_blocks(markdown: &str) -> (String, Vec<Block>) {
                     let details_content = &markdown[details_start..details_end];
 
                     // Extract summary
-                    let summary = if let Some(summary_start_pos) = details_content.find("<summary") {
-                        if let Some(summary_tag_end) = details_content[summary_start_pos..].find('>') {
+                    let summary = if let Some(summary_start_pos) = details_content.find("<summary")
+                    {
+                        if let Some(summary_tag_end) =
+                            details_content[summary_start_pos..].find('>')
+                        {
                             let summary_content_start = summary_start_pos + summary_tag_end + 1;
-                            if let Some(summary_end_pos) = details_content[summary_content_start..].find("</summary>") {
+                            if let Some(summary_end_pos) =
+                                details_content[summary_content_start..].find("</summary>")
+                            {
                                 let summary_end = summary_content_start + summary_end_pos;
-                                details_content[summary_content_start..summary_end].trim().to_string()
+                                details_content[summary_content_start..summary_end]
+                                    .trim()
+                                    .to_string()
                             } else {
                                 String::new()
                             }
@@ -88,12 +97,13 @@ fn extract_details_blocks(markdown: &str) -> (String, Vec<Block>) {
                     };
 
                     // Extract content (everything after </summary>)
-                    let content_start = if let Some(summary_end_pos) = details_content.find("</summary>") {
-                        let summary_tag_end = summary_end_pos + "</summary>".len();
-                        &details_content[summary_tag_end..]
-                    } else {
-                        details_content
-                    };
+                    let content_start =
+                        if let Some(summary_end_pos) = details_content.find("</summary>") {
+                            let summary_tag_end = summary_end_pos + "</summary>".len();
+                            &details_content[summary_tag_end..]
+                        } else {
+                            details_content
+                        };
 
                     let content_trimmed = content_start.trim();
 
@@ -267,6 +277,9 @@ impl ParserState {
             self.table_headers.clear();
             self.table_alignments.clear();
             self.table_rows.clear();
+            self.current_row.clear();
+            self.paragraph_buffer.clear();
+            self.inline_buffer.clear();
             self.in_table = false;
         }
     }
@@ -417,10 +430,12 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
         }
         Event::Start(Tag::TableCell) => {
             state.paragraph_buffer.clear();
+            state.inline_buffer.clear();
         }
         Event::End(TagEnd::TableCell) => {
             state.current_row.push(state.paragraph_buffer.clone());
             state.paragraph_buffer.clear();
+            state.inline_buffer.clear();
         }
         Event::Start(Tag::Strong) => {
             state.in_strong = true;
@@ -463,7 +478,9 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
             state.link_text.clear();
             state.link_url.clear();
         }
-        Event::Start(Tag::Image { dest_url, title, .. }) => {
+        Event::Start(Tag::Image {
+            dest_url, title, ..
+        }) => {
             state.link_url = dest_url.to_string();
             state.link_text.clear();
             state.paragraph_buffer = title.to_string();
@@ -497,7 +514,8 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
                 // Add indentation for nested list items
                 if state.in_list && state.item_depth > 1 {
                     // Add newline and indentation before nested item text
-                    if !state.paragraph_buffer.is_empty() && !state.paragraph_buffer.ends_with('\n') {
+                    if !state.paragraph_buffer.is_empty() && !state.paragraph_buffer.ends_with('\n')
+                    {
                         state.paragraph_buffer.push('\n');
                     }
                     // Add indentation based on depth
@@ -534,6 +552,16 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
         Event::Rule => {
             state.flush_paragraph(blocks);
             blocks.push(Block::HorizontalRule);
+        }
+        Event::Start(Tag::Heading { .. }) => {
+            // Clear buffers when entering a heading - we don't include headings in parsed blocks
+            state.paragraph_buffer.clear();
+            state.inline_buffer.clear();
+        }
+        Event::End(TagEnd::Heading(_)) => {
+            // Clear buffers after heading to prevent text leaking into next paragraph
+            state.paragraph_buffer.clear();
+            state.inline_buffer.clear();
         }
         _ => {}
     }
