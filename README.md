@@ -34,14 +34,16 @@ A markdown navigator with tree-based structural navigation. Like `tree`, but int
 
 ### CLI Mode
 
+- **Query language** - jq-like syntax for extracting markdown elements (`-q '.h2 | text'`)
 - **List headings** - Quick overview of document structure
 - **Tree visualization** - Hierarchical display with box-drawing
 - **Section extraction** - Extract specific sections by heading name
 - **Smart filtering** - Filter by text or heading level
 - **Multiple formats** - Plain text, JSON output
 - **Statistics** - Count headings by level
+- **Stdin support** - Pipe markdown content (`cat doc.md | treemd -q '.h'`)
 
-**treemd** is incredibly powerful as a CLI utility. Using the `--tree` visualizations with `--section` enables rapid piecewise consumption of even the largest `.md` files.
+**treemd** is incredibly powerful as a CLI utility. Using the `--tree` visualizations with `--section` enables rapid piecewise consumption of even the largest `.md` files. The query language brings jq-like power to markdown extraction.
 
 ## Installation
 
@@ -239,6 +241,138 @@ Total: 12
 treemd -l -o json README.md
 ```
 
+### Query Language
+
+treemd includes a powerful jq-like query language for extracting and filtering markdown elements. Use `-q` to execute queries and `--query-help` for full documentation.
+
+#### Element Selectors
+
+```bash
+# All headings
+treemd -q '.h' doc.md
+
+# Specific heading levels
+treemd -q '.h2' doc.md
+
+# Code blocks, links, images, tables
+treemd -q '.code' doc.md
+treemd -q '.link' doc.md
+treemd -q '.img' doc.md
+treemd -q '.table' doc.md
+```
+
+#### Filters and Indexing
+
+```bash
+# Fuzzy text filter
+treemd -q '.h2[Features]' doc.md
+
+# Exact text match
+treemd -q '.h2["Installation"]' doc.md
+
+# By index (first, last, slice)
+treemd -q '.h2[0]' doc.md
+treemd -q '.h2[-1]' doc.md
+treemd -q '.h2[1:3]' doc.md
+
+# Code blocks by language
+treemd -q '.code[rust]' doc.md
+treemd -q '.code[python]' doc.md
+```
+
+#### Pipes and Functions
+
+```bash
+# Get heading text (strips ## prefix)
+treemd -q '.h2 | text' doc.md
+
+# Count elements
+treemd -q '[.h2] | count' doc.md
+
+# First/last n elements
+treemd -q '[.h] | limit(5)' doc.md
+treemd -q '[.h] | skip(2) | limit(3)' doc.md
+
+# Filter with conditions (three equivalent ways)
+treemd -q '.h | select(contains("API"))' doc.md
+treemd -q '.h | where(contains("API"))' doc.md
+treemd -q '.h[API]' doc.md
+
+# String transformations
+treemd -q '.h2 | text | upper' doc.md
+treemd -q '.h2 | text | slugify' doc.md
+
+# Get URLs from links
+treemd -q '.link | url' doc.md
+treemd -q '.link[external] | url' doc.md
+
+# Code block languages
+treemd -q '.code | lang' doc.md
+```
+
+#### Hierarchy Operators
+
+```bash
+# Direct children (h2s under h1)
+treemd -q '.h1 > .h2' doc.md
+
+# All descendants (code anywhere under h1)
+treemd -q '.h1 >> .code' doc.md
+
+# Combined with filters
+treemd -q '.h1[Features] > .h2' doc.md
+```
+
+#### Aggregation and Grouping
+
+```bash
+# Document statistics
+treemd -q '. | stats' doc.md
+
+# Heading counts by level
+treemd -q '. | levels' doc.md
+
+# Code blocks by language
+treemd -q '. | langs' doc.md
+
+# Group headings by level
+treemd -q '[.h] | group_by("level")' doc.md
+```
+
+#### Output Formats
+
+```bash
+# Plain text (default)
+treemd -q '.h2' doc.md
+
+# JSON
+treemd -q '.h2' --query-output json doc.md
+
+# Pretty JSON
+treemd -q '.h2' --query-output json-pretty doc.md
+
+# Line-delimited JSON
+treemd -q '.h2' --query-output jsonl doc.md
+```
+
+#### Stdin Support
+
+```bash
+# Pipe markdown content
+cat doc.md | treemd -q '.h2'
+
+# Pipe from other commands
+curl -s https://raw.githubusercontent.com/.../README.md | treemd -q '.h'
+
+# Tree output to treemd (with TUI)
+tree | treemd
+
+# Explicit stdin
+treemd -q '.code' -
+```
+
+For complete documentation: `treemd --query-help`
+
 ## Releases
 
 ### Cross-Platform Binaries
@@ -414,14 +548,20 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Roadmap
 
-Future enhancements planned:
-- Obsidian Flavored Markdown (callouts, wikilinks)
-- Multiple color themes (Nord, Dracula, Solarized)
-- Configuration file support
-- Fuzzy search
+**Completed:**
+- [x] Query language (jq-like syntax for markdown)
+- [x] Stdin/pipe support
+- [x] Multiple color themes (8 themes: Nord, Dracula, Solarized, etc.)
+- [x] Configuration file support
+- [x] Link following with navigation history
+- [x] WikiLinks support
+
+**Planned:**
+- Obsidian Flavored Markdown (callouts)
+- Fuzzy search improvements
 - Multiple file tabs
-- Link following
 - Watch mode (auto-reload on file change)
+- Custom function plugins for query language
 
 ## Why treemd?
 

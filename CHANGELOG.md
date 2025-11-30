@@ -5,6 +5,162 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-11-30
+
+### Added
+
+- **Query Language (tql)** - A comprehensive jq-like query language for navigating and extracting markdown structure
+  - Element selectors: `.h`, `.h1`-`.h6`, `.code`, `.link`, `.img`, `.table`, `.list`, `.blockquote`
+  - Filters and indexing: `[Features]` (fuzzy), `["exact"]`, `[0]`, `[-1]`, `[1:3]`, `[:3]`
+  - Hierarchy operators: `>` (direct child), `>>` (descendant)
+  - Pipes for chaining: `.h2 | text | upper`
+  - Multiple output formats: plain, json, json-pretty, jsonl, markdown, tree
+  - 50+ built-in functions with extensive aliases for discoverability
+
+- **CLI Query Flags**
+  - `-q, --query <EXPR>` - Execute a query expression
+  - `--query-help` - Display comprehensive query language documentation
+  - `--query-output <FORMAT>` - Set output format (plain, json, jsonl, etc.)
+
+- **Query Functions - Collections**
+  - `count`, `length` (aliases: `len`, `size`) - Count elements
+  - `first`, `last` (alias: `head`) - Get first/last element
+  - `limit(n)`, `skip(n)` (aliases: `take`, `drop`) - Pagination
+  - `nth(n)` - Get element at index (supports negative)
+  - `reverse`, `sort`, `sort_by(key)` - Ordering
+  - `unique`, `flatten` - Array operations
+  - `group_by(key)` - Group elements by property
+  - `keys`, `values` - Object access
+  - `min`, `max`, `add` - Numeric/string aggregation
+  - `any`, `all` - Boolean aggregation
+
+- **Query Functions - Strings**
+  - `text` - Get text representation
+  - `upper`, `lower` (aliases: `ascii_upcase`, `ascii_downcase`) - Case conversion
+  - `trim` - Strip whitespace
+  - `split(sep)`, `join(sep)` - Split/join
+  - `replace(from, to)` - Substring replacement
+  - `slugify` - URL-friendly slug
+  - `lines`, `words`, `chars` - Count lines/words/characters
+
+- **Query Functions - Filtering**
+  - `select(cond)` (aliases: `where`, `filter`) - Keep elements matching condition
+  - `contains(s)` (alias: `includes`) - Check for substring
+  - `startswith(s)`, `endswith(s)` (aliases: `starts_with`, `ends_with`) - Prefix/suffix check
+  - `matches(regex)` - Regex matching
+  - `has(key)` - Check for property
+  - `not` - Negate boolean
+  - `type` - Get value type
+
+- **Query Functions - Content**
+  - `content` - Section content (for headings)
+  - `md` (alias: `markdown`) - Raw markdown
+  - `url` (aliases: `href`, `src`) - Get URL/link/image source
+  - `lang` (alias: `language`) - Code block language
+
+- **Query Functions - Aggregation**
+  - `stats` - Document statistics (headings, code blocks, links, etc.)
+  - `levels` - Heading count by level
+  - `langs` - Code block count by language
+  - `types` - Link types count
+
+- **Element Selector Aliases** - Multiple names for discoverability
+  - `.heading`, `.headers` → `.h`
+  - `.codeblock`, `.pre` → `.code`
+  - `.a`, `.anchor` → `.link`
+  - `.ul`, `.ol` → `.list`
+  - `.bq`, `.quotes` → `.blockquote`
+  - `.para`, `.paragraph`, `.p` → `.para`
+  - `.fm`, `.meta`, `.yaml` → `.frontmatter`
+
+- **Stdin/Pipe Support** - Read markdown from stdin for CLI workflows
+  - `cat doc.md | treemd -q '.h2'` - Pipe markdown content
+  - `tree | treemd` - Pipe tree output (auto-converted to markdown)
+  - `treemd -` - Explicit stdin reading
+  - Security limits: 100MB max input, 10MB max line length
+  - UTF-8 validation with clear error messages
+
+- **TTY Handling for Piped Input** - TUI mode works even when stdin is piped
+  - Opens `/dev/tty` for keyboard input when stdin is piped
+  - Enables raw mode on correct terminal device
+  - Seamless `tree | treemd` workflow with full interactivity
+
+### Technical
+
+- **New Query Module** (`src/query/` - ~3000 lines)
+  - `mod.rs` - Public API: `execute()`, `parse()`, `engine()`, `format_output()`
+  - `lexer.rs` - Tokenizer with span tracking
+  - `parser.rs` - Recursive descent parser with operator precedence
+  - `ast.rs` - Complete AST types (Query, Expr, ElementKind, Filter, IndexOp, etc.)
+  - `eval.rs` - Evaluator with pluggable function registry
+  - `registry.rs` - Function and extractor registry with Levenshtein suggestions
+  - `value.rs` - Runtime value types (Heading, Code, Link, Image, Table, etc.)
+  - `builtins/mod.rs` - 50+ built-in functions
+  - `output.rs` - Multi-format output rendering
+  - `error.rs` - Rich error messages with source spans and suggestions
+  - `extractors.rs` - Pluggable element extraction (reserved for future)
+
+- **New Input Module** (`src/input.rs` - 195 lines)
+  - `InputSource` enum for file vs stdin sources
+  - `InputError` with descriptive messages
+  - `determine_input_source()` - Smart source detection
+  - `process_input()` - Content processing with format detection
+  - Security limits to prevent DoS attacks
+
+- **New TTY Module** (`src/tui/tty.rs` - 229 lines)
+  - `enable_raw_mode()` / `disable_raw_mode()` - TTY-aware raw mode
+  - `read_event()` - Event reading from correct source
+  - Uses `MaybeUninit` for safer uninitialized memory handling
+  - Cross-platform support (Unix with `/dev/tty`, Windows fallback)
+
+- **New Dependencies**
+  - `indexmap 2.7` - Ordered maps for predictable output
+  - `regex 1.11` - Regex matching in queries
+
+- **Architecture**
+  - Pluggable function registry for custom extensions
+  - Trait-based extractor system for future element types
+  - Comprehensive test suite (35 query tests)
+
+### Examples
+
+```bash
+# List all h2 headings
+treemd -q '.h2' doc.md
+
+# Get heading text only
+treemd -q '.h2 | text' doc.md
+
+# Count headings
+treemd -q '[.h2] | count' doc.md
+
+# First 5 headings
+treemd -q '[.h] | limit(5)' doc.md
+
+# Filter headings (three equivalent ways)
+treemd -q '.h | select(contains("API"))' doc.md
+treemd -q '.h | where(contains("API"))' doc.md
+treemd -q '.h[API]' doc.md
+
+# All Rust code blocks
+treemd -q '.code[rust]' doc.md
+
+# External link URLs
+treemd -q '.link[external] | url' doc.md
+
+# h2s under "Features" section
+treemd -q '.h1[Features] > .h2' doc.md
+
+# Group headings by level
+treemd -q '[.h] | group_by("level")' --query-output json doc.md
+
+# Document statistics
+treemd -q '. | stats' doc.md
+
+# Pipe from tree command
+tree | treemd -q '.h'
+```
+
 ## [0.3.2] - 2025-11-22
 
 ### Fixed

@@ -807,6 +807,8 @@ checksum = "6717a8d2a5a929a1a2eb43a12812498ed141a0bcfb7e8f7844fbdbe4303bba9f"
 dependencies = [
  "equivalent",
  "hashbrown 0.16.0",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -1957,7 +1959,7 @@ dependencies = [
 
 [[package]]
 name = "treemd"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "arboard",
  "clap",
@@ -1966,15 +1968,19 @@ dependencies = [
  "crossterm 0.29.0",
  "dirs",
  "edit",
+ "indexmap",
  "indextree",
+ "libc",
  "nucleo-matcher",
  "open",
  "pulldown-cmark",
  "ratatui",
+ "regex",
  "serde",
  "serde_json",
  "supports-color",
  "syntect",
+ "tempfile",
  "termimad",
  "toml",
  "unicode-width 0.2.0",
