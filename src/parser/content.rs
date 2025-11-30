@@ -173,6 +173,9 @@ struct ParserState {
     in_link: bool,
     link_url: String,
     link_text: String,
+    image_in_link: bool,
+    in_image: bool,
+    saved_link_url: String,
 }
 
 impl ParserState {
@@ -207,6 +210,9 @@ impl ParserState {
             in_link: false,
             link_url: String::new(),
             link_text: String::new(),
+            image_in_link: false,
+            in_image: false,
+            saved_link_url: String::new(),
         }
     }
 
@@ -467,48 +473,97 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
         }
         Event::End(TagEnd::Link) => {
             state.in_link = false;
-            state.inline_buffer.push(InlineElement::Link {
-                text: state.link_text.clone(),
-                url: state.link_url.clone(),
-                title: None,
-            });
-            state
-                .paragraph_buffer
-                .push_str(&format!("[{}]({})", state.link_text, state.link_url));
+
+            // For image-in-link (badge pattern), create a link with the alt text and outer URL
+            if state.image_in_link {
+                state.inline_buffer.push(InlineElement::Link {
+                    text: state.link_text.clone(),
+                    url: state.saved_link_url.clone(),
+                    title: None,
+                });
+                state
+                    .paragraph_buffer
+                    .push_str(&format!("[{}]({})", state.link_text, state.saved_link_url));
+            } else {
+                // Regular link
+                state.inline_buffer.push(InlineElement::Link {
+                    text: state.link_text.clone(),
+                    url: state.link_url.clone(),
+                    title: None,
+                });
+                state
+                    .paragraph_buffer
+                    .push_str(&format!("[{}]({})", state.link_text, state.link_url));
+            }
+
+            // Reset state
             state.link_text.clear();
             state.link_url.clear();
+            state.saved_link_url.clear();
+            state.image_in_link = false;
         }
         Event::Start(Tag::Image {
             dest_url, title, ..
         }) => {
+            // Check if we're inside a link (badge pattern)
+            if state.in_link {
+                state.image_in_link = true;
+                // Save the outer link URL before it gets overwritten by image src
+                state.saved_link_url = state.link_url.clone();
+            }
+            state.in_image = true;
             state.link_url = dest_url.to_string();
             state.link_text.clear();
             state.paragraph_buffer = title.to_string();
         }
         Event::End(TagEnd::Image) => {
-            // Flush any pending blocks before adding image
-            state.flush_paragraph(blocks);
+            state.in_image = false;
 
-            blocks.push(Block::Image {
-                alt: state.link_text.clone(),
-                src: state.link_url.clone(),
-                title: if state.paragraph_buffer.is_empty() {
-                    None
+            // If image is inside a link (badge pattern), don't create image element yet
+            // The link end event will use the alt text to create a proper link
+            if !state.image_in_link {
+                // If image is inside a paragraph, make it inline
+                if state.in_paragraph {
+                    // Create inline image element
+                    state.inline_buffer.push(InlineElement::Image {
+                        alt: state.link_text.clone(),
+                        src: state.link_url.clone(),
+                        title: if state.paragraph_buffer.is_empty() {
+                            None
+                        } else {
+                            Some(state.paragraph_buffer.clone())
+                        },
+                    });
+                    state
+                        .paragraph_buffer
+                        .push_str(&format!("[{}]", state.link_text));
                 } else {
-                    Some(state.paragraph_buffer.clone())
-                },
-            });
+                    // Flush any pending blocks before adding block image
+                    state.flush_paragraph(blocks);
 
-            state.link_text.clear();
-            state.link_url.clear();
-            state.paragraph_buffer.clear();
+                    blocks.push(Block::Image {
+                        alt: state.link_text.clone(),
+                        src: state.link_url.clone(),
+                        title: if state.paragraph_buffer.is_empty() {
+                            None
+                        } else {
+                            Some(state.paragraph_buffer.clone())
+                        },
+                    });
+                }
+
+                state.link_text.clear();
+                state.link_url.clear();
+                state.paragraph_buffer.clear();
+            }
+            // For image-in-link, keep link_text for the link element
         }
         Event::Text(text) => {
             if state.in_code {
                 state.code_buffer.push_str(&text);
             } else if state.in_blockquote {
                 state.blockquote_buffer.push_str(&text);
-            } else if state.in_link {
+            } else if state.in_link || state.in_image {
                 state.link_text.push_str(&text);
             } else {
                 // Add indentation for nested list items

@@ -21,10 +21,15 @@ use clap_complete::engine::{ArgValueCompleter, CompletionCandidate, ValueComplet
     treemd --setup-completions    # Set up shell completions"
 )]
 pub struct Cli {
-    /// Markdown file to view (.md or .markdown)
+    /// Markdown file to view (.md or .markdown), or '-' for stdin
     ///
-    /// Path to the markdown file to open. If no flags are provided,
-    /// launches the interactive TUI for comfortable reading and navigation.
+    /// Path to the markdown file to open. Use '-' to read from stdin.
+    /// If no file is specified and stdin is piped, input is read from stdin.
+    ///
+    /// Examples:
+    ///   treemd README.md         # Open file
+    ///   treemd -                 # Read from stdin
+    ///   cat doc.md | treemd -l   # Pipe markdown
     #[arg(add = markdown_file_completer())]
     pub file: Option<PathBuf>,
 
@@ -115,6 +120,47 @@ pub struct Cli {
     /// Example: --color-mode 256
     #[arg(long = "color-mode", value_name = "MODE")]
     pub color_mode: Option<ColorModeArg>,
+
+    /// Query expression for selecting/filtering document elements
+    ///
+    /// Uses a jq-like syntax for navigating and extracting markdown structure.
+    /// Supports element selectors (.h2, .code, .link), filters, pipes, and more.
+    ///
+    /// Examples:
+    ///   -q '.h2'                    # All h2 headings
+    ///   -q '.code[rust]'            # Rust code blocks
+    ///   -q '.h1[Features] > .h2'    # h2s under "Features"
+    ///   -q '.link | url'            # All link URLs
+    ///   -q '.h | select(contains("API"))' # Headings with "API"
+    ///
+    /// See --query-help for full documentation.
+    #[arg(short = 'q', long = "query", value_name = "EXPR")]
+    pub query: Option<String>,
+
+    /// Show query language documentation and examples
+    ///
+    /// Displays comprehensive help for the query language including:
+    /// - Element selectors (.h1-6, .code, .link, etc.)
+    /// - Filters and indexing
+    /// - Built-in functions
+    /// - Pipe composition
+    /// - Output formats
+    #[arg(long = "query-help")]
+    pub query_help: bool,
+
+    /// Output format for query results
+    ///
+    /// Controls how query results are displayed:
+    ///   plain  - Human-readable text (default)
+    ///   json   - Compact JSON
+    ///   jsonp  - Pretty-printed JSON
+    ///   jsonl  - Line-delimited JSON
+    ///   md     - Raw markdown
+    ///   tree   - Tree structure
+    ///
+    /// Example: -q '.h2' --query-output json
+    #[arg(long = "query-output", value_name = "FORMAT")]
+    pub query_output: Option<String>,
 }
 
 #[derive(Debug, Clone, ValueEnum)]

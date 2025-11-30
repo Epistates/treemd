@@ -122,7 +122,6 @@ impl ColorValue {
     }
 }
 
-
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
