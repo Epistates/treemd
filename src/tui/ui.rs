@@ -1021,8 +1021,8 @@ fn render_markdown_enhanced(
                 );
                 lines.extend(table_lines);
             }
-            ContentBlock::Image { alt, src, .. } => {
-                // Render image as placeholder with alt text
+            ContentBlock::Image { alt, .. } => {
+                // Render image as placeholder with alt text only
                 let mut image_spans = vec![];
                 if is_block_selected {
                     image_spans.push(Span::styled(
@@ -1037,14 +1037,10 @@ fn render_markdown_enhanced(
                     Style::default().fg(Color::Rgb(150, 150, 150)),
                 ));
                 image_spans.push(Span::styled(
-                    format!("[{}]", alt),
+                    alt.clone(),
                     Style::default()
                         .fg(Color::Rgb(100, 150, 200))
                         .add_modifier(Modifier::ITALIC),
-                ));
-                image_spans.push(Span::styled(
-                    format!(" ({})", src),
-                    Style::default().fg(Color::Rgb(100, 100, 120)),
                 ));
                 lines.push(Line::from(image_spans));
             }
@@ -1193,9 +1189,9 @@ fn render_inline_elements(elements: &[InlineElement], theme: &Theme) -> Vec<Span
             InlineElement::Code { value } => {
                 spans.push(Span::styled(value.clone(), theme.inline_code_style()));
             }
-            InlineElement::Link { text, url, .. } => {
+            InlineElement::Link { text, .. } => {
                 spans.push(Span::styled(
-                    format!("{} ({})", text, url),
+                    text.clone(),
                     Style::default()
                         .fg(Color::Rgb(100, 150, 255))
                         .add_modifier(Modifier::UNDERLINED),
@@ -1209,9 +1205,9 @@ fn render_inline_elements(elements: &[InlineElement], theme: &Theme) -> Vec<Span
                         .add_modifier(Modifier::CROSSED_OUT),
                 ));
             }
-            InlineElement::Image { alt, src, .. } => {
+            InlineElement::Image { alt, .. } => {
                 spans.push(Span::styled(
-                    format!("🖼[{}]({})", alt, src),
+                    format!("🖼 {}", alt),
                     Style::default().fg(Color::Rgb(150, 150, 180)),
                 ));
             }
@@ -1440,7 +1436,10 @@ fn detect_checkbox_in_text(text: &str) -> (bool, bool, &str) {
     let trimmed = text.trim_start();
 
     // Check for [x] or [X] (checked)
-    if let Some(stripped) = trimmed.strip_prefix("[x]").or_else(|| trimmed.strip_prefix("[X]")) {
+    if let Some(stripped) = trimmed
+        .strip_prefix("[x]")
+        .or_else(|| trimmed.strip_prefix("[X]"))
+    {
         return (true, true, stripped.trim_start());
     }
 

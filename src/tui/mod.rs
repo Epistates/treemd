@@ -3,6 +3,7 @@ mod interactive;
 mod syntax;
 pub mod terminal_compat;
 pub mod theme;
+pub mod tty;  // Public module for TTY handling
 mod ui;
 
 pub use app::App;
@@ -12,7 +13,7 @@ pub use theme::ThemeName;
 
 use color_eyre::Result;
 use crossterm::ExecutableCommand;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -56,7 +57,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     loop {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
-        if let Event::Key(key) = event::read()? {
+        if let Event::Key(key) = tty::read_event()? {
             if key.kind == KeyEventKind::Press {
                 // Handle help mode scrolling
                 if app.show_help {

@@ -363,7 +363,20 @@ impl App {
         }
     }
 
+    /// Maximum search query length to prevent performance issues
+    const MAX_SEARCH_LEN: usize = 256;
+
     pub fn search_input(&mut self, c: char) {
+        // Limit search query length
+        if self.search_query.len() >= Self::MAX_SEARCH_LEN {
+            return;
+        }
+
+        // Filter control characters (except common ones)
+        if c.is_control() && c != '\t' {
+            return;
+        }
+
         self.search_query.push(c);
         self.filter_outline();
     }
@@ -938,13 +951,44 @@ impl App {
     }
 
     /// Load a file by relative path
+    ///
+    /// Security: Validates path to prevent directory traversal attacks.
+    /// Files must be within the current file's directory or its subdirectories.
     fn load_file(&mut self, relative_path: &PathBuf, anchor: Option<&str>) -> Result<(), String> {
+        // Reject absolute paths
+        if relative_path.is_absolute() {
+            return Err("Absolute paths are not allowed for security reasons".to_string());
+        }
+
+        // Reject paths containing .. components (path traversal)
+        if relative_path.components().any(|c| {
+            matches!(c, std::path::Component::ParentDir)
+        }) {
+            return Err("Path traversal (..) is not allowed for security reasons".to_string());
+        }
+
         // Resolve path relative to current file
         let current_dir = self
             .current_file_path
             .parent()
             .ok_or("Cannot determine current directory")?;
         let absolute_path = current_dir.join(relative_path);
+
+        // Verify the resolved path is within allowed boundaries
+        // (defense in depth - even though we rejected .., canonicalize to be sure)
+        if let (Ok(canonical_path), Ok(canonical_base)) = (
+            absolute_path.canonicalize(),
+            current_dir.canonicalize(),
+        ) {
+            if !canonical_path.starts_with(&canonical_base) {
+                return Err("Path escapes document directory boundary".to_string());
+            }
+        }
+
+        // Check for symlink (prevent symlink attacks)
+        if absolute_path.is_symlink() {
+            return Err("Symlinks are not allowed for security reasons".to_string());
+        }
 
         // Parse the new file
         let new_document = crate::parser::parse_file(&absolute_path)
@@ -971,7 +1015,21 @@ impl App {
     }
 
     /// Find and load a wikilinked file
+    ///
+    /// Security: WikiLinks must be simple filenames without path separators
+    /// to prevent directory traversal attacks.
     fn load_wikilink(&mut self, target: &str) -> Result<(), String> {
+        // Security: Reject wikilinks containing path separators or traversal
+        if target.contains('/') || target.contains('\\') || target.contains("..") {
+            return Err("WikiLinks cannot contain path separators".to_string());
+        }
+
+        // Security: Reject absolute paths (Windows drive letters)
+        #[cfg(windows)]
+        if target.len() >= 2 && target.chars().nth(1) == Some(':') {
+            return Err("WikiLinks cannot be absolute paths".to_string());
+        }
+
         // Try to find the file relative to current directory
         let current_dir = self
             .current_file_path
@@ -987,6 +1045,10 @@ impl App {
 
         for candidate in candidates {
             let path = current_dir.join(&candidate);
+            // Check for symlinks
+            if path.is_symlink() {
+                continue; // Skip symlinks for security
+            }
             if path.exists() {
                 return self.load_file(&PathBuf::from(candidate), None);
             }
@@ -1296,9 +1358,28 @@ impl App {
         let new_content =
             self.toggle_checkbox_by_content(&file_content, &checkbox_content, checked)?;
 
-        // Write back to file
-        std::fs::write(&self.current_file_path, &new_content)
-            .map_err(|e| format!("Failed to write file: {}", e))?;
+        // Atomic write: write to temp file, then rename (prevents data corruption)
+        use std::io::Write;
+        let parent_dir = self
+            .current_file_path
+            .parent()
+            .ok_or("Cannot determine parent directory")?;
+
+        let mut temp_file = tempfile::NamedTempFile::new_in(parent_dir)
+            .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+        temp_file
+            .write_all(new_content.as_bytes())
+            .map_err(|e| format!("Failed to write temp file: {}", e))?;
+
+        temp_file
+            .flush()
+            .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+
+        // Atomic rename (same filesystem guarantees atomicity)
+        temp_file
+            .persist(&self.current_file_path)
+            .map_err(|e| format!("Failed to save file: {}", e))?;
 
         // Reload the document
         self.reload_current_file()?;
@@ -1398,18 +1479,16 @@ impl App {
                 Ok(())
             }
             LinkTarget::External(url) => {
-                // Open external URL in browser
-                #[cfg(target_os = "macos")]
-                let open_cmd = "open";
-                #[cfg(target_os = "windows")]
-                let open_cmd = "start";
-                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                let open_cmd = "xdg-open";
+                // Security: Validate URL scheme (only http/https allowed)
+                if !url.starts_with("http://") && !url.starts_with("https://") {
+                    return Err(
+                        "Unsafe URL scheme. Only http:// and https:// URLs are allowed."
+                            .to_string(),
+                    );
+                }
 
-                std::process::Command::new(open_cmd)
-                    .arg(url)
-                    .spawn()
-                    .map_err(|e| format!("Failed to open URL: {}", e))?;
+                // Use the `open` crate for safe URL opening (no shell injection)
+                open::that(url).map_err(|e| format!("Failed to open URL: {}", e))?;
 
                 self.status_message = Some(format!("✓ Opened {}", url));
                 Ok(())
@@ -1447,7 +1526,9 @@ impl App {
                 use crate::parser::content::parse_content;
                 let blocks = parse_content(&content, 0);
 
-                if let Some(crate::parser::output::Block::Table { headers, rows, .. }) = blocks.get(*block_idx) {
+                if let Some(crate::parser::output::Block::Table { headers, rows, .. }) =
+                    blocks.get(*block_idx)
+                {
                     return Some((headers.clone(), rows.clone()));
                 }
             }
@@ -1536,9 +1617,20 @@ impl App {
         Err("No cell selected for editing".to_string())
     }
 
+    /// Sanitize table cell content to prevent markdown injection
+    fn sanitize_table_cell(value: &str) -> String {
+        value
+            .replace('|', "\\|") // Escape pipe characters (table delimiters)
+            .replace(['\n', '\r'], " ") // Replace newlines and carriage returns
+    }
+
     /// Save the edited cell value back to the file
     pub fn save_edited_cell(&mut self) -> Result<(), String> {
         use std::fs;
+        use std::io::Write;
+
+        // Sanitize the cell value to prevent table structure corruption
+        let sanitized_value = Self::sanitize_table_cell(&self.cell_edit_value);
 
         // Read the current file
         let file_content = fs::read_to_string(&self.current_file_path)
@@ -1549,12 +1641,30 @@ impl App {
             &file_content,
             self.cell_edit_row,
             self.cell_edit_col,
-            &self.cell_edit_value,
+            &sanitized_value,
         )?;
 
-        // Write back to file
-        fs::write(&self.current_file_path, new_content)
-            .map_err(|e| format!("Failed to write file: {}", e))?;
+        // Atomic write: write to temp file, then rename (prevents data corruption)
+        let parent_dir = self
+            .current_file_path
+            .parent()
+            .ok_or("Cannot determine parent directory")?;
+
+        let mut temp_file = tempfile::NamedTempFile::new_in(parent_dir)
+            .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+        temp_file
+            .write_all(new_content.as_bytes())
+            .map_err(|e| format!("Failed to write temp file: {}", e))?;
+
+        temp_file
+            .flush()
+            .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+
+        // Atomic rename
+        temp_file
+            .persist(&self.current_file_path)
+            .map_err(|e| format!("Failed to save file: {}", e))?;
 
         // Reload the document
         let updated_document = crate::parser::parse_file(&self.current_file_path)
