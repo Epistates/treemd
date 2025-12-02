@@ -707,14 +707,13 @@ fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
                         .fg(theme.modal_selected_fg())
                         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                 ),
+                Span::styled(
+                    format!(" → {}", target_str),
+                    Style::default()
+                        .fg(theme.modal_description())
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]));
-            // Show target on next line when selected
-            lines.push(Line::from(vec![Span::styled(
-                format!("  → {}", target_str),
-                Style::default()
-                    .fg(theme.modal_description())
-                    .add_modifier(Modifier::ITALIC),
-            )]));
         } else {
             lines.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
