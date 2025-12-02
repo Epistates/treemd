@@ -85,13 +85,296 @@ treemd README.md
 
 ### Keyboard Shortcuts
 
-(Shortcuts remain unchanged; they do not use passive voice.)
+*Navigation:*
+- `j/k` or `↓/↑` - Navigate up/down
+- `g/G` - Jump to top/bottom
+- `p` - Jump to parent heading
+- `d/u` - Page down/up (in content)
+- `Tab` - Switch between outline and content
+- `1-9` - Jump to heading 1-9 (instant access)
 
-[All shortcut lists preserved as-is.]
+*Tree Operations:*
+- `Enter/Space` - Toggle expand/collapse
+- `h/l` or `←/→` - Collapse/expand heading
 
-## CLI Mode (Non-Interactive)
+*UX Features:*
+- `w` - Toggle outline visibility (full-width content)
+- `[` `]` - Decrease/increase outline width (20%, 30%, 40%)
+- `m` - Set bookmark at current position
+- `'` - Jump to bookmarked position
 
-Examples remain unchanged, as they contain no passive constructions.
+*Link Following:*
+- `f` - Enter link follow mode (shows popup with all links)
+- `Tab`/`Shift+Tab` - Navigate through links
+- `j/k` or `↓/↑` - Navigate links (in link mode)
+- `1-9` - Jump directly to link by number
+- `p` - Jump to parent heading's links (stays in link mode)
+- `Enter` - Follow selected link (opens browser, loads file, or jumps to anchor)
+- `b`/`Backspace` - Go back to previous file
+- `Shift+F` - Go forward in navigation history
+- `Esc` - Exit link follow mode
+
+*Interactive Mode:*
+- `i` - Enter interactive mode (navigate all interactive elements)
+- `Tab`/`j`/`k` or `↓/↑` - Navigate between elements
+- `Enter` - Activate element (toggle checkbox, follow link, enter table mode)
+- `Space` - Toggle checkboxes or details blocks
+- `y` - Copy element content (code blocks, table cells, links)
+- `Esc` - Exit interactive mode
+
+*Table Navigation (in interactive mode):*
+- `Enter` on table - Enter table navigation mode
+- `h`/`j`/`k`/`l` or arrow keys - Navigate table cells
+- `y` - Copy current cell content
+- `Y` - Copy current row (tab-separated)
+- `r` - Copy entire table as markdown
+- `Enter` on cell - Edit cell content
+- `Esc` - Exit table navigation mode
+
+*Editing & System:*
+- `e` - Edit current file in default editor (respects $VISUAL or $EDITOR)
+- `t` - Cycle color theme
+- `y` - Copy current section content to clipboard
+- `Y` - Copy anchor link to clipboard
+
+*Search & Help:*
+- `/` - Search/filter headings (type to filter, Esc to clear)
+- `?` - Toggle help overlay
+- `q/Esc` - Quit
+
+**Interface Features:**
+- **Live editing** - Edit files in your default editor and auto-reload (press `e`)
+- **Interactive mode** - Navigate and interact with all markdown elements (press `i`)
+- **Table editing** - Navigate cells with vim keys, edit cell content in-place
+- **Checkbox toggling** - Toggle task list items and save changes to file
+- **Link following popup** - Visual navigator shows all links with highlighting (press `f`)
+- **Multi-file navigation** - Load files via links with full history (back/forward)
+- **External URL opening** - Opens links in default browser automatically
+- **Syntax-highlighted code blocks** - 50+ languages supported
+- **Inline formatting** - Bold, italic, inline code with colors
+- **Real-time search** - Filter headings as you type (press `/`)
+- **Toggle outline** - Hide for full-width reading (press `w`)
+- **Adjustable layout** - Resize outline 20%/30%/40% (press `[` `]`)
+- **Quick navigation** - Jump to any heading 1-9 instantly, parent with `p`
+- **Bookmarks** - Mark and return to positions (press `m` and `'`)
+- **Color-coded headings** - 5 distinct levels
+- **Scrollbars** - Position indicators on both panes
+- **Smart status bar** - Shows position, link details, navigation history
+- **Help overlay** - Always available (press `?`)
+
+### CLI Mode (Non-Interactive)
+
+#### List all headings
+
+```bash
+treemd -l README.md
+```
+
+Output:
+```
+# treemd
+## Features
+### Phase 1: CLI Mode
+### Phase 2: TUI Mode
+## Installation
+...
+```
+
+#### Show heading tree
+
+```bash
+treemd --tree README.md
+```
+
+Output:
+```
+└─ # treemd
+    ├─ ## Features
+    │   ├─ ### Phase 1: CLI Mode
+    │   └─ ### Phase 2: TUI Mode
+    ├─ ## Installation
+    ...
+```
+
+#### Extract a section
+
+```bash
+treemd -s "Installation" README.md
+```
+
+Output:
+```
+## Installation
+
+cargo install --path .
+...
+```
+
+#### Filter headings
+
+```bash
+treemd -l --filter "usage" README.md
+```
+
+#### Show only specific heading level
+
+```bash
+treemd -l -L 2 README.md  # Only ## headings
+```
+
+#### Count headings
+
+```bash
+treemd --count README.md
+```
+
+Output:
+```
+Heading counts:
+  #: 1
+  ##: 5
+  ###: 6
+
+Total: 12
+```
+
+#### JSON output
+
+```bash
+treemd -l -o json README.md
+```
+
+### Query Language
+
+treemd includes a powerful jq-like query language for extracting and filtering markdown elements. Use `-q` to execute queries and `--query-help` for full documentation.
+
+#### Element Selectors
+
+```bash
+# All headings
+treemd -q '.h' doc.md
+
+# Specific heading levels
+treemd -q '.h2' doc.md
+
+# Code blocks, links, images, tables
+treemd -q '.code' doc.md
+treemd -q '.link' doc.md
+treemd -q '.img' doc.md
+treemd -q '.table' doc.md
+```
+
+#### Filters and Indexing
+
+```bash
+# Fuzzy text filter
+treemd -q '.h2[Features]' doc.md
+
+# Exact text match
+treemd -q '.h2["Installation"]' doc.md
+
+# By index (first, last, slice)
+treemd -q '.h2[0]' doc.md
+treemd -q '.h2[-1]' doc.md
+treemd -q '.h2[1:3]' doc.md
+
+# Code blocks by language
+treemd -q '.code[rust]' doc.md
+treemd -q '.code[python]' doc.md
+```
+
+#### Pipes and Functions
+
+```bash
+# Get heading text (strips ## prefix)
+treemd -q '.h2 | text' doc.md
+
+# Count elements
+treemd -q '[.h2] | count' doc.md
+
+# First/last n elements
+treemd -q '[.h] | limit(5)' doc.md
+treemd -q '[.h] | skip(2) | limit(3)' doc.md
+
+# Filter with conditions (three equivalent ways)
+treemd -q '.h | select(contains("API"))' doc.md
+treemd -q '.h | where(contains("API"))' doc.md
+treemd -q '.h[API]' doc.md
+
+# String transformations
+treemd -q '.h2 | text | upper' doc.md
+treemd -q '.h2 | text | slugify' doc.md
+
+# Get URLs from links
+treemd -q '.link | url' doc.md
+treemd -q '.link[external] | url' doc.md
+
+# Code block languages
+treemd -q '.code | lang' doc.md
+```
+
+#### Hierarchy Operators
+
+```bash
+# Direct children (h2s under h1)
+treemd -q '.h1 > .h2' doc.md
+
+# All descendants (code anywhere under h1)
+treemd -q '.h1 >> .code' doc.md
+
+# Combined with filters
+treemd -q '.h1[Features] > .h2' doc.md
+```
+
+#### Aggregation and Grouping
+
+```bash
+# Document statistics
+treemd -q '. | stats' doc.md
+
+# Heading counts by level
+treemd -q '. | levels' doc.md
+
+# Code blocks by language
+treemd -q '. | langs' doc.md
+
+# Group headings by level
+treemd -q '[.h] | group_by("level")' doc.md
+```
+
+#### Output Formats
+
+```bash
+# Plain text (default)
+treemd -q '.h2' doc.md
+
+# JSON
+treemd -q '.h2' --query-output json doc.md
+
+# Pretty JSON
+treemd -q '.h2' --query-output json-pretty doc.md
+
+# Line-delimited JSON
+treemd -q '.h2' --query-output jsonl doc.md
+```
+
+#### Stdin Support
+
+```bash
+# Pipe markdown content
+cat doc.md | treemd -q '.h2'
+
+# Pipe from other commands
+curl -s https://raw.githubusercontent.com/.../README.md | treemd -q '.h'
+
+# Tree output to treemd (with TUI)
+tree | treemd
+
+# Explicit stdin
+treemd -q '.code' -
+```
+
+For complete documentation: `treemd --query-help`
 
 ## Releases
 
@@ -179,6 +462,8 @@ We plan to add:
 * `less` – A classic pager without structure awareness
 
 `treemd` combines the strengths of these tools by offering tree-based exploration, interactive navigation, comfortable reading, and CLI scriptability.
+
+[![Built With Ratatui](https://img.shields.io/badge/Built_With_Ratatui-000?logo=ratatui&logoColor=fff)](https://ratatui.rs/)
 
 ## License
 
