@@ -111,6 +111,9 @@ pub struct ListItem {
     pub content: String,
     /// Parsed inline elements
     pub inline: Vec<InlineElement>,
+    /// Nested blocks (e.g., code blocks inside list items)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<Block>,
 }
 
 /// Inline formatting elements
