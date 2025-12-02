@@ -21,8 +21,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     let area = frame.area();
 
-    // Create main layout with title bar and content
-    let main_chunks = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(area);
+    // Create main layout with title bar, content area, and status bar
+    let main_chunks = Layout::vertical([
+        Constraint::Length(2),  // Title bar
+        Constraint::Min(0),     // Content area
+        Constraint::Length(1),  // Status bar
+    ]).split(area);
 
     // Render title bar
     render_title_bar(frame, app, main_chunks[0]);
@@ -51,13 +55,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     // Render status bar at bottom
-    let status_area = Rect {
-        x: area.x,
-        y: area.height.saturating_sub(1),
-        width: area.width,
-        height: 1,
-    };
-    render_status_bar(frame, app, status_area);
+    render_status_bar(frame, app, main_chunks[2]);
 
     // Render help popup if shown
     if app.show_help {
