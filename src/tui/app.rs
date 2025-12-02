@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::parser::{Document, HeadingNode, Link, extract_links};
+use crate::tui::help_text;
 use crate::tui::interactive::InteractiveState;
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
@@ -349,7 +350,11 @@ impl App {
     }
 
     pub fn scroll_help_down(&mut self) {
-        self.help_scroll = self.help_scroll.saturating_add(1);
+        let new_scroll = self.help_scroll.saturating_add(1);
+        let max_scroll = help_text::HELP_LINES.len() as u16;
+        if new_scroll < max_scroll {
+            self.help_scroll = new_scroll;
+        }
     }
 
     pub fn scroll_help_up(&mut self) {

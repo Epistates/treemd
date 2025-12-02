@@ -1,4 +1,5 @@
 mod app;
+mod help_text;
 mod interactive;
 mod syntax;
 pub mod terminal_compat;
