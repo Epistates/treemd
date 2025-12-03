@@ -1,6 +1,6 @@
 [package]
 name = "treemd"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 authors = ["epistates, inc. <nick@epistates.com>"]
 description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
