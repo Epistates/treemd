@@ -1,6 +1,9 @@
+mod layout;
 mod popups;
 mod table;
 mod util;
+
+use layout::{DynamicLayout, Section};
 
 use crate::tui::app::{App, Focus};
 use crate::tui::theme::Theme;
@@ -11,7 +14,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, Wrap,
 };
-use popups::{render_cell_edit_overlay, render_help_popup, render_link_picker, render_search_overlay, render_theme_picker};
+use popups::{render_cell_edit_overlay, render_help_popup, render_link_picker, render_theme_picker};
 use table::render_table;
 use util::detect_checkbox_in_text;
 
@@ -21,27 +24,34 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     let area = frame.area();
 
-    // Create main layout with title bar, content area, and status bar
-    let main_chunks = Layout::vertical([
-        Constraint::Length(2),  // Title bar
-        Constraint::Min(0),     // Content area
-        Constraint::Length(1),  // Status bar
-    ]).split(area);
+    // Create dynamic main layout
+    let main_layout = DynamicLayout::vertical(area)
+        .section(Section::Title, Constraint::Length(2))
+        .section_if(app.show_search, Section::Search, Constraint::Length(3))
+        .section(Section::Content, Constraint::Min(0))
+        .section(Section::Status, Constraint::Length(1))
+        .build();
 
     // Render title bar
-    render_title_bar(frame, app, main_chunks[0]);
+    render_title_bar(frame, app, main_layout.require(Section::Title));
+
+    // Render search bar if visible
+    if let Some(search_area) = main_layout.get(Section::Search) {
+        render_search_bar(frame, app, search_area);
+    }
 
     // Create horizontal layout for outline and content (conditional based on outline visibility)
+    let content_area = main_layout.require(Section::Content);
     let content_chunks = if app.show_outline {
         let content_width = 100 - app.outline_width;
         Layout::horizontal([
             Constraint::Percentage(app.outline_width),
             Constraint::Percentage(content_width),
         ])
-        .split(main_chunks[1])
+        .split(content_area)
     } else {
         // Full-width content when outline is hidden
-        Layout::horizontal([Constraint::Percentage(100)]).split(main_chunks[1])
+        Layout::horizontal([Constraint::Percentage(100)]).split(content_area)
     };
 
     // Render outline (left pane) only if visible
@@ -55,16 +65,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     // Render status bar at bottom
-    render_status_bar(frame, app, main_chunks[2]);
+    render_status_bar(frame, app, main_layout.require(Section::Status));
 
     // Render help popup if shown
     if app.show_help {
         render_help_popup(frame, app, area);
-    }
-
-    // Render search overlay if shown
-    if app.show_search {
-        render_search_overlay(frame, app, area);
     }
 
     // Render theme picker if shown
@@ -95,6 +100,21 @@ fn render_title_bar(frame: &mut Frame, app: &App, area: Rect) {
         )
         .block(Block::default().borders(Borders::BOTTOM));
     frame.render_widget(title, area);
+}
+
+fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let search_text = format!("Search: {}_", app.search_query);
+    let paragraph = Paragraph::new(search_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(" Filter Headings ")
+                .style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        )
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(paragraph, area);
 }
 
 fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {

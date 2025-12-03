@@ -176,31 +176,6 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, popup_area);
 }
 
-/// Render the search overlay
-pub fn render_search_overlay(frame: &mut Frame, app: &App, area: Rect) {
-    let search_area = Rect {
-        x: area.x + 2,
-        y: area.y + 2,
-        width: area.width.saturating_sub(4).max(40),
-        height: 3,
-    };
-
-    frame.render_widget(Clear, search_area);
-
-    let search_text = format!("Search: {}_", app.search_query);
-    let paragraph = Paragraph::new(search_text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
-                .title(" Filter Headings ")
-                .style(Style::default().bg(Color::Rgb(30, 30, 50))),
-        )
-        .style(Style::default().fg(Color::White));
-
-    frame.render_widget(paragraph, search_area);
-}
-
 /// Render the theme picker popup
 pub fn render_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
     use crate::tui::theme::ThemeName;
