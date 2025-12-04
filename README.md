@@ -19,15 +19,15 @@ A markdown navigator with tree-based structural navigation. Like `tree`, but int
 
 - **Dual-pane interface** - Navigate outline while viewing content
 - **Interactive mode** - Navigate, edit, and interact with all markdown elements (tables, checkboxes, links, code blocks)
-- **Table navigation & editing** - Navigate cells with vim keys (hjkl), edit cell content in-place, copy cells/rows/tables
+- **Table navigation & editing** - Navigate cells with vim keys (`hjkl`), edit cell content in-place, copy cells/rows/tables
 - **Checkbox toggling** - Toggle task list items with instant file updates
-- **Live editing** - Edit files in default editor with auto-reload (respects $VISUAL/$EDITOR)
+- **Live editing** - Edit files in default editor with auto-reload (respects `$VISUAL`/`$EDITOR`)
 - **Link following** - Follow markdown links with visual popup, supports anchor/file/wikilink/external URLs
 - **Navigation history** - Back/forward between files with full state preservation
 - **Syntax highlighting** - 50+ languages with full syntect integration
-- **Vim-style navigation** - j/k, g/G, d/u, p (parent) for efficient browsing
+- **Vim-style navigation** - `j`/`k`, `g`/`G`, `d`/`u`, `p` (parent) for efficient browsing
 - **Search & filter** - Press `/` to filter headings in real-time
-- **Collapsible tree** - Expand/collapse sections with Space/Enter
+- **Collapsible tree** - Expand/collapse sections with `Space`/`Enter`
 - **Bookmarks** - Mark positions (`m`) and jump back (`'`)
 - **Adjustable layout** - Toggle outline visibility, resize panes
 - **Rich rendering** - Bold, italic, inline code, lists, blockquotes, code blocks, tables with box-drawing characters
@@ -143,13 +143,13 @@ treemd README.md
 - `Esc` - Exit table navigation mode
 
 *Editing & System:*
-- `e` - Edit current file in default editor (respects $VISUAL or $EDITOR)
+- `e` - Edit current file in default editor (respects `$VISUAL` or `$EDITOR`)
 - `t` - Cycle color theme
 - `y` - Copy current section content to clipboard
 - `Y` - Copy anchor link to clipboard
 
 *Search & Help:*
-- `/` - Search/filter headings (type to filter, Esc to clear)
+- `/` - Search/filter headings (type to filter, `Esc` to clear)
 - `?` - Toggle help overlay
 - `q/Esc` - Quit
 
