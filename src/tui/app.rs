@@ -8,6 +8,7 @@ use crate::tui::theme::{Theme, ThemeName};
 use ratatui::widgets::{ListState, ScrollbarState};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Focus {
@@ -63,6 +64,7 @@ pub struct App {
     pub file_history: Vec<FileState>, // Back navigation stack
     pub file_future: Vec<FileState>, // Forward navigation stack (for undo back)
     pub status_message: Option<String>, // Temporary status message to display
+    pub status_message_time: Option<Instant>, // When the status message was set
 
     // Interactive element navigation
     pub interactive_state: InteractiveState,
@@ -82,6 +84,9 @@ pub struct App {
 
     // Pending file to open in external editor (set by link following, consumed by main loop)
     pub pending_editor_file: Option<PathBuf>,
+
+    // Raw source view toggle
+    pub show_raw_source: bool,
 }
 
 /// Saved state for file navigation history
@@ -168,6 +173,7 @@ impl App {
             file_history: Vec::new(),
             file_future: Vec::new(),
             status_message: None,
+            status_message_time: None,
 
             // Interactive element navigation
             interactive_state: InteractiveState::new(),
@@ -186,6 +192,38 @@ impl App {
 
             // Pending editor file
             pending_editor_file: None,
+
+            // Raw source view (off by default)
+            show_raw_source: false,
+        }
+    }
+
+    /// Toggle between raw source view and rendered markdown view
+    pub fn toggle_raw_source(&mut self) {
+        self.show_raw_source = !self.show_raw_source;
+        let msg = if self.show_raw_source {
+            "Raw source view enabled"
+        } else {
+            "Rendered view enabled"
+        };
+        self.set_status_message(msg);
+    }
+
+    /// Set a status message with automatic timeout tracking
+    pub fn set_status_message(&mut self, msg: &str) {
+        self.status_message = Some(msg.to_string());
+        self.status_message_time = Some(Instant::now());
+    }
+
+    /// Clear status message if it has expired (default 1 second timeout)
+    pub fn clear_expired_status_message(&mut self) {
+        const STATUS_MESSAGE_TIMEOUT: Duration = Duration::from_secs(1);
+
+        if let Some(time) = self.status_message_time {
+            if time.elapsed() >= STATUS_MESSAGE_TIMEOUT {
+                self.status_message = None;
+                self.status_message_time = None;
+            }
         }
     }
 

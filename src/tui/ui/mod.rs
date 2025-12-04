@@ -24,6 +24,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Update content metrics before rendering to ensure content height and scroll are correct
     app.update_content_metrics();
 
+    // Clear expired status messages (auto-dismiss after timeout)
+    app.clear_expired_status_message();
+
     let area = frame.area();
 
     // Create dynamic main layout
@@ -200,41 +203,58 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
             .extract_section(heading_text)
             .unwrap_or_else(|| app.document.content.clone());
 
-        // Add link count to title if in link follow mode
+        // Build title with various indicators
+        let raw_indicator = if app.show_raw_source { "[RAW] " } else { "" };
         let title = if app.mode == AppMode::LinkFollow && !app.links_in_view.is_empty() {
-            format!(" {} [Links: {}] ", heading_text, app.links_in_view.len())
+            format!(
+                " {}{} [Links: {}] ",
+                raw_indicator,
+                heading_text,
+                app.links_in_view.len()
+            )
         } else {
-            format!(" {} ", heading_text)
+            format!(" {}{} ", raw_indicator, heading_text)
         };
 
         (content, title)
     } else {
+        let raw_indicator = if app.show_raw_source { "[RAW] " } else { "" };
         let title = if app.mode == AppMode::LinkFollow && !app.links_in_view.is_empty() {
-            format!(" Content [Links: {}] ", app.links_in_view.len())
+            format!(
+                " {}Content [Links: {}] ",
+                raw_indicator,
+                app.links_in_view.len()
+            )
         } else {
-            " Content ".to_string()
+            format!(" {}Content ", raw_indicator)
         };
         (app.document.content.clone(), title)
     };
 
-    // Enhanced markdown rendering with syntax highlighting
-    // Pass interactive state if in interactive mode
-    let (selected_element_id, interactive_state_ref) = if app.mode == AppMode::Interactive {
-        (
-            app.interactive_state.current_element().map(|elem| elem.id),
-            Some(&app.interactive_state),
-        )
+    // Check if we should render raw source or enhanced markdown
+    let rendered_text = if app.show_raw_source {
+        // Raw source view - show unprocessed markdown
+        render_raw_markdown(&content_text, theme)
     } else {
-        (None, None)
-    };
+        // Enhanced markdown rendering with syntax highlighting
+        // Pass interactive state if in interactive mode
+        let (selected_element_id, interactive_state_ref) = if app.mode == AppMode::Interactive {
+            (
+                app.interactive_state.current_element().map(|elem| elem.id),
+                Some(&app.interactive_state),
+            )
+        } else {
+            (None, None)
+        };
 
-    let rendered_text = render_markdown_enhanced(
-        &content_text,
-        &app.highlighter,
-        theme,
-        selected_element_id,
-        interactive_state_ref,
-    );
+        render_markdown_enhanced(
+            &content_text,
+            &app.highlighter,
+            theme,
+            selected_element_id,
+            interactive_state_ref,
+        )
+    };
 
     let paragraph = Paragraph::new(rendered_text)
         .block(
@@ -374,7 +394,8 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let theme_name = format!(" Theme:{} ", app.theme.name);
-    let status_text = format!("{}{}", status_text, theme_name);
+    let raw_indicator = if app.show_raw_source { " [RAW]" } else { "" };
+    let status_text = format!("{}{}{}", status_text, theme_name, raw_indicator);
 
     let status_style = if app.mode == AppMode::LinkFollow {
         Style::default()
@@ -393,6 +414,27 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 use crate::parser::content::parse_content;
 use crate::parser::output::{Block as ContentBlock, InlineElement};
 use crate::tui::syntax::SyntaxHighlighter;
+
+/// Render raw markdown source with line numbers
+fn render_raw_markdown(content: &str, theme: &Theme) -> Text<'static> {
+    let lines: Vec<Line<'static>> = content
+        .lines()
+        .enumerate()
+        .map(|(idx, line)| {
+            // Line number with subtle styling (using border color for subtlety)
+            let line_num = Span::styled(
+                format!("{:4} │ ", idx + 1),
+                Style::default().fg(theme.border_unfocused),
+            );
+            // Raw content with plain text styling
+            let content_span =
+                Span::styled(line.to_string(), Style::default().fg(theme.foreground));
+            Line::from(vec![line_num, content_span])
+        })
+        .collect();
+
+    Text::from(lines)
+}
 
 fn render_markdown_enhanced(
     content: &str,

@@ -20,6 +20,7 @@ use crossterm::terminal::{
 };
 use ratatui::DefaultTerminal;
 use std::io::stdout;
+use std::time::Duration;
 
 /// Suspend the TUI, run an external editor, then restore the TUI
 fn run_editor(terminal: &mut DefaultTerminal, file_path: &std::path::PathBuf) -> Result<()> {
@@ -73,6 +74,13 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                 }
             }
             continue; // Redraw after returning from editor
+        }
+
+        // Poll for events with timeout to allow status message expiration
+        // Use 100ms timeout for responsive UI updates
+        if !tty::poll_event(Duration::from_millis(100))? {
+            // No event, just continue loop to redraw (handles status message timeout)
+            continue;
         }
 
         if let Event::Key(key) = tty::read_event()? {
@@ -486,6 +494,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         }
                         // Interactive element navigation
                         KeyCode::Char('i') => app.enter_interactive_mode(),
+                        // Raw source toggle
+                        KeyCode::Char('r') => app.toggle_raw_source(),
                         // Link following
                         KeyCode::Char('f') => app.enter_link_follow_mode(),
                         KeyCode::Char('b') | KeyCode::Backspace => {

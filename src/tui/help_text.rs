@@ -111,6 +111,7 @@ pub const HELP_LINES: &[HelpLine] = &[
     section("General"),
     keybinding("Tab", "Switch between Outline and Content"),
     keybinding("/", "Search/filter headings"),
+    keybinding("r", "Toggle raw source view"),
     keybinding("?", "Toggle this help"),
     keybinding("q/Esc", "Quit"),
     blank(),
