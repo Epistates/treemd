@@ -5,7 +5,7 @@
 
 use crate::parser::output::Alignment;
 use crate::tui::theme::Theme;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -73,6 +73,7 @@ pub fn render_table(
             "→ ",
             Style::default()
                 .fg(theme.selection_indicator_fg)
+                .bg(theme.selection_indicator_bg)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -218,7 +219,7 @@ pub fn render_table_row(
         let style = if is_selected {
             // Highlighted selected cell
             Style::default()
-                .fg(Color::Black)
+                .fg(ctx.theme.link_selected_fg)
                 .bg(ctx.theme.link_selected_bg)
                 .add_modifier(Modifier::BOLD)
         } else if ctx.is_header {

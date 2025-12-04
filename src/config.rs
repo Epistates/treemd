@@ -86,9 +86,13 @@ pub struct CustomThemeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_indicator_fg: Option<ColorValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_indicator_bg: Option<ColorValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link_fg: Option<ColorValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_selected_bg: Option<ColorValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_selected_fg: Option<ColorValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table_border: Option<ColorValue>,
 }

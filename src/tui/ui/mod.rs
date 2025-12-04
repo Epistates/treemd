@@ -437,7 +437,7 @@ fn render_markdown_enhanced(
                     span.style = heading_style;
                 }
 
-                // Add selection indicator if selected
+                // Add selection indicator if selected (with background for visibility)
                 if is_block_selected {
                     formatted.insert(
                         0,
@@ -445,6 +445,7 @@ fn render_markdown_enhanced(
                             "→ ",
                             Style::default()
                                 .fg(theme.selection_indicator_fg)
+                                .bg(theme.selection_indicator_bg)
                                 .add_modifier(Modifier::BOLD),
                         ),
                     );
@@ -459,7 +460,7 @@ fn render_markdown_enhanced(
                     format_inline_markdown(content, theme)
                 };
 
-                // Add selection indicator
+                // Add selection indicator (with background for visibility)
                 if is_block_selected {
                     formatted.insert(
                         0,
@@ -467,6 +468,7 @@ fn render_markdown_enhanced(
                             "→ ",
                             Style::default()
                                 .fg(theme.selection_indicator_fg)
+                                .bg(theme.selection_indicator_bg)
                                 .add_modifier(Modifier::BOLD),
                         ),
                     );
@@ -486,6 +488,7 @@ fn render_markdown_enhanced(
                         "→ ",
                         Style::default()
                             .fg(theme.selection_indicator_fg)
+                            .bg(theme.selection_indicator_bg)
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
@@ -508,10 +511,29 @@ fn render_markdown_enhanced(
             }
             ContentBlock::List { ordered, items } => {
                 for (idx, item) in items.iter().enumerate() {
-                    // Check if this specific list item is selected
+                    // Check if this specific list item (checkbox) is selected
                     let is_item_selected = selected_element_id
                         .map(|id| id.block_idx == block_idx && id.sub_idx == Some(idx))
                         .unwrap_or(false);
+
+                    // Check if a link within this list item is selected
+                    // Link sub_idx format: item_idx * 1000 + inline_idx + 100
+                    let selected_link_inline_idx = selected_element_id.and_then(|id| {
+                        if id.block_idx == block_idx {
+                            id.sub_idx.and_then(|sub| {
+                                // Decode: check if this is a link sub_idx for this item
+                                if sub >= 100 && sub >= idx * 1000 + 100 && sub < (idx + 1) * 1000 + 100 {
+                                    Some(sub - idx * 1000 - 100)
+                                } else {
+                                    None
+                                }
+                            })
+                        } else {
+                            None
+                        }
+                    });
+
+                    let is_any_selected = is_item_selected || selected_link_inline_idx.is_some();
 
                     // Check if content has nested items (contains newlines with indentation)
                     let has_nested = item.content.contains('\n');
@@ -524,12 +546,13 @@ fn render_markdown_enhanced(
                                 // First line: use regular list marker
                                 let mut spans = vec![];
 
-                                // Add selection indicator for checkboxes
-                                if is_item_selected {
+                                // Add selection indicator for checkboxes or links
+                                if is_any_selected {
                                     spans.push(Span::styled(
                                         "→ ",
                                         Style::default()
                                             .fg(theme.selection_indicator_fg)
+                                            .bg(theme.selection_indicator_bg)
                                             .add_modifier(Modifier::BOLD),
                                     ));
                                 }
@@ -588,19 +611,20 @@ fn render_markdown_enhanced(
                     } else {
                         // Simple single-line item (or item with nested blocks)
                         let formatted = if !item.inline.is_empty() {
-                            render_inline_elements(&item.inline, theme, None)
+                            render_inline_elements(&item.inline, theme, selected_link_inline_idx)
                         } else {
                             format_inline_markdown(&item.content, theme)
                         };
 
                         let mut spans = vec![];
 
-                        // Add selection indicator for checkboxes
-                        if is_item_selected {
+                        // Add selection indicator for checkboxes or links
+                        if is_any_selected {
                             spans.push(Span::styled(
                                 "→ ",
                                 Style::default()
                                     .fg(theme.selection_indicator_fg)
+                                    .bg(theme.selection_indicator_bg)
                                     .add_modifier(Modifier::BOLD),
                             ));
                         }
@@ -715,6 +739,7 @@ fn render_markdown_enhanced(
                         "→ ",
                         Style::default()
                             .fg(theme.selection_indicator_fg)
+                            .bg(theme.selection_indicator_bg)
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
@@ -747,12 +772,13 @@ fn render_markdown_enhanced(
                 // Render details block with expand/collapse indicator
                 let mut summary_spans = vec![];
 
-                // Add selection indicator
+                // Add selection indicator (with background for visibility)
                 if is_block_selected {
                     summary_spans.push(Span::styled(
                         "→ ",
                         Style::default()
                             .fg(theme.selection_indicator_fg)
+                            .bg(theme.selection_indicator_bg)
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
@@ -920,18 +946,19 @@ fn render_inline_elements(
             }
             InlineElement::Link { text, .. } => {
                 if is_selected {
-                    // Add selection indicator before selected link
+                    // Add selection indicator before selected link (with background for visibility)
                     spans.push(Span::styled(
                         "▸ ",
                         Style::default()
                             .fg(theme.selection_indicator_fg)
+                            .bg(theme.selection_indicator_bg)
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
                 let style = if is_selected {
                     // Highlighted selected link - matches table cell selection style
                     Style::default()
-                        .fg(Color::Black)
+                        .fg(theme.link_selected_fg)
                         .bg(theme.link_selected_bg)
                         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
                 } else {
@@ -952,18 +979,19 @@ fn render_inline_elements(
             }
             InlineElement::Image { alt, .. } => {
                 if is_selected {
-                    // Add selection indicator before selected image
+                    // Add selection indicator before selected image (with background for visibility)
                     spans.push(Span::styled(
                         "▸ ",
                         Style::default()
                             .fg(theme.selection_indicator_fg)
+                            .bg(theme.selection_indicator_bg)
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
                 let style = if is_selected {
                     // Highlighted selected image
                     Style::default()
-                        .fg(Color::Black)
+                        .fg(theme.link_selected_fg)
                         .bg(theme.link_selected_bg)
                         .add_modifier(Modifier::BOLD)
                 } else {
