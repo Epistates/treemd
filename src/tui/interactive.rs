@@ -9,7 +9,7 @@
 //! - Images (view info)
 
 use crate::parser::output::{Block, InlineElement};
-use crate::parser::{Link, LinkTarget};
+use crate::parser::{Link, LinkTarget, extract_links};
 use std::collections::HashMap;
 
 /// Interactive navigation state
@@ -117,8 +117,9 @@ impl InteractiveState {
         }
     }
 
-    /// Build element index from parsed blocks
-    pub fn index_elements(&mut self, blocks: &[Block]) {
+    /// Build element index from parsed blocks and raw content
+    /// The raw content is used to extract wikilinks which aren't parsed into the Block AST
+    pub fn index_elements(&mut self, blocks: &[Block], raw_content: &str) {
         self.elements.clear();
         let mut current_line = 0;
 
@@ -341,6 +342,32 @@ impl InteractiveState {
             current_line += 1;
         }
 
+        // Second pass: Extract wikilinks from raw content
+        // These aren't parsed into the Block AST, so we need to find them separately
+        let all_links = extract_links(raw_content);
+        for link in all_links {
+            // Only add wikilinks - regular links are already handled by block parsing
+            if matches!(link.target, LinkTarget::WikiLink { .. }) {
+                // Calculate line number from byte offset
+                let line_idx = raw_content[..link.offset].matches('\n').count();
+
+                // Use a unique block index for wikilinks (after all real blocks)
+                let id = ElementId {
+                    block_idx: blocks.len() + link.offset, // Unique ID based on offset
+                    sub_idx: None,
+                };
+
+                self.elements.push(InteractiveElement {
+                    id,
+                    element_type: ElementType::Link { link, line_idx },
+                    line_range: (line_idx, line_idx + 1),
+                });
+            }
+        }
+
+        // Sort elements by line position for proper navigation order
+        self.elements.sort_by_key(|e| e.line_range.0);
+
         // Reset selection if elements changed
         if self.current_index.is_some() {
             if self.elements.is_empty() {
@@ -457,7 +484,7 @@ impl InteractiveState {
         } else if self.elements.is_empty() {
             "[INTERACTIVE] No interactive elements in this section | Esc:Exit".to_string()
         } else {
-            "[INTERACTIVE] Tab:Next Shift+Tab:Previous Esc:Exit".to_string()
+            "[INTERACTIVE] Tab:Next Shift+Tab:Prev u/d:Page Esc:Exit".to_string()
         }
     }
 
@@ -466,6 +493,39 @@ impl InteractiveState {
         if !self.elements.is_empty() {
             self.current_index = Some(0);
         }
+    }
+
+    /// Enter interactive mode at the element closest to the given scroll position
+    /// This preserves the user's current view instead of jumping to the first element
+    pub fn enter_at_scroll_position(&mut self, scroll_pos: usize) {
+        if self.elements.is_empty() {
+            self.current_index = None;
+            return;
+        }
+
+        // Find the element whose start line is closest to the scroll position
+        // Prefer elements that are at or just after the scroll position
+        let mut best_idx = 0;
+        let mut best_distance = usize::MAX;
+
+        for (idx, element) in self.elements.iter().enumerate() {
+            let (start_line, _) = element.line_range;
+
+            // Calculate distance, preferring elements at or after scroll position
+            let distance = if start_line >= scroll_pos {
+                start_line - scroll_pos
+            } else {
+                // Element is above scroll position - add penalty to prefer visible elements
+                (scroll_pos - start_line) + 1000
+            };
+
+            if distance < best_distance {
+                best_distance = distance;
+                best_idx = idx;
+            }
+        }
+
+        self.current_index = Some(best_idx);
     }
 
     /// Exit interactive mode

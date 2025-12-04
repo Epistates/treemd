@@ -303,6 +303,13 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                     app.status_message = Some(format!("✗ Error: {}", e));
                                 }
                             }
+                            // Page motions in interactive mode
+                            KeyCode::Char('d') | KeyCode::PageDown => {
+                                app.scroll_page_down_interactive();
+                            }
+                            KeyCode::Char('u') | KeyCode::PageUp => {
+                                app.scroll_page_up_interactive();
+                            }
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }

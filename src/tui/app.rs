@@ -492,6 +492,23 @@ impl App {
         }
     }
 
+    /// Scroll page down in interactive mode (bypasses focus check)
+    pub fn scroll_page_down_interactive(&mut self) {
+        let new_scroll = self.content_scroll.saturating_add(10);
+        self.content_scroll = new_scroll.min(self.content_height.saturating_sub(1));
+        self.content_scroll_state = self
+            .content_scroll_state
+            .position(self.content_scroll as usize);
+    }
+
+    /// Scroll page up in interactive mode (bypasses focus check)
+    pub fn scroll_page_up_interactive(&mut self) {
+        self.content_scroll = self.content_scroll.saturating_sub(10);
+        self.content_scroll_state = self
+            .content_scroll_state
+            .position(self.content_scroll as usize);
+    }
+
     /// Auto-scroll to keep the selected interactive element in view
     /// viewport_height: height of the visible content area (in lines)
     pub fn scroll_to_interactive_element(&mut self, viewport_height: u16) {
@@ -1351,6 +1368,11 @@ impl App {
 
     /// Enter interactive mode - build element index and enter mode
     pub fn enter_interactive_mode(&mut self) {
+        // Exit raw source view if active (interactive elements aren't visible in raw mode)
+        if self.show_raw_source {
+            self.show_raw_source = false;
+        }
+
         // Get current section content to index
         let content = if let Some(selected) = self.selected_heading_text() {
             self.document
@@ -1364,14 +1386,15 @@ impl App {
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
 
-        // Index interactive elements
-        self.interactive_state.index_elements(&blocks);
+        // Index interactive elements (pass raw content for wikilink extraction)
+        self.interactive_state.index_elements(&blocks, &content);
 
-        // Enter interactive mode
-        self.interactive_state.enter();
+        // Enter interactive mode at current scroll position (preserve user's view)
+        self.interactive_state
+            .enter_at_scroll_position(self.content_scroll as usize);
         self.mode = AppMode::Interactive;
 
-        // Auto-scroll to show first element
+        // Only scroll if the selected element is not fully visible
         self.scroll_to_interactive_element(20);
 
         // Set status message
@@ -1468,7 +1491,7 @@ impl App {
 
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
-        self.interactive_state.index_elements(&blocks);
+        self.interactive_state.index_elements(&blocks, &content);
     }
 
     /// Toggle a checkbox and save changes to the file

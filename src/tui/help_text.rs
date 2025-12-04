@@ -136,7 +136,8 @@ pub const HELP_LINES: &[HelpLine] = &[
     // Interactive Mode
     section("Interactive Mode"),
     keybinding("i", "Enter interactive mode (navigate elements)"),
-    keybinding("Tab/j/k", "Navigate between interactive elements"),
+    keybinding("Tab/j/k", "Next element | Shift+Tab/k to go back"),
+    keybinding("u/d", "Page up/down (PgUp/PgDn also work)"),
     keybinding("Enter", "Activate element (toggle/follow/edit)"),
     keybinding("Space", "Toggle checkboxes/details blocks"),
     keybinding("y", "Copy element (code/cell/link)"),
