@@ -234,7 +234,8 @@ impl InteractiveState {
                                 // Parse link target
                                 let target = if let Some(anchor) = url.strip_prefix('#') {
                                     LinkTarget::Anchor(anchor.to_string())
-                                } else if url.starts_with("http://") || url.starts_with("https://") {
+                                } else if url.starts_with("http://") || url.starts_with("https://")
+                                {
                                     LinkTarget::External(url.clone())
                                 } else if let Some((path, anchor)) = url.split_once('#') {
                                     LinkTarget::RelativeFile {

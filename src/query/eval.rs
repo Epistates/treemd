@@ -120,49 +120,47 @@ impl<'a> Engine<'a> {
         match expr {
             Expr::Identity => Ok(vec![self.context.current.clone()]),
 
-            Expr::Element { kind, filters, index, span } => {
-                self.eval_element(kind, filters, index.as_ref(), *span)
-            }
+            Expr::Element {
+                kind,
+                filters,
+                index,
+                span,
+            } => self.eval_element(kind, filters, index.as_ref(), *span),
 
-            Expr::Property { name, span } => {
-                self.eval_property(name, *span)
-            }
+            Expr::Property { name, span } => self.eval_property(name, *span),
 
-            Expr::Function { name, args, span } => {
-                self.eval_function(name, args, *span)
-            }
+            Expr::Function { name, args, span } => self.eval_function(name, args, *span),
 
-            Expr::Hierarchy { parent, child, direct, span } => {
-                self.eval_hierarchy(parent, child, *direct, *span)
-            }
+            Expr::Hierarchy {
+                parent,
+                child,
+                direct,
+                span,
+            } => self.eval_hierarchy(parent, child, *direct, *span),
 
-            Expr::Binary { op, left, right, span } => {
-                self.eval_binary(*op, left, right, *span)
-            }
+            Expr::Binary {
+                op,
+                left,
+                right,
+                span,
+            } => self.eval_binary(*op, left, right, *span),
 
-            Expr::Unary { op, expr, span } => {
-                self.eval_unary(*op, expr, *span)
-            }
+            Expr::Unary { op, expr, span } => self.eval_unary(*op, expr, *span),
 
-            Expr::Literal { value, .. } => {
-                Ok(vec![literal_to_value(value)])
-            }
+            Expr::Literal { value, .. } => Ok(vec![literal_to_value(value)]),
 
-            Expr::Object { pairs, span } => {
-                self.eval_object(pairs, *span)
-            }
+            Expr::Object { pairs, span } => self.eval_object(pairs, *span),
 
-            Expr::Array { elements, span } => {
-                self.eval_array(elements, *span)
-            }
+            Expr::Array { elements, span } => self.eval_array(elements, *span),
 
-            Expr::Conditional { condition, then_branch, else_branch, .. } => {
-                self.eval_conditional(condition, then_branch, else_branch.as_deref())
-            }
+            Expr::Conditional {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => self.eval_conditional(condition, then_branch, else_branch.as_deref()),
 
-            Expr::Group { expr, .. } => {
-                self.eval_expr(expr)
-            }
+            Expr::Group { expr, .. } => self.eval_expr(expr),
         }
     }
 
@@ -175,49 +173,49 @@ impl<'a> Engine<'a> {
     ) -> Result<Vec<Value>, QueryError> {
         // Get all elements of the requested kind
         let mut elements: Vec<Value> = match kind {
-            ElementKind::Heading(level) => {
-                self.context.headings
-                    .iter()
-                    .filter(|h| level.is_none() || Some(h.level) == *level)
-                    .cloned()
-                    .map(Value::Heading)
-                    .collect()
-            }
-            ElementKind::Code => {
-                self.context.code_blocks
-                    .iter()
-                    .cloned()
-                    .map(Value::Code)
-                    .collect()
-            }
-            ElementKind::Link => {
-                self.context.links
-                    .iter()
-                    .cloned()
-                    .map(Value::Link)
-                    .collect()
-            }
-            ElementKind::Image => {
-                self.context.images
-                    .iter()
-                    .cloned()
-                    .map(Value::Image)
-                    .collect()
-            }
-            ElementKind::Table => {
-                self.context.tables
-                    .iter()
-                    .cloned()
-                    .map(Value::Table)
-                    .collect()
-            }
-            ElementKind::List => {
-                self.context.lists
-                    .iter()
-                    .cloned()
-                    .map(Value::List)
-                    .collect()
-            }
+            ElementKind::Heading(level) => self
+                .context
+                .headings
+                .iter()
+                .filter(|h| level.is_none() || Some(h.level) == *level)
+                .cloned()
+                .map(Value::Heading)
+                .collect(),
+            ElementKind::Code => self
+                .context
+                .code_blocks
+                .iter()
+                .cloned()
+                .map(Value::Code)
+                .collect(),
+            ElementKind::Link => self
+                .context
+                .links
+                .iter()
+                .cloned()
+                .map(Value::Link)
+                .collect(),
+            ElementKind::Image => self
+                .context
+                .images
+                .iter()
+                .cloned()
+                .map(Value::Image)
+                .collect(),
+            ElementKind::Table => self
+                .context
+                .tables
+                .iter()
+                .cloned()
+                .map(Value::Table)
+                .collect(),
+            ElementKind::List => self
+                .context
+                .lists
+                .iter()
+                .cloned()
+                .map(Value::List)
+                .collect(),
             ElementKind::Blockquote => {
                 // TODO: extract blockquotes
                 Vec::new()
@@ -245,7 +243,11 @@ impl<'a> Engine<'a> {
         Ok(elements)
     }
 
-    fn apply_filter(&self, elements: Vec<Value>, filter: &Filter) -> Result<Vec<Value>, QueryError> {
+    fn apply_filter(
+        &self,
+        elements: Vec<Value>,
+        filter: &Filter,
+    ) -> Result<Vec<Value>, QueryError> {
         match filter {
             Filter::Text { pattern, exact, .. } => {
                 let pattern_lower = pattern.to_lowercase();
@@ -277,20 +279,18 @@ impl<'a> Engine<'a> {
                     .filter(|v| re.is_match(&v.to_text()))
                     .collect())
             }
-            Filter::Type { type_name, .. } => {
-                Ok(elements
-                    .into_iter()
-                    .filter(|v| {
-                        if let Value::Link(link) = v {
-                            link.link_type.as_str() == type_name
-                        } else if let Value::Code(code) = v {
-                            code.language.as_deref() == Some(type_name)
-                        } else {
-                            false
-                        }
-                    })
-                    .collect())
-            }
+            Filter::Type { type_name, .. } => Ok(elements
+                .into_iter()
+                .filter(|v| {
+                    if let Value::Link(link) = v {
+                        link.link_type.as_str() == type_name
+                    } else if let Value::Code(code) = v {
+                        code.language.as_deref() == Some(type_name)
+                    } else {
+                        false
+                    }
+                })
+                .collect()),
         }
     }
 
@@ -450,7 +450,8 @@ impl<'a> Engine<'a> {
                                 // In direct mode, only include immediate children
                                 if direct {
                                     // Find if there's an intermediate heading
-                                    let has_intermediate = self.context.headings[parent_idx + 1..idx]
+                                    let has_intermediate = self.context.headings
+                                        [parent_idx + 1..idx]
                                         .iter()
                                         .any(|intermediate| {
                                             intermediate.level > parent_level
@@ -468,12 +469,8 @@ impl<'a> Engine<'a> {
                             // Find code blocks under this heading
                             // For now, return all code blocks (simplified)
                             // TODO: Implement proper scoping
-                            results.extend(
-                                self.context.code_blocks
-                                    .iter()
-                                    .cloned()
-                                    .map(Value::Code),
-                            );
+                            results
+                                .extend(self.context.code_blocks.iter().cloned().map(Value::Code));
                         }
                         _ => {
                             // Other element types under headings
@@ -536,7 +533,12 @@ impl<'a> Engine<'a> {
         Ok(vec![result])
     }
 
-    fn eval_unary(&mut self, op: UnaryOp, expr: &Expr, _span: Span) -> Result<Vec<Value>, QueryError> {
+    fn eval_unary(
+        &mut self,
+        op: UnaryOp,
+        expr: &Expr,
+        _span: Span,
+    ) -> Result<Vec<Value>, QueryError> {
         let vals = self.eval_expr(expr)?;
         let val = vals.into_iter().next().unwrap_or(Value::Null);
 
@@ -554,7 +556,11 @@ impl<'a> Engine<'a> {
         Ok(vec![result])
     }
 
-    fn eval_object(&mut self, pairs: &[(String, Expr)], _span: Span) -> Result<Vec<Value>, QueryError> {
+    fn eval_object(
+        &mut self,
+        pairs: &[(String, Expr)],
+        _span: Span,
+    ) -> Result<Vec<Value>, QueryError> {
         let mut obj = IndexMap::new();
 
         for (key, value_expr) in pairs {
@@ -639,7 +645,15 @@ fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
         .collect()
 }
 
-fn extract_blocks(doc: &Document) -> (Vec<CodeValue>, Vec<LinkValue>, Vec<ImageValue>, Vec<TableValue>, Vec<ListValue>) {
+fn extract_blocks(
+    doc: &Document,
+) -> (
+    Vec<CodeValue>,
+    Vec<LinkValue>,
+    Vec<ImageValue>,
+    Vec<TableValue>,
+    Vec<ListValue>,
+) {
     use crate::parser::content::parse_content;
     use crate::parser::links::extract_links;
     use crate::parser::output::Block;
@@ -654,7 +668,12 @@ fn extract_blocks(doc: &Document) -> (Vec<CodeValue>, Vec<LinkValue>, Vec<ImageV
 
     for block in blocks {
         match block {
-            Block::Code { language, content, start_line, end_line } => {
+            Block::Code {
+                language,
+                content,
+                start_line,
+                end_line,
+            } => {
                 code_blocks.push(CodeValue {
                     language,
                     content,
@@ -665,20 +684,30 @@ fn extract_blocks(doc: &Document) -> (Vec<CodeValue>, Vec<LinkValue>, Vec<ImageV
             Block::Image { alt, src, title } => {
                 images.push(ImageValue { alt, src, title });
             }
-            Block::Table { headers, rows, alignments } => {
+            Block::Table {
+                headers,
+                rows,
+                alignments,
+            } => {
                 tables.push(TableValue {
                     headers,
                     rows,
-                    alignments: alignments.iter().map(|a| format!("{:?}", a).to_lowercase()).collect(),
+                    alignments: alignments
+                        .iter()
+                        .map(|a| format!("{:?}", a).to_lowercase())
+                        .collect(),
                 });
             }
             Block::List { ordered, items } => {
                 lists.push(ListValue {
                     ordered,
-                    items: items.into_iter().map(|i| ListItemValue {
-                        content: i.content,
-                        checked: i.checked,
-                    }).collect(),
+                    items: items
+                        .into_iter()
+                        .map(|i| ListItemValue {
+                            content: i.content,
+                            checked: i.checked,
+                        })
+                        .collect(),
                 });
             }
             _ => {}
@@ -737,8 +766,12 @@ fn apply_index(mut values: Vec<Value>, index: &IndexOp) -> Result<Vec<Value>, Qu
         }
         IndexOp::Slice { start, end } => {
             let len = values.len() as i64;
-            let start_idx = start.map(|s| if s < 0 { (len + s).max(0) } else { s }).unwrap_or(0) as usize;
-            let end_idx = end.map(|e| if e < 0 { (len + e).max(0) } else { e }).unwrap_or(len as i64) as usize;
+            let start_idx = start
+                .map(|s| if s < 0 { (len + s).max(0) } else { s })
+                .unwrap_or(0) as usize;
+            let end_idx = end
+                .map(|e| if e < 0 { (len + e).max(0) } else { e })
+                .unwrap_or(len as i64) as usize;
 
             let start_idx = start_idx.min(values.len());
             let end_idx = end_idx.min(values.len());
@@ -766,7 +799,13 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 fn compare_values(a: &Value, b: &Value) -> i32 {
     match (a, b) {
         (Value::Number(a), Value::Number(b)) => {
-            if a < b { -1 } else if a > b { 1 } else { 0 }
+            if a < b {
+                -1
+            } else if a > b {
+                1
+            } else {
+                0
+            }
         }
         (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
         _ => 0,

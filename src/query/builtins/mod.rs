@@ -39,7 +39,10 @@ pub fn register_all(registry: &mut Registry) {
     registry.register_function("slugify", Function::new(fn_slugify, 0..=0));
 
     // Boolean/filter functions
-    registry.register_function("select", Function::new(fn_select, 1..=1).with_takes_input(true));
+    registry.register_function(
+        "select",
+        Function::new(fn_select, 1..=1).with_takes_input(true),
+    );
     registry.register_function("contains", Function::new(fn_contains, 1..=1));
     registry.register_function("startswith", Function::new(fn_startswith, 1..=1));
     registry.register_function("endswith", Function::new(fn_endswith, 1..=1));
@@ -126,7 +129,11 @@ fn fn_first(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
     let input = args.first().unwrap_or(&Value::Null);
     match input {
         Value::Array(a) => Ok(a.first().cloned().map(|v| vec![v]).unwrap_or_default()),
-        Value::String(s) => Ok(s.chars().next().map(|c| vec![Value::String(c.to_string())]).unwrap_or_default()),
+        Value::String(s) => Ok(s
+            .chars()
+            .next()
+            .map(|c| vec![Value::String(c.to_string())])
+            .unwrap_or_default()),
         _ => Ok(vec![input.clone()]),
     }
 }
@@ -135,7 +142,11 @@ fn fn_last(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
     let input = args.first().unwrap_or(&Value::Null);
     match input {
         Value::Array(a) => Ok(a.last().cloned().map(|v| vec![v]).unwrap_or_default()),
-        Value::String(s) => Ok(s.chars().last().map(|c| vec![Value::String(c.to_string())]).unwrap_or_default()),
+        Value::String(s) => Ok(s
+            .chars()
+            .last()
+            .map(|c| vec![Value::String(c.to_string())])
+            .unwrap_or_default()),
         _ => Ok(vec![input.clone()]),
     }
 }
@@ -351,21 +362,30 @@ fn fn_select(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryErro
 fn fn_contains(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
     let pattern = args.get(1).map(|v| v.to_text()).unwrap_or_default();
-    let result = input.to_text().to_lowercase().contains(&pattern.to_lowercase());
+    let result = input
+        .to_text()
+        .to_lowercase()
+        .contains(&pattern.to_lowercase());
     Ok(vec![Value::Bool(result)])
 }
 
 fn fn_startswith(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
     let pattern = args.get(1).map(|v| v.to_text()).unwrap_or_default();
-    let result = input.to_text().to_lowercase().starts_with(&pattern.to_lowercase());
+    let result = input
+        .to_text()
+        .to_lowercase()
+        .starts_with(&pattern.to_lowercase());
     Ok(vec![Value::Bool(result)])
 }
 
 fn fn_endswith(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
     let pattern = args.get(1).map(|v| v.to_text()).unwrap_or_default();
-    let result = input.to_text().to_lowercase().ends_with(&pattern.to_lowercase());
+    let result = input
+        .to_text()
+        .to_lowercase()
+        .ends_with(&pattern.to_lowercase());
     Ok(vec![Value::Bool(result)])
 }
 
@@ -429,7 +449,9 @@ fn fn_url(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> 
 fn fn_lang(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
     match input {
-        Value::Code(c) => Ok(vec![c.language.clone().map(Value::String).unwrap_or(Value::Null)]),
+        Value::Code(c) => Ok(vec![
+            c.language.clone().map(Value::String).unwrap_or(Value::Null),
+        ]),
         _ => Ok(vec![Value::Null]),
     }
 }
@@ -441,13 +463,22 @@ fn fn_lang(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
 fn fn_stats(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let _ = args;
     let mut obj = indexmap::IndexMap::new();
-    obj.insert("headings".to_string(), Value::Number(ctx.headings.len() as f64));
-    obj.insert("code_blocks".to_string(), Value::Number(ctx.code_blocks.len() as f64));
+    obj.insert(
+        "headings".to_string(),
+        Value::Number(ctx.headings.len() as f64),
+    );
+    obj.insert(
+        "code_blocks".to_string(),
+        Value::Number(ctx.code_blocks.len() as f64),
+    );
     obj.insert("links".to_string(), Value::Number(ctx.links.len() as f64));
     obj.insert("images".to_string(), Value::Number(ctx.images.len() as f64));
     obj.insert("tables".to_string(), Value::Number(ctx.tables.len() as f64));
     obj.insert("lists".to_string(), Value::Number(ctx.lists.len() as f64));
-    obj.insert("words".to_string(), Value::Number(ctx.document.word_count as f64));
+    obj.insert(
+        "words".to_string(),
+        Value::Number(ctx.document.word_count as f64),
+    );
     Ok(vec![Value::Object(obj)])
 }
 
@@ -486,7 +517,9 @@ fn fn_types(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
     let _ = args;
     let mut counts = std::collections::HashMap::new();
     for link in &ctx.links {
-        *counts.entry(link.link_type.as_str().to_string()).or_insert(0) += 1;
+        *counts
+            .entry(link.link_type.as_str().to_string())
+            .or_insert(0) += 1;
     }
 
     let mut obj = indexmap::IndexMap::new();
@@ -502,8 +535,15 @@ fn fn_types(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
 
 fn fn_limit(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    let n = args.get(1)
-        .and_then(|v| if let Value::Number(n) = v { Some(*n as usize) } else { None })
+    let n = args
+        .get(1)
+        .and_then(|v| {
+            if let Value::Number(n) = v {
+                Some(*n as usize)
+            } else {
+                None
+            }
+        })
         .unwrap_or(0);
 
     match input {
@@ -515,8 +555,15 @@ fn fn_limit(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
 
 fn fn_skip(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    let n = args.get(1)
-        .and_then(|v| if let Value::Number(n) = v { Some(*n as usize) } else { None })
+    let n = args
+        .get(1)
+        .and_then(|v| {
+            if let Value::Number(n) = v {
+                Some(*n as usize)
+            } else {
+                None
+            }
+        })
         .unwrap_or(0);
 
     match input {
@@ -528,8 +575,15 @@ fn fn_skip(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
 
 fn fn_nth(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    let n = args.get(1)
-        .and_then(|v| if let Value::Number(n) = v { Some(*n as i64) } else { None })
+    let n = args
+        .get(1)
+        .and_then(|v| {
+            if let Value::Number(n) = v {
+                Some(*n as i64)
+            } else {
+                None
+            }
+        })
         .unwrap_or(0);
 
     match input {
@@ -547,7 +601,10 @@ fn fn_nth(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> 
             } else {
                 n as usize
             };
-            Ok(s.chars().nth(idx).map(|c| vec![Value::String(c.to_string())]).unwrap_or_default())
+            Ok(s.chars()
+                .nth(idx)
+                .map(|c| vec![Value::String(c.to_string())])
+                .unwrap_or_default())
         }
         _ => Ok(vec![]),
     }
@@ -583,8 +640,15 @@ fn fn_min(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> 
     let input = args.first().unwrap_or(&Value::Null);
     match input {
         Value::Array(a) => {
-            let min = a.iter()
-                .filter_map(|v| if let Value::Number(n) = v { Some(*n) } else { None })
+            let min = a
+                .iter()
+                .filter_map(|v| {
+                    if let Value::Number(n) = v {
+                        Some(*n)
+                    } else {
+                        None
+                    }
+                })
                 .fold(f64::INFINITY, f64::min);
             if min.is_infinite() {
                 Ok(vec![Value::Null])
@@ -601,8 +665,15 @@ fn fn_max(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> 
     let input = args.first().unwrap_or(&Value::Null);
     match input {
         Value::Array(a) => {
-            let max = a.iter()
-                .filter_map(|v| if let Value::Number(n) = v { Some(*n) } else { None })
+            let max = a
+                .iter()
+                .filter_map(|v| {
+                    if let Value::Number(n) = v {
+                        Some(*n)
+                    } else {
+                        None
+                    }
+                })
                 .fold(f64::NEG_INFINITY, f64::max);
             if max.is_infinite() {
                 Ok(vec![Value::Null])
@@ -622,8 +693,15 @@ fn fn_add(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> 
             // Check if all are numbers
             let all_numbers = a.iter().all(|v| matches!(v, Value::Number(_)));
             if all_numbers {
-                let sum: f64 = a.iter()
-                    .filter_map(|v| if let Value::Number(n) = v { Some(*n) } else { None })
+                let sum: f64 = a
+                    .iter()
+                    .filter_map(|v| {
+                        if let Value::Number(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
                     .sum();
                 Ok(vec![Value::Number(sum)])
             } else {
@@ -654,7 +732,10 @@ fn fn_debug(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
 
 fn fn_group_by(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    let key_name = args.get(1).map(|v| v.to_text()).unwrap_or_else(|| "key".to_string());
+    let key_name = args
+        .get(1)
+        .map(|v| v.to_text())
+        .unwrap_or_else(|| "key".to_string());
 
     match input {
         Value::Array(a) => {
@@ -681,7 +762,10 @@ fn fn_group_by(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryEr
 
 fn fn_sort_by(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    let key_name = args.get(1).map(|v| v.to_text()).unwrap_or_else(|| "key".to_string());
+    let key_name = args
+        .get(1)
+        .map(|v| v.to_text())
+        .unwrap_or_else(|| "key".to_string());
 
     match input {
         Value::Array(a) => {

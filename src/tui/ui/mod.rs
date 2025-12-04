@@ -7,6 +7,9 @@ use layout::{DynamicLayout, Section};
 
 use crate::tui::app::{App, Focus};
 use crate::tui::theme::Theme;
+use popups::{
+    render_cell_edit_overlay, render_help_popup, render_link_picker, render_theme_picker,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -14,7 +17,6 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, Wrap,
 };
-use popups::{render_cell_edit_overlay, render_help_popup, render_link_picker, render_theme_picker};
 use table::render_table;
 use util::detect_checkbox_in_text;
 
@@ -522,7 +524,10 @@ fn render_markdown_enhanced(
                         if id.block_idx == block_idx {
                             id.sub_idx.and_then(|sub| {
                                 // Decode: check if this is a link sub_idx for this item
-                                if sub >= 100 && sub >= idx * 1000 + 100 && sub < (idx + 1) * 1000 + 100 {
+                                if sub >= 100
+                                    && sub >= idx * 1000 + 100
+                                    && sub < (idx + 1) * 1000 + 100
+                                {
                                     Some(sub - idx * 1000 - 100)
                                 } else {
                                     None
@@ -645,8 +650,7 @@ fn render_markdown_enhanced(
 
                     // Render nested blocks within this list item (e.g., code blocks)
                     for nested_block in &item.blocks {
-                        let nested_lines =
-                            render_block_to_lines(nested_block, highlighter, theme);
+                        let nested_lines = render_block_to_lines(nested_block, highlighter, theme);
                         for nested_line in nested_lines {
                             // Add indentation for nested content (align with list item text)
                             let mut indented_spans = vec![Span::raw("     ")]; // 5 spaces indent

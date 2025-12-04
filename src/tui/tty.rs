@@ -9,13 +9,13 @@
 //! - Proper cleanup on error paths
 
 use crossterm::event::{Event, read};
-use std::io;
 use std::fs::File;
+use std::io;
 
 #[cfg(unix)]
-use std::os::unix::io::AsRawFd;
-#[cfg(unix)]
 use std::mem::MaybeUninit;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
 
 /// Check if stdin is a TTY
 #[cfg(unix)]
@@ -51,7 +51,10 @@ pub fn enable_raw_mode() -> io::Result<()> {
             .map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("Cannot open /dev/tty: {}. Interactive mode requires a terminal.", e)
+                    format!(
+                        "Cannot open /dev/tty: {}. Interactive mode requires a terminal.",
+                        e
+                    ),
                 )
             })?;
 
@@ -107,11 +110,7 @@ pub fn disable_raw_mode() -> io::Result<()> {
         crossterm::terminal::disable_raw_mode()
     } else {
         // Stdin was piped - restore /dev/tty terminal settings
-        let tty = File::options()
-            .read(true)
-            .write(true)
-            .open("/dev/tty")
-            .ok();
+        let tty = File::options().read(true).write(true).open("/dev/tty").ok();
 
         if let Some(tty) = tty {
             let tty_fd = tty.as_raw_fd();

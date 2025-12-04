@@ -10,7 +10,10 @@ pub enum HelpLine {
     Title(&'static str),
     Description(&'static str),
     SectionHeader(&'static str),
-    KeyBinding { key: &'static str, desc: &'static str },
+    KeyBinding {
+        key: &'static str,
+        desc: &'static str,
+    },
     Note(&'static str),
     Blank,
 }
@@ -38,10 +41,7 @@ impl HelpLine {
             HelpLine::KeyBinding { key, desc } => {
                 let formatted_key = format!("  {:<width$}", key, width = KEY_COLUMN_WIDTH);
                 Line::from(vec![
-                    Span::styled(
-                        formatted_key,
-                        Style::default().fg(theme.modal_key_fg()),
-                    ),
+                    Span::styled(formatted_key, Style::default().fg(theme.modal_key_fg())),
                     Span::raw(desc.to_string()),
                 ])
             }
@@ -91,7 +91,6 @@ pub const HELP_LINES: &[HelpLine] = &[
     title("treemd - Keyboard Shortcuts"),
     description("Use j/k or ↓/↑ to scroll | Press Esc or ? to close"),
     blank(),
-
     // Navigation section
     section("Navigation"),
     keybinding("j/↓", "Move down"),
@@ -102,14 +101,12 @@ pub const HELP_LINES: &[HelpLine] = &[
     keybinding("d", "Page down (content)"),
     keybinding("u", "Page up (content)"),
     blank(),
-
     // Tree Operations
     section("Tree Operations"),
     keybinding("Enter/Space", "Toggle expand/collapse"),
     keybinding("l/→", "Expand heading"),
     keybinding("h/←", "Collapse (or parent if no children)"),
     blank(),
-
     // General
     section("General"),
     keybinding("Tab", "Switch between Outline and Content"),
@@ -117,7 +114,6 @@ pub const HELP_LINES: &[HelpLine] = &[
     keybinding("?", "Toggle this help"),
     keybinding("q/Esc", "Quit"),
     blank(),
-
     // UX Features
     section("UX Features"),
     keybinding("w", "Toggle outline visibility (full-width content)"),
@@ -126,7 +122,6 @@ pub const HELP_LINES: &[HelpLine] = &[
     keybinding("m", "Set bookmark (shows ⚑ indicator)"),
     keybinding("'", "Jump to bookmarked position"),
     blank(),
-
     // Link Following
     section("Link Following"),
     keybinding("f", "Enter link follow mode"),
@@ -137,7 +132,6 @@ pub const HELP_LINES: &[HelpLine] = &[
     keybinding("b/Bksp", "Go back to previous file"),
     keybinding("F", "Go forward in navigation history"),
     blank(),
-
     // Interactive Mode
     section("Interactive Mode"),
     keybinding("i", "Enter interactive mode (navigate elements)"),
@@ -149,7 +143,6 @@ pub const HELP_LINES: &[HelpLine] = &[
     keybinding("Enter", "Edit table cell (in table mode)"),
     keybinding("Esc", "Exit interactive mode"),
     blank(),
-
     // Themes & Clipboard
     section("Themes & Clipboard"),
     keybinding("t", "Cycle color theme"),
@@ -157,11 +150,9 @@ pub const HELP_LINES: &[HelpLine] = &[
     keybinding("Y", "Copy anchor link (works in all modes)"),
     keybinding("e", "Edit file in default editor ($VISUAL or $EDITOR)"),
     blank(),
-
     // Note
     note("On Linux, install a clipboard manager (clipit, parcellite, xclip) for best results"),
     blank(),
-
     // Footer
     description("Use j/k or ↓/↑ to scroll | Press Esc or ? to close"),
 ];

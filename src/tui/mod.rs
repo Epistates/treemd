@@ -4,7 +4,7 @@ mod interactive;
 mod syntax;
 pub mod terminal_compat;
 pub mod theme;
-pub mod tty;  // Public module for TTY handling
+pub mod tty; // Public module for TTY handling
 mod ui;
 
 pub use app::App;
@@ -393,7 +393,9 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 // Direct link selection by number (searches original indices)
                                 let idx = c.to_digit(10).unwrap() as usize - 1;
                                 // Find this index in the filtered list
-                                if let Some(display_idx) = app.filtered_link_indices.iter().position(|&i| i == idx) {
+                                if let Some(display_idx) =
+                                    app.filtered_link_indices.iter().position(|&i| i == idx)
+                                {
                                     app.selected_link_idx = Some(display_idx);
                                 }
                             }

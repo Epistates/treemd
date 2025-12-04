@@ -9,19 +9,19 @@ use super::error::{QueryError, QueryErrorKind};
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Punctuation
-    Dot,        // .
-    Pipe,       // |
-    Comma,      // ,
-    Colon,      // :
-    LBracket,   // [
-    RBracket,   // ]
-    LParen,     // (
-    RParen,     // )
-    LBrace,     // {
-    RBrace,     // }
-    Gt,         // >
-    GtGt,       // >>
-    Question,   // ?
+    Dot,      // .
+    Pipe,     // |
+    Comma,    // ,
+    Colon,    // :
+    LBracket, // [
+    RBracket, // ]
+    LParen,   // (
+    RParen,   // )
+    LBrace,   // {
+    RBrace,   // }
+    Gt,       // >
+    GtGt,     // >>
+    Question, // ?
 
     // Operators
     Eq,         // ==
@@ -293,7 +293,10 @@ impl<'a> Lexer<'a> {
         self.skip_whitespace();
 
         let Some((start, c)) = self.advance() else {
-            return Ok(Token::new(TokenKind::Eof, Span::new(self.input.len(), self.input.len())));
+            return Ok(Token::new(
+                TokenKind::Eof,
+                Span::new(self.input.len(), self.input.len()),
+            ));
         };
 
         let token = match c {
@@ -435,7 +438,11 @@ mod tests {
     fn test_simple_tokens() {
         assert_eq!(
             tokenize_kinds(".h2"),
-            vec![TokenKind::Dot, TokenKind::Ident("h2".into()), TokenKind::Eof]
+            vec![
+                TokenKind::Dot,
+                TokenKind::Ident("h2".into()),
+                TokenKind::Eof
+            ]
         );
     }
 

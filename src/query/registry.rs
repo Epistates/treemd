@@ -241,7 +241,11 @@ fn levenshtein(a: &str, b: &str) -> usize {
 
     for i in 1..=a_len {
         for j in 1..=b_len {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             matrix[i][j] = (matrix[i - 1][j] + 1)
                 .min(matrix[i][j - 1] + 1)
                 .min(matrix[i - 1][j - 1] + cost);
@@ -269,10 +273,7 @@ mod tests {
     fn test_registry_functions() {
         let mut registry = Registry::new();
 
-        let test_fn = Function::new(
-            |_args, _ctx| Ok(vec![Value::String("test".into())]),
-            0..=0,
-        );
+        let test_fn = Function::new(|_args, _ctx| Ok(vec![Value::String("test".into())]), 0..=0);
 
         registry.register_function("test", test_fn);
         assert!(registry.has_function("test"));
@@ -296,15 +297,9 @@ mod tests {
     #[test]
     fn test_suggest_function() {
         let mut registry = Registry::new();
-        registry.register_function(
-            "contains",
-            Function::new(|_, _| Ok(vec![]), 1..=1),
-        );
+        registry.register_function("contains", Function::new(|_, _| Ok(vec![]), 1..=1));
         registry.register_function("count", Function::new(|_, _| Ok(vec![]), 0..=0));
-        registry.register_function(
-            "startswith",
-            Function::new(|_, _| Ok(vec![]), 1..=1),
-        );
+        registry.register_function("startswith", Function::new(|_, _| Ok(vec![]), 1..=1));
 
         let suggestions = registry.suggest_function("cont");
         assert!(suggestions.contains(&"contains"));

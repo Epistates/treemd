@@ -1074,9 +1074,10 @@ impl App {
         }
 
         // Reject paths containing .. components (path traversal)
-        if relative_path.components().any(|c| {
-            matches!(c, std::path::Component::ParentDir)
-        }) {
+        if relative_path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err("Path traversal (..) is not allowed for security reasons".to_string());
         }
 
@@ -1089,10 +1090,9 @@ impl App {
 
         // Verify the resolved path is within allowed boundaries
         // (defense in depth - even though we rejected .., canonicalize to be sure)
-        if let (Ok(canonical_path), Ok(canonical_base)) = (
-            absolute_path.canonicalize(),
-            current_dir.canonicalize(),
-        ) {
+        if let (Ok(canonical_path), Ok(canonical_base)) =
+            (absolute_path.canonicalize(), current_dir.canonicalize())
+        {
             if !canonical_path.starts_with(&canonical_base) {
                 return Err("Path escapes document directory boundary".to_string());
             }

@@ -66,7 +66,12 @@ impl QueryError {
             let end = self.span.end.min(line.len()).max(start + 1);
             let padding = " ".repeat(start + 4); // "1 | " = 4 chars
             let underline = "^".repeat(end - start);
-            output.push_str(&format!("{}{}  {}\n", padding, underline, self.kind.short_message()));
+            output.push_str(&format!(
+                "{}{}  {}\n",
+                padding,
+                underline,
+                self.kind.short_message()
+            ));
         }
 
         // Suggestions
@@ -286,7 +291,10 @@ impl fmt::Display for QueryErrorKind {
                     function, expected, found
                 )
             }
-            QueryErrorKind::NoMatch { selector, available } => {
+            QueryErrorKind::NoMatch {
+                selector,
+                available,
+            } => {
                 let available_str = if available.is_empty() {
                     "none available".to_string()
                 } else {
@@ -299,11 +307,7 @@ impl fmt::Display for QueryErrorKind {
                 )
             }
             QueryErrorKind::IndexOutOfBounds { index, length } => {
-                write!(
-                    f,
-                    "Index {} out of bounds (length: {})",
-                    index, length
-                )
+                write!(f, "Index {} out of bounds (length: {})", index, length)
             }
             QueryErrorKind::InvalidRegex { pattern, error } => {
                 write!(f, "Invalid regex '{}': {}", pattern, error)
@@ -314,7 +318,6 @@ impl fmt::Display for QueryErrorKind {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

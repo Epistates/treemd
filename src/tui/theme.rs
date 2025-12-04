@@ -353,7 +353,7 @@ impl Theme {
             code_fence: Color::Rgb(116, 199, 236),        // Sapphire
             title_bar_fg: Color::Rgb(137, 180, 250),      // Blue
             scrollbar_fg: Color::Rgb(108, 112, 134),      // Overlay 0
-            selection_indicator_fg: Color::Rgb(30, 30, 46),    // Base
+            selection_indicator_fg: Color::Rgb(30, 30, 46), // Base
             selection_indicator_bg: Color::Rgb(137, 180, 250), // Blue
             link_fg: Color::Rgb(137, 180, 250),           // Blue
             link_selected_bg: Color::Rgb(137, 180, 250),  // Blue

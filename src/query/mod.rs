@@ -34,8 +34,8 @@ pub mod builtins;
 pub mod extractors;
 
 // Re-exports for public API
-pub use ast::{Expr, Query};
 pub use ast::Span;
+pub use ast::{Expr, Query};
 pub use error::{QueryError, QueryErrorKind};
 pub use eval::{Engine, EvalContext};
 pub use registry::{ExtractorFn, Function, FunctionRegistry, Registry};

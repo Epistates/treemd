@@ -177,8 +177,8 @@ fn main() -> Result<()> {
 
         // Initialize terminal with explicit error handling
         // When stdin is piped, we use /dev/tty for input (handled by tui::tty module)
-        use crossterm::terminal::EnterAlternateScreen;
         use crossterm::ExecutableCommand;
+        use crossterm::terminal::EnterAlternateScreen;
         use std::io::stdout;
 
         // Manually initialize to get better error messages
@@ -340,11 +340,7 @@ fn extract_section(doc: &Document, section_name: &str) {
     }
 }
 
-fn handle_query_mode(
-    doc: &Document,
-    query_str: &str,
-    output_format: Option<&str>,
-) -> Result<()> {
+fn handle_query_mode(doc: &Document, query_str: &str, output_format: Option<&str>) -> Result<()> {
     use treemd::query::{self, OutputFormat};
 
     // Parse output format

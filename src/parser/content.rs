@@ -431,26 +431,25 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
                 // 1. If paragraph_buffer has content (tight list item - no paragraph wrapper), use it
                 // 2. Else if item_blocks starts with a Paragraph, extract it
                 // 3. Else use empty content
-                let (content, inline, remaining_blocks) =
-                    if !state.paragraph_buffer.is_empty() {
-                        // Tight list item: text was added directly without paragraph wrapper
-                        let all_blocks: Vec<Block> = state.item_blocks.drain(..).collect();
-                        (
-                            state.paragraph_buffer.clone(),
-                            state.inline_buffer.clone(),
-                            all_blocks,
-                        )
-                    } else if let Some(Block::Paragraph { content, inline }) =
-                        state.item_blocks.first().cloned()
-                    {
-                        // Loose list item: first block is a paragraph
-                        let remaining: Vec<Block> = state.item_blocks.drain(1..).collect();
-                        (content, inline, remaining)
-                    } else {
-                        // Item starts with code block or other non-paragraph block
-                        let all_blocks: Vec<Block> = state.item_blocks.drain(..).collect();
-                        (String::new(), Vec::new(), all_blocks)
-                    };
+                let (content, inline, remaining_blocks) = if !state.paragraph_buffer.is_empty() {
+                    // Tight list item: text was added directly without paragraph wrapper
+                    let all_blocks: Vec<Block> = state.item_blocks.drain(..).collect();
+                    (
+                        state.paragraph_buffer.clone(),
+                        state.inline_buffer.clone(),
+                        all_blocks,
+                    )
+                } else if let Some(Block::Paragraph { content, inline }) =
+                    state.item_blocks.first().cloned()
+                {
+                    // Loose list item: first block is a paragraph
+                    let remaining: Vec<Block> = state.item_blocks.drain(1..).collect();
+                    (content, inline, remaining)
+                } else {
+                    // Item starts with code block or other non-paragraph block
+                    let all_blocks: Vec<Block> = state.item_blocks.drain(..).collect();
+                    (String::new(), Vec::new(), all_blocks)
+                };
 
                 state.list_items.push(ListItem {
                     checked: state.task_list_marker,
@@ -772,7 +771,11 @@ mod content_tests {
 
             // First item: "Test1:" with a code block
             assert_eq!(items[0].content, "Test1:");
-            assert_eq!(items[0].blocks.len(), 1, "First item should have 1 nested block");
+            assert_eq!(
+                items[0].blocks.len(),
+                1,
+                "First item should have 1 nested block"
+            );
             if let Block::Code { content, .. } = &items[0].blocks[0] {
                 assert_eq!(content, "test1");
             } else {

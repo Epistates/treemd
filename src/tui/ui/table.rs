@@ -303,7 +303,12 @@ mod tests {
 
             // Selected version should have "→ " at the start
             assert!(first_selected.spans.iter().any(|s| s.content.contains("→")));
-            assert!(!first_unselected.spans.iter().any(|s| s.content.contains("→")));
+            assert!(
+                !first_unselected
+                    .spans
+                    .iter()
+                    .any(|s| s.content.contains("→"))
+            );
         }
 
         #[test]
@@ -386,7 +391,13 @@ mod tests {
             // Header should have bold modifier
             let cell_span = line.spans.iter().find(|s| s.content.contains("Header"));
             assert!(cell_span.is_some());
-            assert!(cell_span.unwrap().style.add_modifier.contains(Modifier::BOLD));
+            assert!(
+                cell_span
+                    .unwrap()
+                    .style
+                    .add_modifier
+                    .contains(Modifier::BOLD)
+            );
         }
 
         #[test]

@@ -49,10 +49,7 @@ pub enum Expr {
     },
 
     /// Property access: `.text`, `.level`
-    Property {
-        name: String,
-        span: Span,
-    },
+    Property { name: String, span: Span },
 
     /// Function call: `count`, `select(...)`, `contains(...)`
     Function {
@@ -68,10 +65,7 @@ pub enum Expr {
     },
 
     /// Array construction: `[.h2[].text]`
-    Array {
-        elements: Vec<Expr>,
-        span: Span,
-    },
+    Array { elements: Vec<Expr>, span: Span },
 
     /// Conditional: `if ... then ... else ... end`
     Conditional {
@@ -90,10 +84,7 @@ pub enum Expr {
     },
 
     /// Literal value
-    Literal {
-        value: Literal,
-        span: Span,
-    },
+    Literal { value: Literal, span: Span },
 
     /// Binary operation: `==`, `!=`, `>`, `<`, `and`, `or`, `+`, `-`, etc.
     Binary {
@@ -111,10 +102,7 @@ pub enum Expr {
     },
 
     /// Parenthesized expression for grouping
-    Group {
-        expr: Box<Expr>,
-        span: Span,
-    },
+    Group { expr: Box<Expr>, span: Span },
 }
 
 impl Expr {
@@ -190,7 +178,9 @@ impl ElementKind {
             "list" | "lists" | "ul" | "ol" => Some(ElementKind::List),
 
             // Blockquotes
-            "blockquote" | "blockquotes" | "quote" | "quotes" | "bq" => Some(ElementKind::Blockquote),
+            "blockquote" | "blockquotes" | "quote" | "quotes" | "bq" => {
+                Some(ElementKind::Blockquote)
+            }
 
             // Paragraphs
             "para" | "paragraph" | "paragraphs" | "p" => Some(ElementKind::Paragraph),
@@ -242,16 +232,10 @@ pub enum Filter {
     },
 
     /// Regex filter: `[/pattern/]`
-    Regex {
-        pattern: String,
-        span: Span,
-    },
+    Regex { pattern: String, span: Span },
 
     /// Type filter: `[anchor]`, `[external]` for links
-    Type {
-        type_name: String,
-        span: Span,
-    },
+    Type { type_name: String, span: Span },
 }
 
 /// Index operation for element access.

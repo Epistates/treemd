@@ -5,11 +5,13 @@
 
 use crate::tui::app::App;
 use crate::tui::help_text;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
-use ratatui::Frame;
+use ratatui::widgets::{
+    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+};
 
 use super::util::centered_area;
 
@@ -73,7 +75,11 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
             "Links ({}/{}) - /: search, Enter: follow, Esc: {}",
             app.filtered_link_indices.len(),
             app.links_in_view.len(),
-            if app.link_search_active { "stop search" } else { "cancel" }
+            if app.link_search_active {
+                "stop search"
+            } else {
+                "cancel"
+            }
         )
     } else {
         format!(
@@ -83,14 +89,12 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     // Create lines for display
-    let mut lines = vec![
-        Line::from(vec![Span::styled(
-            header_text,
-            Style::default()
-                .fg(theme.modal_title())
-                .add_modifier(Modifier::BOLD),
-        )]),
-    ];
+    let mut lines = vec![Line::from(vec![Span::styled(
+        header_text,
+        Style::default()
+            .fg(theme.modal_title())
+            .add_modifier(Modifier::BOLD),
+    )])];
 
     // Show search bar if active or has query
     if app.link_search_active || !app.link_search_query.is_empty() {
@@ -266,8 +270,7 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
             .end_symbol(Some("↓"))
             .style(Style::default().fg(theme.modal_border()));
 
-        let mut scrollbar_state =
-            ScrollbarState::new(total_lines).position(scroll_offset as usize);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll_offset as usize);
 
         frame.render_stateful_widget(
             scrollbar,
@@ -288,14 +291,38 @@ pub fn render_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     // All available themes
     let themes = [
-        (ThemeName::OceanDark, "Ocean Dark", "Base16 Ocean with cool blues"),
+        (
+            ThemeName::OceanDark,
+            "Ocean Dark",
+            "Base16 Ocean with cool blues",
+        ),
         (ThemeName::Nord, "Nord", "Arctic, north-bluish palette"),
-        (ThemeName::Dracula, "Dracula", "Dark theme with vibrant colors"),
-        (ThemeName::Solarized, "Solarized", "Precision colors for machines and people"),
-        (ThemeName::Monokai, "Monokai", "Sublime Text's iconic scheme"),
+        (
+            ThemeName::Dracula,
+            "Dracula",
+            "Dark theme with vibrant colors",
+        ),
+        (
+            ThemeName::Solarized,
+            "Solarized",
+            "Precision colors for machines and people",
+        ),
+        (
+            ThemeName::Monokai,
+            "Monokai",
+            "Sublime Text's iconic scheme",
+        ),
         (ThemeName::Gruvbox, "Gruvbox", "Retro groove color scheme"),
-        (ThemeName::TokyoNight, "Tokyo Night", "Modern night theme for low-light"),
-        (ThemeName::CatppuccinMocha, "Catppuccin Mocha", "Soothing pastel theme for night coding"),
+        (
+            ThemeName::TokyoNight,
+            "Tokyo Night",
+            "Modern night theme for low-light",
+        ),
+        (
+            ThemeName::CatppuccinMocha,
+            "Catppuccin Mocha",
+            "Soothing pastel theme for night coding",
+        ),
     ];
 
     // Create centered popup area

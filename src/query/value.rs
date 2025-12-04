@@ -179,7 +179,12 @@ impl Value {
             Value::Link(l) => l.text.clone(),
             Value::Image(i) => i.alt.clone(),
             Value::Table(t) => format!("Table({}x{})", t.headers.len(), t.rows.len()),
-            Value::List(l) => l.items.iter().map(|i| i.content.clone()).collect::<Vec<_>>().join("\n"),
+            Value::List(l) => l
+                .items
+                .iter()
+                .map(|i| i.content.clone())
+                .collect::<Vec<_>>()
+                .join("\n"),
             Value::Blockquote(b) => b.content.clone(),
             Value::Paragraph(p) => p.content.clone(),
             Value::Document(d) => d.content.clone(),
@@ -357,7 +362,11 @@ pub struct CodeValue {
 impl CodeValue {
     pub fn get_property(&self, name: &str) -> Option<Value> {
         match name {
-            "lang" | "language" => self.language.clone().map(Value::String).or(Some(Value::Null)),
+            "lang" | "language" => self
+                .language
+                .clone()
+                .map(Value::String)
+                .or(Some(Value::Null)),
             "text" | "content" => Some(Value::String(self.content.clone())),
             "start_line" => Some(Value::Number(self.start_line as f64)),
             "end_line" => Some(Value::Number(self.end_line as f64)),
@@ -442,19 +451,23 @@ impl TableValue {
     pub fn get_property(&self, name: &str) -> Option<Value> {
         match name {
             "headers" => Some(Value::Array(
-                self.headers.iter().map(|h| Value::String(h.clone())).collect(),
+                self.headers
+                    .iter()
+                    .map(|h| Value::String(h.clone()))
+                    .collect(),
             )),
             "rows" => Some(Value::Array(
                 self.rows
                     .iter()
-                    .map(|row| {
-                        Value::Array(row.iter().map(|c| Value::String(c.clone())).collect())
-                    })
+                    .map(|row| Value::Array(row.iter().map(|c| Value::String(c.clone())).collect()))
                     .collect(),
             )),
             "cols" | "columns" => Some(Value::Number(self.headers.len() as f64)),
             "alignments" => Some(Value::Array(
-                self.alignments.iter().map(|a| Value::String(a.clone())).collect(),
+                self.alignments
+                    .iter()
+                    .map(|a| Value::String(a.clone()))
+                    .collect(),
             )),
             _ => None,
         }
@@ -473,7 +486,10 @@ impl ListValue {
         match name {
             "ordered" => Some(Value::Bool(self.ordered)),
             "items" => Some(Value::Array(
-                self.items.iter().map(|i| Value::String(i.content.clone())).collect(),
+                self.items
+                    .iter()
+                    .map(|i| Value::String(i.content.clone()))
+                    .collect(),
             )),
             "length" | "count" => Some(Value::Number(self.items.len() as f64)),
             _ => None,

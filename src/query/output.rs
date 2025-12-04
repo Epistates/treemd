@@ -1,7 +1,7 @@
 //! Output formatting for query results.
 
-use super::value::Value;
 use super::OutputFormat;
+use super::value::Value;
 
 /// Format query results according to the specified format.
 pub fn format(values: &[Value], format: OutputFormat) -> String {
@@ -40,12 +40,11 @@ fn format_plain_value(value: &Value) -> String {
             .map(|v| format_plain_value(v))
             .collect::<Vec<_>>()
             .join("\n"),
-        Value::Object(o) => {
-            o.iter()
-                .map(|(k, v)| format!("{}: {}", k, format_plain_value(v)))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
+        Value::Object(o) => o
+            .iter()
+            .map(|(k, v)| format!("{}: {}", k, format_plain_value(v)))
+            .collect::<Vec<_>>()
+            .join("\n"),
         Value::Heading(h) => {
             format!("{} {}", "#".repeat(h.level as usize), h.text)
         }
@@ -64,40 +63,42 @@ fn format_plain_value(value: &Value) -> String {
             lines.push(format!("| {} |", t.headers.join(" | ")));
             lines.push(format!(
                 "| {} |",
-                t.headers.iter().map(|_| "---").collect::<Vec<_>>().join(" | ")
+                t.headers
+                    .iter()
+                    .map(|_| "---")
+                    .collect::<Vec<_>>()
+                    .join(" | ")
             ));
             for row in &t.rows {
                 lines.push(format!("| {} |", row.join(" | ")));
             }
             lines.join("\n")
         }
-        Value::List(l) => {
-            l.items
-                .iter()
-                .enumerate()
-                .map(|(i, item)| {
-                    let prefix = if l.ordered {
-                        format!("{}.", i + 1)
-                    } else {
-                        "-".to_string()
-                    };
-                    let checkbox = match item.checked {
-                        Some(true) => "[x] ",
-                        Some(false) => "[ ] ",
-                        None => "",
-                    };
-                    format!("{} {}{}", prefix, checkbox, item.content)
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-        Value::Blockquote(b) => {
-            b.content
-                .lines()
-                .map(|line| format!("> {}", line))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
+        Value::List(l) => l
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let prefix = if l.ordered {
+                    format!("{}.", i + 1)
+                } else {
+                    "-".to_string()
+                };
+                let checkbox = match item.checked {
+                    Some(true) => "[x] ",
+                    Some(false) => "[ ] ",
+                    None => "",
+                };
+                format!("{} {}{}", prefix, checkbox, item.content)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Blockquote(b) => b
+            .content
+            .lines()
+            .map(|line| format!("> {}", line))
+            .collect::<Vec<_>>()
+            .join("\n"),
         Value::Paragraph(p) => p.content.clone(),
         Value::Document(d) => {
             format!(
@@ -105,18 +106,13 @@ fn format_plain_value(value: &Value) -> String {
                 d.heading_count, d.word_count
             )
         }
-        Value::FrontMatter(fm) => {
-            serde_json::to_string_pretty(fm).unwrap_or_default()
-        }
+        Value::FrontMatter(fm) => serde_json::to_string_pretty(fm).unwrap_or_default(),
     }
 }
 
 fn format_json(values: &[Value], pretty: bool) -> String {
     // Convert to JSON-compatible structure
-    let json_values: Vec<serde_json::Value> = values
-        .iter()
-        .map(|v| value_to_json(v))
-        .collect();
+    let json_values: Vec<serde_json::Value> = values.iter().map(|v| value_to_json(v)).collect();
 
     let output = if json_values.len() == 1 {
         json_values.into_iter().next().unwrap()
@@ -145,9 +141,7 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         Value::Bool(b) => serde_json::Value::Bool(*b),
         Value::Number(n) => serde_json::json!(n),
         Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Array(a) => {
-            serde_json::Value::Array(a.iter().map(value_to_json).collect())
-        }
+        Value::Array(a) => serde_json::Value::Array(a.iter().map(value_to_json).collect()),
         Value::Object(o) => {
             let map: serde_json::Map<String, serde_json::Value> = o
                 .iter()

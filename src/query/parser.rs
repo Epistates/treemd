@@ -2,8 +2,8 @@
 //!
 //! Parses tokens into an Abstract Syntax Tree (AST).
 
-use super::ast::*;
 use super::ast::Span;
+use super::ast::*;
 use super::error::{QueryError, QueryErrorKind};
 use super::lexer::{Token, TokenKind};
 
@@ -24,7 +24,9 @@ impl<'a> Parser<'a> {
     }
 
     fn current(&self) -> &Token {
-        self.tokens.get(self.pos).unwrap_or(&self.tokens[self.tokens.len() - 1])
+        self.tokens
+            .get(self.pos)
+            .unwrap_or(&self.tokens[self.tokens.len() - 1])
     }
 
     fn current_kind(&self) -> &TokenKind {
@@ -44,7 +46,9 @@ impl<'a> Parser<'a> {
         if !self.is_at_end() {
             self.pos += 1;
         }
-        self.tokens.get(current_pos).unwrap_or(&self.tokens[self.tokens.len() - 1])
+        self.tokens
+            .get(current_pos)
+            .unwrap_or(&self.tokens[self.tokens.len() - 1])
     }
 
     fn check(&self, kind: &TokenKind) -> bool {
@@ -218,8 +222,15 @@ fn parse_comparison_expr(p: &mut Parser) -> Result<Expr, QueryError> {
         } else if p.matches(&[TokenKind::Le]) {
             BinaryOp::Le
         } else if p.check(&TokenKind::Gt)
-            && !matches!(p.tokens.get(p.pos + 1).map(|t| &t.kind), Some(TokenKind::Gt))
-            && !matches!(p.tokens.get(p.pos + 1).map(|t| &t.kind), Some(TokenKind::Dot)) {
+            && !matches!(
+                p.tokens.get(p.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Gt)
+            )
+            && !matches!(
+                p.tokens.get(p.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Dot)
+            )
+        {
             // Be careful not to consume > if it's >> (descendant) or > . (hierarchy)
             p.advance();
             BinaryOp::Gt
@@ -374,7 +385,13 @@ fn parse_postfix_expr(p: &mut Parser) -> Result<Expr, QueryError> {
 
             // Apply index to current expression
             // For now, we handle this in evaluation
-            if let Expr::Element { kind, filters, index: _, span: elem_span } = expr {
+            if let Expr::Element {
+                kind,
+                filters,
+                index: _,
+                span: elem_span,
+            } = expr
+            {
                 expr = Expr::Element {
                     kind,
                     filters,
@@ -397,11 +414,15 @@ fn parse_postfix_expr(p: &mut Parser) -> Result<Expr, QueryError> {
                             IndexOp::Slice { start, end } => Expr::Array {
                                 elements: vec![
                                     Expr::Literal {
-                                        value: start.map(|n| Literal::Number(n as f64)).unwrap_or(Literal::Null),
+                                        value: start
+                                            .map(|n| Literal::Number(n as f64))
+                                            .unwrap_or(Literal::Null),
                                         span,
                                     },
                                     Expr::Literal {
-                                        value: end.map(|n| Literal::Number(n as f64)).unwrap_or(Literal::Null),
+                                        value: end
+                                            .map(|n| Literal::Number(n as f64))
+                                            .unwrap_or(Literal::Null),
                                         span,
                                     },
                                 ],
@@ -629,7 +650,10 @@ fn parse_filter_or_index(p: &mut Parser) -> Result<(FilterOrIndex, Span), QueryE
     if p.check(&TokenKind::RBracket) {
         let end_span = p.current_span();
         p.advance();
-        return Ok((FilterOrIndex::Index(IndexOp::Iterate), start_span.merge(end_span)));
+        return Ok((
+            FilterOrIndex::Index(IndexOp::Iterate),
+            start_span.merge(end_span),
+        ));
     }
 
     // Check for number (index or slice)
@@ -658,7 +682,10 @@ fn parse_filter_or_index(p: &mut Parser) -> Result<(FilterOrIndex, Span), QueryE
 
         let end_span = p.current_span();
         p.expect(&TokenKind::RBracket)?;
-        return Ok((FilterOrIndex::Index(IndexOp::Single(n)), start_span.merge(end_span)));
+        return Ok((
+            FilterOrIndex::Index(IndexOp::Single(n)),
+            start_span.merge(end_span),
+        ));
     }
 
     // Slice starting with :
@@ -920,10 +947,7 @@ mod tests {
     fn test_identity() {
         let query = parse_str(".").unwrap();
         assert_eq!(query.expressions.len(), 1);
-        assert!(matches!(
-            query.expressions[0].stages[0],
-            Expr::Identity
-        ));
+        assert!(matches!(query.expressions[0].stages[0], Expr::Identity));
     }
 
     #[test]
