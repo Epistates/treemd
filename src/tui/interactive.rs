@@ -9,7 +9,7 @@
 //! - Images (view info)
 
 use crate::parser::output::{Block, InlineElement};
-use crate::parser::{Link, LinkTarget, extract_links};
+use crate::parser::{Link, LinkTarget};
 use std::collections::HashMap;
 
 /// Interactive navigation state
@@ -117,9 +117,11 @@ impl InteractiveState {
         }
     }
 
-    /// Build element index from parsed blocks and raw content
-    /// The raw content is used to extract wikilinks which aren't parsed into the Block AST
-    pub fn index_elements(&mut self, blocks: &[Block], raw_content: &str) {
+    /// Build element index from parsed blocks
+    ///
+    /// WikiLinks are preprocessed into standard markdown links with `wikilink:` URL prefix,
+    /// so they are detected during Block parsing along with regular links.
+    pub fn index_elements(&mut self, blocks: &[Block]) {
         self.elements.clear();
         let mut current_line = 0;
 
@@ -364,29 +366,6 @@ impl InteractiveState {
 
             // Account for blank line added after each block in render_markdown_enhanced
             current_line += 1;
-        }
-
-        // Second pass: Extract wikilinks from raw content
-        // These aren't parsed into the Block AST, so we need to find them separately
-        let all_links = extract_links(raw_content);
-        for link in all_links {
-            // Only add wikilinks - regular links are already handled by block parsing
-            if matches!(link.target, LinkTarget::WikiLink { .. }) {
-                // Calculate line number from byte offset
-                let line_idx = raw_content[..link.offset].matches('\n').count();
-
-                // Use a unique block index for wikilinks (after all real blocks)
-                let id = ElementId {
-                    block_idx: blocks.len() + link.offset, // Unique ID based on offset
-                    sub_idx: None,
-                };
-
-                self.elements.push(InteractiveElement {
-                    id,
-                    element_type: ElementType::Link { link, line_idx },
-                    line_range: (line_idx, line_idx + 1),
-                });
-            }
         }
 
         // Sort elements by line position for proper navigation order
