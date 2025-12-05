@@ -71,6 +71,9 @@ tempfile = "3.15"
 dirs = "6.0"
 toml = "0.9"
 
+# Enum utilities for keybindings
+strum = { version = "0.26", features = ["derive"] }
+
 # Terminal color capability detection
 supports-color = "3.0"
 

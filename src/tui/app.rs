@@ -1,10 +1,12 @@
 use crate::config::Config;
+use crate::keybindings::{Action, Keybindings, KeybindingMode};
 use crate::parser::{Document, HeadingNode, Link, extract_links};
 use crate::tui::help_text;
 use crate::tui::interactive::InteractiveState;
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
 use crate::tui::theme::{Theme, ThemeName};
+use crossterm::event::KeyModifiers;
 use ratatui::widgets::{ListState, ScrollbarState};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -86,6 +88,9 @@ pub struct App {
     config: Config,
     color_mode: ColorMode,
 
+    // Keybindings
+    pub keybindings: Keybindings,
+
     // Pending file to open in external editor (set by link following, consumed by main loop)
     pub pending_editor_file: Option<PathBuf>,
 
@@ -158,6 +163,9 @@ impl App {
         // Load outline width from config
         let outline_width = config.ui.outline_width;
 
+        // Load keybindings from config
+        let keybindings = config.keybindings();
+
         Self {
             document,
             filename,
@@ -212,6 +220,9 @@ impl App {
             config,
             color_mode,
 
+            // Keybindings
+            keybindings,
+
             // Pending editor file
             pending_editor_file: None,
 
@@ -222,6 +233,59 @@ impl App {
             pending_file_create: None,
             pending_file_create_message: None,
         }
+    }
+
+    /// Get the current keybinding mode based on app state
+    pub fn current_keybinding_mode(&self) -> KeybindingMode {
+        // Help takes highest precedence
+        if self.show_help {
+            return KeybindingMode::Help;
+        }
+
+        // Theme picker
+        if self.show_theme_picker {
+            return KeybindingMode::ThemePicker;
+        }
+
+        // Mode-specific
+        match self.mode {
+            AppMode::Normal => {
+                if self.show_search {
+                    KeybindingMode::Search
+                } else {
+                    KeybindingMode::Normal
+                }
+            }
+            AppMode::Interactive => {
+                if self.interactive_state.is_in_table_mode() {
+                    KeybindingMode::InteractiveTable
+                } else {
+                    KeybindingMode::Interactive
+                }
+            }
+            AppMode::LinkFollow => {
+                if self.link_search_active {
+                    KeybindingMode::LinkSearch
+                } else {
+                    KeybindingMode::LinkFollow
+                }
+            }
+            AppMode::Search => KeybindingMode::Search,
+            AppMode::ThemePicker => KeybindingMode::ThemePicker,
+            AppMode::Help => KeybindingMode::Help,
+            AppMode::CellEdit => KeybindingMode::CellEdit,
+            AppMode::ConfirmFileCreate => KeybindingMode::ConfirmDialog,
+        }
+    }
+
+    /// Look up the action for a key event in the current mode
+    pub fn get_action_for_key(
+        &self,
+        code: crossterm::event::KeyCode,
+        modifiers: KeyModifiers,
+    ) -> Option<Action> {
+        let mode = self.current_keybinding_mode();
+        self.keybindings.get_action(mode, code, modifiers)
     }
 
     /// Toggle between raw source view and rendered markdown view
@@ -464,7 +528,9 @@ impl App {
 
     pub fn scroll_help_down(&mut self) {
         let new_scroll = self.help_scroll.saturating_add(1);
-        let max_scroll = help_text::HELP_LINES.len() as u16;
+        // Compute help text length dynamically from keybindings
+        let help_lines = help_text::build_dynamic_help_text(&self.theme, &self.keybindings);
+        let max_scroll = help_lines.len() as u16;
         if new_scroll < max_scroll {
             self.help_scroll = new_scroll;
         }

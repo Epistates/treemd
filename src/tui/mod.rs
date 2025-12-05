@@ -12,6 +12,7 @@ pub use interactive::InteractiveState;
 pub use terminal_compat::{ColorMode, TerminalCapabilities};
 pub use theme::ThemeName;
 
+use crate::keybindings::{Action, KeybindingMode};
 use color_eyre::Result;
 use crossterm::ExecutableCommand;
 use crossterm::event::{Event, KeyCode, KeyEventKind};
@@ -85,456 +86,328 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
 
         if let Event::Key(key) = tty::read_event()? {
             if key.kind == KeyEventKind::Press {
-                // Handle help mode scrolling
-                if app.show_help {
-                    match key.code {
-                        KeyCode::Char('?') | KeyCode::Esc => app.toggle_help(),
-                        KeyCode::Char('j') | KeyCode::Down => app.scroll_help_down(),
-                        KeyCode::Char('k') | KeyCode::Up => app.scroll_help_up(),
-                        // Copy operations work in help mode too
-                        KeyCode::Char('y') => app.copy_content(),
-                        KeyCode::Char('Y') => app.copy_anchor(),
-                        KeyCode::Char('q') => return Ok(()),
-                        _ => {}
-                    }
-                }
-                // Handle theme picker mode
-                else if app.show_theme_picker {
-                    match key.code {
-                        KeyCode::Esc => app.toggle_theme_picker(),
-                        KeyCode::Enter => app.apply_selected_theme(),
-                        KeyCode::Char('j') | KeyCode::Down => app.theme_picker_next(),
-                        KeyCode::Char('k') | KeyCode::Up => app.theme_picker_previous(),
-                        // Copy operations work in theme picker too
-                        KeyCode::Char('y') => app.copy_content(),
-                        KeyCode::Char('Y') => app.copy_anchor(),
-                        KeyCode::Char('q') => return Ok(()),
-                        _ => {}
-                    }
-                }
-                // Handle file creation confirmation
-                else if app.mode == app::AppMode::ConfirmFileCreate {
-                    match key.code {
-                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                            if let Err(e) = app.confirm_file_create() {
-                                app.status_message = Some(format!("✗ Error: {}", e));
-                            }
-                        }
-                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                            app.cancel_file_create();
-                        }
-                        _ => {}
-                    }
-                }
-                // Handle interactive mode
-                else if app.mode == app::AppMode::Interactive {
-                    // Check if we're in table navigation mode
-                    if app.interactive_state.is_in_table_mode() {
-                        // Table navigation mode - handle hjkl navigation
-                        match key.code {
-                            KeyCode::Esc => {
-                                app.interactive_state.exit_table_mode();
-                                app.status_message = Some(app.interactive_state.status_text());
-                            }
-                            KeyCode::Char('h') | KeyCode::Left => {
-                                // Extract table dimensions first
-                                let (rows, cols) = if let Some(element) =
-                                    app.interactive_state.current_element()
-                                {
-                                    if let crate::tui::interactive::ElementType::Table {
-                                        rows,
-                                        cols,
-                                        ..
-                                    } = &element.element_type
-                                    {
-                                        Some((*rows, *cols))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                                .unwrap_or((0, 0));
+                // Get the current mode for keybinding lookup
+                let mode = app.current_keybinding_mode();
 
-                                if cols > 0 {
-                                    app.interactive_state.table_move_left();
-                                    app.status_message = Some(
-                                        app.interactive_state.table_status_text(rows + 1, cols),
-                                    );
-                                }
-                            }
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                // Extract table dimensions first
-                                let (rows, cols) = if let Some(element) =
-                                    app.interactive_state.current_element()
-                                {
-                                    if let crate::tui::interactive::ElementType::Table {
-                                        rows,
-                                        cols,
-                                        ..
-                                    } = &element.element_type
-                                    {
-                                        Some((*rows, *cols))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                                .unwrap_or((0, 0));
-
-                                if rows > 0 {
-                                    app.interactive_state.table_move_down(rows + 1);
-                                    app.status_message = Some(
-                                        app.interactive_state.table_status_text(rows + 1, cols),
-                                    );
-                                }
-                            }
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                // Extract table dimensions first
-                                let (rows, cols) = if let Some(element) =
-                                    app.interactive_state.current_element()
-                                {
-                                    if let crate::tui::interactive::ElementType::Table {
-                                        rows,
-                                        cols,
-                                        ..
-                                    } = &element.element_type
-                                    {
-                                        Some((*rows, *cols))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                                .unwrap_or((0, 0));
-
-                                if rows > 0 {
-                                    app.interactive_state.table_move_up();
-                                    app.status_message = Some(
-                                        app.interactive_state.table_status_text(rows + 1, cols),
-                                    );
-                                }
-                            }
-                            KeyCode::Char('l') | KeyCode::Right => {
-                                // Extract table dimensions first
-                                let (rows, cols) = if let Some(element) =
-                                    app.interactive_state.current_element()
-                                {
-                                    if let crate::tui::interactive::ElementType::Table {
-                                        rows,
-                                        cols,
-                                        ..
-                                    } = &element.element_type
-                                    {
-                                        Some((*rows, *cols))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                                .unwrap_or((0, 0));
-
-                                if cols > 0 {
-                                    app.interactive_state.table_move_right(cols);
-                                    app.status_message = Some(
-                                        app.interactive_state.table_status_text(rows + 1, cols),
-                                    );
-                                }
-                            }
-                            KeyCode::Char('y') => {
-                                // Copy cell
-                                if let Err(e) = app.copy_table_cell() {
-                                    app.status_message = Some(format!("✗ Error: {}", e));
-                                }
-                            }
-                            KeyCode::Char('Y') => {
-                                // Copy row
-                                if let Err(e) = app.copy_table_row() {
-                                    app.status_message = Some(format!("✗ Error: {}", e));
-                                }
-                            }
-                            KeyCode::Char('r') => {
-                                // Copy table as markdown
-                                if let Err(e) = app.copy_table_markdown() {
-                                    app.status_message = Some(format!("✗ Error: {}", e));
-                                }
-                            }
-                            KeyCode::Enter => {
-                                // Enter cell edit mode
-                                if let Err(e) = app.enter_cell_edit_mode() {
-                                    app.status_message = Some(format!("✗ Error: {}", e));
-                                }
-                            }
-                            KeyCode::Char('q') => return Ok(()),
-                            _ => {}
-                        }
-                    } else {
-                        // Regular interactive mode
-                        // Clear status message on most key presses
-                        if key.code != KeyCode::Tab {
-                            app.status_message = None;
-                        }
-
-                        match key.code {
-                            KeyCode::Esc | KeyCode::Char('i') => app.exit_interactive_mode(),
-                            KeyCode::Tab => {
-                                app.interactive_state.next();
-                                // Auto-scroll to keep element in view
-                                app.scroll_to_interactive_element(20);
-                                // Update status bar
-                                app.status_message = Some(app.interactive_state.status_text());
-                            }
-                            KeyCode::BackTab => {
-                                app.interactive_state.previous();
-                                // Auto-scroll to keep element in view
-                                app.scroll_to_interactive_element(20);
-                                // Update status bar
-                                app.status_message = Some(app.interactive_state.status_text());
-                            }
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                app.interactive_state.next();
-                                // Auto-scroll to keep element in view
-                                app.scroll_to_interactive_element(20);
-                                app.status_message = Some(app.interactive_state.status_text());
-                            }
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                app.interactive_state.previous();
-                                // Auto-scroll to keep element in view
-                                app.scroll_to_interactive_element(20);
-                                app.status_message = Some(app.interactive_state.status_text());
-                            }
-                            KeyCode::Enter | KeyCode::Char(' ') => {
-                                // Activate the selected element
-                                if let Err(e) = app.activate_interactive_element() {
-                                    app.status_message = Some(format!("✗ Error: {}", e));
-                                }
-                                // Update content metrics after actions that might change content
-                                app.update_content_metrics();
-                            }
-                            KeyCode::Char('y') => {
-                                // Copy action - delegate to activate for code/image elements
-                                if let Err(e) = app.activate_interactive_element() {
-                                    app.status_message = Some(format!("✗ Error: {}", e));
-                                }
-                            }
-                            // Page motions in interactive mode
-                            KeyCode::Char('d') | KeyCode::PageDown => {
-                                app.scroll_page_down_interactive();
-                            }
-                            KeyCode::Char('u') | KeyCode::PageUp => {
-                                app.scroll_page_up_interactive();
-                            }
-                            KeyCode::Char('q') => return Ok(()),
-                            _ => {}
-                        }
-                    }
-                }
-                // Handle cell edit mode
-                else if app.mode == app::AppMode::CellEdit {
-                    match key.code {
-                        KeyCode::Esc => {
-                            // Cancel editing
-                            app.mode = app::AppMode::Interactive;
-                            app.status_message = Some("Editing cancelled".to_string());
-                        }
-                        KeyCode::Enter => {
-                            // Save the edited cell
-                            match app.save_edited_cell() {
-                                Ok(()) => {
-                                    app.mode = app::AppMode::Interactive;
-                                }
-                                Err(e) => {
-                                    app.status_message = Some(format!("✗ Error saving: {}", e));
-                                }
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            app.cell_edit_value.pop();
-                        }
-                        KeyCode::Char(c) => {
+                // Handle text input modes specially - they need character input
+                match mode {
+                    KeybindingMode::CellEdit => {
+                        if let KeyCode::Char(c) = key.code {
                             app.cell_edit_value.push(c);
+                            continue;
                         }
-                        _ => {}
+                    }
+                    KeybindingMode::Search => {
+                        if let KeyCode::Char(c) = key.code {
+                            app.search_input(c);
+                            continue;
+                        }
+                    }
+                    KeybindingMode::LinkSearch => {
+                        if let KeyCode::Char(c) = key.code {
+                            app.link_search_push(c);
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+
+                // Look up action for this key
+                let action = app.get_action_for_key(key.code, key.modifiers);
+
+                // Handle direct number jumps in LinkFollow mode (not bound to actions)
+                if mode == KeybindingMode::LinkFollow {
+                    if let KeyCode::Char(c @ '1'..='9') = key.code {
+                        let idx = c.to_digit(10).unwrap() as usize - 1;
+                        if let Some(display_idx) =
+                            app.filtered_link_indices.iter().position(|&i| i == idx)
+                        {
+                            app.selected_link_idx = Some(display_idx);
+                        }
+                        continue;
                     }
                 }
-                // Handle link follow mode
-                else if app.mode == app::AppMode::LinkFollow {
-                    // Clear status message on any key press in link mode
-                    app.status_message = None;
 
-                    // Handle search input mode
-                    if app.link_search_active {
-                        match key.code {
-                            KeyCode::Esc => {
-                                // Stop search but keep filter
-                                app.stop_link_search();
-                            }
-                            KeyCode::Enter => {
-                                // Stop search and follow selected link
-                                app.stop_link_search();
-                                if let Err(e) = app.follow_selected_link() {
-                                    app.status_message = Some(format!("✗ Error: {}", e));
-                                }
-                                app.update_content_metrics();
-                            }
-                            KeyCode::Backspace => {
-                                app.link_search_pop();
-                            }
-                            KeyCode::Char(c) => {
-                                app.link_search_push(c);
-                            }
-                            KeyCode::Down => app.next_link(),
-                            KeyCode::Up => app.previous_link(),
-                            _ => {}
-                        }
+                // Process the action
+                if let Some(action) = action {
+                    if handle_action(&mut app, terminal, action)? {
+                        return Ok(()); // Quit requested
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Handle a keybinding action, returning true if quit is requested
+fn handle_action(
+    app: &mut App,
+    terminal: &mut DefaultTerminal,
+    action: Action,
+) -> Result<bool> {
+    // Clear status message on most actions (except some special cases)
+    let should_clear_status = !matches!(
+        action,
+        Action::EnterLinkFollowMode | Action::InteractiveNextLink
+    );
+    if should_clear_status && app.status_message.is_some() {
+        app.status_message = None;
+    }
+
+    match action {
+        // Application
+        Action::Quit => return Ok(true),
+
+        // Navigation
+        Action::Next => app.next(),
+        Action::Previous => app.previous(),
+        Action::First => app.first(),
+        Action::Last => app.last(),
+        Action::PageDown => app.scroll_page_down(),
+        Action::PageUp => app.scroll_page_up(),
+        Action::JumpToParent => app.jump_to_parent(),
+
+        // Outline
+        Action::Expand => app.expand(),
+        Action::Collapse => app.collapse(),
+        Action::ToggleExpand => app.toggle_expand(),
+        Action::ToggleFocus => app.toggle_focus(),
+        Action::ToggleOutline => app.toggle_outline(),
+        Action::OutlineWidthIncrease => app.cycle_outline_width(true),
+        Action::OutlineWidthDecrease => app.cycle_outline_width(false),
+
+        // View
+        Action::ToggleHelp => app.toggle_help(),
+        Action::ToggleThemePicker => app.toggle_theme_picker(),
+        Action::ToggleRawSource => app.toggle_raw_source(),
+
+        // Theme picker
+        Action::ThemePickerNext => app.theme_picker_next(),
+        Action::ThemePickerPrevious => app.theme_picker_previous(),
+        Action::ApplyTheme => app.apply_selected_theme(),
+
+        // Help navigation
+        Action::HelpScrollDown => app.scroll_help_down(),
+        Action::HelpScrollUp => app.scroll_help_up(),
+
+        // Mode transitions
+        Action::EnterInteractiveMode => app.enter_interactive_mode(),
+        Action::ExitInteractiveMode => app.exit_interactive_mode(),
+        Action::EnterLinkFollowMode => app.enter_link_follow_mode(),
+        Action::EnterSearchMode => app.toggle_search(),
+        Action::ExitMode => {
+            // Context-dependent exit
+            let mode = app.current_keybinding_mode();
+            match mode {
+                KeybindingMode::LinkFollow => {
+                    if !app.link_search_query.is_empty() {
+                        app.clear_link_search();
                     } else {
-                        // Normal link follow mode
-                        match key.code {
-                            KeyCode::Esc => {
-                                if !app.link_search_query.is_empty() {
-                                    // First Esc clears the search
-                                    app.clear_link_search();
-                                } else {
-                                    app.exit_link_follow_mode();
-                                }
-                            }
-                            KeyCode::Enter => {
-                                if let Err(e) = app.follow_selected_link() {
-                                    // Show error in status message
-                                    app.status_message = Some(format!("✗ Error: {}", e));
-                                }
-                                app.update_content_metrics();
-                            }
-                            KeyCode::Tab => {
-                                app.next_link();
-                            }
-                            KeyCode::BackTab => {
-                                app.previous_link();
-                            }
-                            KeyCode::Char('/') => {
-                                // Start search mode
-                                app.start_link_search();
-                            }
-                            KeyCode::Char('j') | KeyCode::Down => app.next_link(),
-                            KeyCode::Char('k') | KeyCode::Up => app.previous_link(),
-                            KeyCode::Char(c @ '1'..='9') => {
-                                // Direct link selection by number (searches original indices)
-                                let idx = c.to_digit(10).unwrap() as usize - 1;
-                                // Find this index in the filtered list
-                                if let Some(display_idx) =
-                                    app.filtered_link_indices.iter().position(|&i| i == idx)
-                                {
-                                    app.selected_link_idx = Some(display_idx);
-                                }
-                            }
-                            KeyCode::Char('p') => {
-                                // Jump to parent heading while staying in link mode
-                                app.jump_to_parent_links();
-                            }
-                            // Copy operations work in link mode too
-                            KeyCode::Char('y') => app.copy_content(),
-                            KeyCode::Char('Y') => app.copy_anchor(),
-                            KeyCode::Char('q') => return Ok(()),
-                            _ => {}
-                        }
+                        app.exit_link_follow_mode();
                     }
                 }
-                // Handle search mode separately
-                else if app.show_search {
-                    match key.code {
-                        KeyCode::Esc => app.toggle_search(),
-                        KeyCode::Enter => {
-                            app.toggle_search();
-                            // Keep the filtered results
-                        }
-                        KeyCode::Char(c) => app.search_input(c),
-                        KeyCode::Backspace => app.search_backspace(),
-                        _ => {}
-                    }
-                } else {
-                    // Clear status message on any key press in normal mode
-                    if app.status_message.is_some() && key.code != KeyCode::Char('f') {
-                        app.status_message = None;
-                    }
+                KeybindingMode::LinkSearch => app.stop_link_search(),
+                KeybindingMode::InteractiveTable => {
+                    app.interactive_state.exit_table_mode();
+                    app.status_message = Some(app.interactive_state.status_text());
+                }
+                KeybindingMode::Search => app.toggle_search(),
+                _ => {}
+            }
+        }
 
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc if !app.show_help => return Ok(()),
-                        KeyCode::Char('?') => app.toggle_help(),
-                        KeyCode::Char('/') => app.toggle_search(),
-                        KeyCode::Esc if app.show_help => app.toggle_help(),
-                        KeyCode::Char('j') | KeyCode::Down => app.next(),
-                        KeyCode::Char('k') | KeyCode::Up => app.previous(),
-                        KeyCode::Char('d') => app.scroll_page_down(),
-                        KeyCode::Char('u') => app.scroll_page_up(),
-                        KeyCode::Char('g') => app.first(),
-                        KeyCode::Char('G') => app.last(),
-                        KeyCode::Char('p') => app.jump_to_parent(),
-                        KeyCode::Enter | KeyCode::Char(' ') => app.toggle_expand(),
-                        KeyCode::Tab => app.toggle_focus(),
-                        KeyCode::Char('h') | KeyCode::Left => app.collapse(),
-                        KeyCode::Char('l') | KeyCode::Right => app.expand(),
-                        // New UX features
-                        KeyCode::Char('w') => app.toggle_outline(),
-                        KeyCode::Char('[') => app.cycle_outline_width(false),
-                        KeyCode::Char(']') => app.cycle_outline_width(true),
-                        KeyCode::Char('m') => app.set_bookmark(),
-                        KeyCode::Char('\'') => app.jump_to_bookmark(),
-                        KeyCode::Char('1') => app.jump_to_heading(0),
-                        KeyCode::Char('2') => app.jump_to_heading(1),
-                        KeyCode::Char('3') => app.jump_to_heading(2),
-                        KeyCode::Char('4') => app.jump_to_heading(3),
-                        KeyCode::Char('5') => app.jump_to_heading(4),
-                        KeyCode::Char('6') => app.jump_to_heading(5),
-                        KeyCode::Char('7') => app.jump_to_heading(6),
-                        KeyCode::Char('8') => app.jump_to_heading(7),
-                        KeyCode::Char('9') => app.jump_to_heading(8),
-                        // Theme and clipboard
-                        KeyCode::Char('t') => app.toggle_theme_picker(),
-                        KeyCode::Char('y') => app.copy_content(),
-                        KeyCode::Char('Y') => app.copy_anchor(),
-                        // Edit file
-                        KeyCode::Char('e') => {
-                            // Run editor with proper terminal suspend/restore
-                            match run_editor(terminal, &app.current_file_path) {
-                                Ok(_) => {
-                                    // Reload file after successful edit
-                                    if let Err(e) = app.reload_current_file() {
-                                        app.status_message =
-                                            Some(format!("✗ Failed to reload: {}", e));
-                                    } else {
-                                        app.status_message =
-                                            Some("✓ File reloaded after editing".to_string());
-                                    }
-                                    app.update_content_metrics();
-                                }
-                                Err(e) => {
-                                    app.status_message = Some(format!("✗ Editor failed: {}", e));
-                                }
-                            }
-                        }
-                        // Interactive element navigation
-                        KeyCode::Char('i') => app.enter_interactive_mode(),
-                        // Raw source toggle
-                        KeyCode::Char('r') => app.toggle_raw_source(),
-                        // Link following
-                        KeyCode::Char('f') => app.enter_link_follow_mode(),
-                        KeyCode::Char('b') | KeyCode::Backspace => {
-                            if app.go_back().is_ok() {
-                                app.update_content_metrics();
-                            }
-                        }
-                        KeyCode::Char('F') => {
-                            // Forward navigation (Shift+F)
-                            if app.go_forward().is_ok() {
-                                app.update_content_metrics();
-                            }
-                        }
-                        _ => {}
+        // Search
+        Action::SearchBackspace => {
+            let mode = app.current_keybinding_mode();
+            match mode {
+                KeybindingMode::Search => app.search_backspace(),
+                KeybindingMode::LinkSearch => app.link_search_pop(),
+                KeybindingMode::CellEdit => {
+                    app.cell_edit_value.pop();
+                }
+                _ => {}
+            }
+        }
+        Action::ConfirmAction => {
+            let mode = app.current_keybinding_mode();
+            match mode {
+                KeybindingMode::Search => app.toggle_search(),
+                KeybindingMode::LinkSearch => {
+                    app.stop_link_search();
+                    if let Err(e) = app.follow_selected_link() {
+                        app.status_message = Some(format!("✗ Error: {}", e));
+                    }
+                    app.update_content_metrics();
+                }
+                KeybindingMode::CellEdit => {
+                    match app.save_edited_cell() {
+                        Ok(()) => app.mode = app::AppMode::Interactive,
+                        Err(e) => app.status_message = Some(format!("✗ Error saving: {}", e)),
                     }
                 }
+                KeybindingMode::ConfirmDialog => {
+                    if let Err(e) = app.confirm_file_create() {
+                        app.status_message = Some(format!("✗ Error: {}", e));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Action::CancelAction => {
+            let mode = app.current_keybinding_mode();
+            match mode {
+                KeybindingMode::CellEdit => {
+                    app.mode = app::AppMode::Interactive;
+                    app.status_message = Some("Editing cancelled".to_string());
+                }
+                KeybindingMode::ConfirmDialog => app.cancel_file_create(),
+                _ => {}
+            }
+        }
+
+        // Link following
+        Action::NextLink => app.next_link(),
+        Action::PreviousLink => app.previous_link(),
+        Action::FollowLink => {
+            if let Err(e) = app.follow_selected_link() {
+                app.status_message = Some(format!("✗ Error: {}", e));
+            }
+            app.update_content_metrics();
+        }
+        Action::LinkSearch => app.start_link_search(),
+        Action::JumpToLink1 => select_link_by_number(app, 0),
+        Action::JumpToLink2 => select_link_by_number(app, 1),
+        Action::JumpToLink3 => select_link_by_number(app, 2),
+        Action::JumpToLink4 => select_link_by_number(app, 3),
+        Action::JumpToLink5 => select_link_by_number(app, 4),
+        Action::JumpToLink6 => select_link_by_number(app, 5),
+        Action::JumpToLink7 => select_link_by_number(app, 6),
+        Action::JumpToLink8 => select_link_by_number(app, 7),
+        Action::JumpToLink9 => select_link_by_number(app, 8),
+
+        // Interactive mode
+        Action::InteractiveNext => {
+            app.interactive_state.next();
+            app.scroll_to_interactive_element(20);
+            app.status_message = Some(app.interactive_state.status_text());
+        }
+        Action::InteractivePrevious => {
+            app.interactive_state.previous();
+            app.scroll_to_interactive_element(20);
+            app.status_message = Some(app.interactive_state.status_text());
+        }
+        Action::InteractiveNextLink => {
+            app.interactive_state.next();
+            app.scroll_to_interactive_element(20);
+            app.status_message = Some(app.interactive_state.status_text());
+        }
+        Action::InteractivePreviousLink => {
+            app.interactive_state.previous();
+            app.scroll_to_interactive_element(20);
+            app.status_message = Some(app.interactive_state.status_text());
+        }
+        Action::InteractiveActivate => {
+            if let Err(e) = app.activate_interactive_element() {
+                app.status_message = Some(format!("✗ Error: {}", e));
+            }
+            app.update_content_metrics();
+        }
+        Action::InteractiveLeft => handle_table_navigation(app, TableDirection::Left),
+        Action::InteractiveRight => handle_table_navigation(app, TableDirection::Right),
+
+        // Clipboard
+        Action::CopyContent => app.copy_content(),
+        Action::CopyAnchor => app.copy_anchor(),
+
+        // Bookmarks
+        Action::SetBookmark => app.set_bookmark(),
+        Action::JumpToBookmark => app.jump_to_bookmark(),
+
+        // Jump to heading by number
+        Action::JumpToHeading1 => app.jump_to_heading(0),
+        Action::JumpToHeading2 => app.jump_to_heading(1),
+        Action::JumpToHeading3 => app.jump_to_heading(2),
+        Action::JumpToHeading4 => app.jump_to_heading(3),
+        Action::JumpToHeading5 => app.jump_to_heading(4),
+        Action::JumpToHeading6 => app.jump_to_heading(5),
+        Action::JumpToHeading7 => app.jump_to_heading(6),
+        Action::JumpToHeading8 => app.jump_to_heading(7),
+        Action::JumpToHeading9 => app.jump_to_heading(8),
+
+        // File operations
+        Action::OpenInEditor => {
+            match run_editor(terminal, &app.current_file_path) {
+                Ok(_) => {
+                    if let Err(e) = app.reload_current_file() {
+                        app.status_message = Some(format!("✗ Failed to reload: {}", e));
+                    } else {
+                        app.status_message = Some("✓ File reloaded after editing".to_string());
+                    }
+                    app.update_content_metrics();
+                }
+                Err(e) => {
+                    app.status_message = Some(format!("✗ Editor failed: {}", e));
+                }
+            }
+        }
+        Action::GoBack => {
+            if app.go_back().is_ok() {
+                app.update_content_metrics();
+            }
+        }
+        Action::GoForward => {
+            if app.go_forward().is_ok() {
+                app.update_content_metrics();
+            }
+        }
+
+        // Content scrolling (same as next/previous in content focus)
+        Action::ScrollDown => app.next(),
+        Action::ScrollUp => app.previous(),
+    }
+
+    Ok(false)
+}
+
+/// Select a link by its index
+fn select_link_by_number(app: &mut App, idx: usize) {
+    if let Some(display_idx) = app.filtered_link_indices.iter().position(|&i| i == idx) {
+        app.selected_link_idx = Some(display_idx);
+    }
+}
+
+/// Direction for table navigation
+enum TableDirection {
+    Left,
+    Right,
+}
+
+/// Handle table cell navigation
+fn handle_table_navigation(app: &mut App, direction: TableDirection) {
+    let (rows, cols) = if let Some(element) = app.interactive_state.current_element() {
+        if let crate::tui::interactive::ElementType::Table { rows, cols, .. } =
+            &element.element_type
+        {
+            Some((*rows, *cols))
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+    .unwrap_or((0, 0));
+
+    match direction {
+        TableDirection::Left => {
+            if cols > 0 {
+                app.interactive_state.table_move_left();
+                app.status_message = Some(app.interactive_state.table_status_text(rows + 1, cols));
+            }
+        }
+        TableDirection::Right => {
+            if cols > 0 {
+                app.interactive_state.table_move_right(cols);
+                app.status_message = Some(app.interactive_state.table_status_text(rows + 1, cols));
             }
         }
     }
