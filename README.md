@@ -97,10 +97,11 @@ treemd README.md
 **Keyboard Shortcuts:**
 
 *Navigation:*
-- `j/k` or `↓/↑` - Navigate up/down
-- `g/G` - Jump to top/bottom
+- `j`/`k` or `↓`/`↑` - Navigate up/down
+- `g` - Jump to top
+- `G` (Shift+g) - Jump to bottom
 - `p` - Jump to parent heading
-- `d/u` - Page down/up (in content)
+- `d`/`u` - Page down/up (in content)
 - `Tab` - Switch between outline and content
 - `1-9` - Jump to heading 1-9 (instant access)
 
@@ -556,6 +557,136 @@ treemd --color-mode 256 README.md
 treemd --color-mode rgb README.md
 ```
 
+### Custom Keybindings
+
+treemd supports fully customizable keybindings. Add a `[keybindings]` section to your config file to override any default keys. Keybindings are organized by mode—each mode has its own set of bindings.
+
+#### Keybinding Syntax
+
+Keys are specified using a simple string format:
+
+- **Single keys**: `"j"`, `"k"`, `"Enter"`, `"Escape"`, `"Tab"`, `"Space"`
+- **Uppercase letters**: `"G"`, `"Y"`, `"N"` (represents Shift+letter)
+- **Modifier combinations**: `"Ctrl+c"`, `"Alt+x"`, `"Ctrl+Alt+Delete"`
+- **Special keys**: `"Up"`, `"Down"`, `"Left"`, `"Right"`, `"PageUp"`, `"PageDown"`, `"Home"`, `"End"`, `"Backspace"`, `"Delete"`, `"F1"`-`"F12"`
+- **Multi-key sequences**: `"g g"` (press g twice), `"Ctrl+x Ctrl+c"` (Emacs-style)
+
+> **Note**: For letters, use uppercase (`"G"`) instead of `"Shift+g"`. The Shift modifier is only valid with special keys like `"Shift+Tab"`.
+
+#### Available Modes
+
+| Mode | Description |
+|------|-------------|
+| `Normal` | Default navigation mode |
+| `Help` | Help overlay is shown |
+| `ThemePicker` | Theme selection popup |
+| `Interactive` | Interactive element navigation |
+| `InteractiveTable` | Table cell navigation |
+| `LinkFollow` | Link following popup |
+| `LinkSearch` | Link search/filter |
+| `Search` | Heading search/filter |
+| `ConfirmDialog` | Confirmation dialogs |
+
+#### Example Configuration
+
+```toml
+# Override specific keybindings while keeping all other defaults
+
+[keybindings.Normal]
+# Vim-style navigation (these are the defaults, shown for reference)
+"j" = "Next"
+"k" = "Previous"
+"g" = "First"
+"G" = "Last"
+
+# Add Emacs-style bindings
+"Ctrl+n" = "Next"
+"Ctrl+p" = "Previous"
+"Ctrl+v" = "PageDown"
+"Alt+v" = "PageUp"
+
+# Custom shortcuts
+"Ctrl+q" = "Quit"
+"Ctrl+h" = "ToggleHelp"
+
+[keybindings.Interactive]
+# Add custom bindings for interactive mode
+"Ctrl+j" = "InteractiveNext"
+"Ctrl+k" = "InteractivePrevious"
+
+[keybindings.LinkFollow]
+# Customize link navigation
+"n" = "NextLink"
+"N" = "PreviousLink"
+```
+
+#### Available Actions
+
+Here are the most commonly customized actions:
+
+**Navigation:**
+- `Next`, `Previous` - Move up/down
+- `First`, `Last` - Jump to top/bottom
+- `PageDown`, `PageUp` - Page navigation
+- `JumpToParent` - Go to parent heading
+- `JumpToHeading1`-`JumpToHeading9` - Jump to heading by number
+
+**Tree Operations:**
+- `ToggleExpand`, `Expand`, `Collapse` - Control outline tree
+- `ToggleFocus` - Switch between outline and content
+- `ToggleOutline` - Show/hide outline panel
+- `OutlineWidthIncrease`, `OutlineWidthDecrease` - Resize outline
+
+**Mode Transitions:**
+- `EnterInteractiveMode` - Enter interactive mode
+- `EnterLinkFollowMode` - Enter link following mode
+- `EnterSearchMode` - Enter search mode
+- `ExitMode`, `ExitInteractiveMode` - Exit current mode
+
+**Actions:**
+- `ToggleHelp` - Show/hide help
+- `ToggleThemePicker` - Show theme selector
+- `ToggleRawSource` - Toggle raw markdown view
+- `CopyContent`, `CopyAnchor` - Copy to clipboard
+- `GoBack` - Navigate back in history
+- `OpenInEditor` - Edit file externally
+- `Quit` - Exit application
+
+**Interactive Mode:**
+- `InteractiveNext`, `InteractivePrevious` - Navigate elements
+- `InteractiveNextLink`, `InteractivePreviousLink` - Navigate links within element
+- `InteractiveActivate` - Activate current element
+- `InteractiveLeft`, `InteractiveRight` - Table cell navigation
+
+**Link Mode:**
+- `NextLink`, `PreviousLink` - Navigate links
+- `FollowLink` - Open selected link
+- `LinkSearch` - Start filtering links
+- `JumpToLink1`-`JumpToLink9` - Jump to link by number
+
+**Search/Dialog:**
+- `ConfirmAction`, `CancelAction` - Dialog responses
+- `SearchBackspace` - Delete character in search
+
+#### Multi-Key Sequences
+
+treemd supports Vim-style multi-key sequences for advanced workflows:
+
+```toml
+[keybindings.Normal]
+# Press 'g' then 'g' to go to top (Vim-style)
+"g g" = "First"
+
+# Emacs-style quit
+"Ctrl+x Ctrl+c" = "Quit"
+
+# Custom command sequences
+"z z" = "ToggleOutline"
+", w" = "ToggleOutline"
+```
+
+When you press the first key of a sequence, treemd waits briefly for the next key. If no matching sequence is found, it falls through to single-key handling.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -569,6 +700,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [x] Configuration file support
 - [x] Link following with navigation history
 - [x] WikiLinks support
+- [x] Customizable keybindings (multi-key sequences supported)
 
 **Planned:**
 - Obsidian Flavored Markdown (callouts)
