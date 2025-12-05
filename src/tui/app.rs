@@ -6,7 +6,6 @@ use crate::tui::interactive::InteractiveState;
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
 use crate::tui::theme::{Theme, ThemeName};
-use crossterm::event::KeyModifiers;
 use ratatui::widgets::{ListState, ScrollbarState};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -279,13 +278,17 @@ impl App {
     }
 
     /// Look up the action for a key event in the current mode
-    pub fn get_action_for_key(
-        &self,
-        code: crossterm::event::KeyCode,
-        modifiers: KeyModifiers,
-    ) -> Option<Action> {
+    ///
+    /// Note: This takes &mut self because keybinds-rs tracks multi-key sequence state
+    pub fn dispatch_key(&mut self, event: crossterm::event::KeyEvent) -> Option<Action> {
         let mode = self.current_keybinding_mode();
-        self.keybindings.get_action(mode, code, modifiers)
+        self.keybindings.dispatch(mode, event)
+    }
+
+    /// Check if a multi-key sequence is in progress
+    pub fn is_key_sequence_ongoing(&self) -> bool {
+        let mode = self.current_keybinding_mode();
+        self.keybindings.is_sequence_ongoing(mode)
     }
 
     /// Toggle between raw source view and rendered markdown view

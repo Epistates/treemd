@@ -112,8 +112,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                     _ => {}
                 }
 
-                // Look up action for this key
-                let action = app.get_action_for_key(key.code, key.modifiers);
+                // Look up action for this key (dispatch handles multi-key sequences)
+                let action = app.dispatch_key(key);
 
                 // Handle direct number jumps in LinkFollow mode (not bound to actions)
                 if mode == KeybindingMode::LinkFollow {

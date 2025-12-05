@@ -3,7 +3,7 @@
 //! This module generates help text dynamically from the keybindings configuration,
 //! ensuring that help always reflects the actual key mappings.
 
-use crate::keybindings::{Action, KeybindingMode, Keybindings, format_key_compact};
+use crate::keybindings::{Action, KeybindingMode, Keybindings};
 use crate::tui::theme::Theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -169,7 +169,7 @@ fn add_keybinding_line(
     }
 
     // Format keys, limiting to first few to avoid long strings
-    let key_strs: Vec<String> = keys.iter().take(3).map(|k| format_key_compact(k)).collect();
+    let key_strs: Vec<&str> = keys.iter().take(3).map(|s| s.as_str()).collect();
     let key_display = if keys.len() > 3 {
         format!("{}/...", key_strs.join("/"))
     } else {
