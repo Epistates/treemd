@@ -1,10 +1,9 @@
 //! Default keybindings for treemd
 //!
 //! This module defines the default keybindings that are used when no
-//! user configuration is provided.
+//! user configuration is provided. Uses keybinds-rs key string syntax.
 
-use super::{Action, KeyBinding, KeybindingMode, Keybindings};
-use crossterm::event::KeyCode;
+use super::{Action, KeybindingMode, Keybindings};
 
 /// Create the default keybindings configuration
 pub fn default_keybindings() -> Keybindings {
@@ -40,70 +39,76 @@ pub fn default_keybindings() -> Keybindings {
     kb
 }
 
+/// Bind a key, panicking on invalid key syntax (only used for built-in defaults)
+fn bind(kb: &mut Keybindings, mode: KeybindingMode, key: &str, action: Action) {
+    kb.bind(mode, key, action)
+        .unwrap_or_else(|e| panic!("Invalid default keybinding '{}': {}", key, e));
+}
+
 fn add_normal_mode(kb: &mut Keybindings) {
     use Action::*;
     use KeybindingMode::Normal;
 
     // Navigation
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('j')), Next);
-    kb.set(Normal, KeyBinding::key(KeyCode::Down), Next);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('k')), Previous);
-    kb.set(Normal, KeyBinding::key(KeyCode::Up), Previous);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('g')), First);
-    kb.set(Normal, KeyBinding::shift(KeyCode::Char('G')), Last);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('d')), PageDown);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('u')), PageUp);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('p')), JumpToParent);
+    bind(kb, Normal, "j", Next);
+    bind(kb, Normal, "Down", Next);
+    bind(kb, Normal, "k", Previous);
+    bind(kb, Normal, "Up", Previous);
+    bind(kb, Normal, "g", First);
+    bind(kb, Normal, "G", Last);
+    bind(kb, Normal, "d", PageDown);
+    bind(kb, Normal, "u", PageUp);
+    bind(kb, Normal, "p", JumpToParent);
 
     // Outline
-    kb.set(Normal, KeyBinding::key(KeyCode::Enter), ToggleExpand);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char(' ')), ToggleExpand);
-    kb.set(Normal, KeyBinding::key(KeyCode::Tab), ToggleFocus);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('h')), Collapse);
-    kb.set(Normal, KeyBinding::key(KeyCode::Left), Collapse);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('l')), Expand);
-    kb.set(Normal, KeyBinding::key(KeyCode::Right), Expand);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('w')), ToggleOutline);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('[')), OutlineWidthDecrease);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char(']')), OutlineWidthIncrease);
+    bind(kb, Normal, "Enter", ToggleExpand);
+    bind(kb, Normal, "Space", ToggleExpand);
+    bind(kb, Normal, "Tab", ToggleFocus);
+    bind(kb, Normal, "h", Collapse);
+    bind(kb, Normal, "Left", Collapse);
+    bind(kb, Normal, "l", Expand);
+    bind(kb, Normal, "Right", Expand);
+    bind(kb, Normal, "w", ToggleOutline);
+    bind(kb, Normal, "[", OutlineWidthDecrease);
+    bind(kb, Normal, "]", OutlineWidthIncrease);
 
     // Bookmarks
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('m')), SetBookmark);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('\'')), JumpToBookmark);
+    bind(kb, Normal, "m", SetBookmark);
+    bind(kb, Normal, "'", JumpToBookmark);
 
     // Mode transitions
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('i')), EnterInteractiveMode);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('f')), EnterLinkFollowMode);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('/')), EnterSearchMode);
+    bind(kb, Normal, "i", EnterInteractiveMode);
+    bind(kb, Normal, "f", EnterLinkFollowMode);
+    bind(kb, Normal, "/", EnterSearchMode);
 
     // View
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('r')), ToggleRawSource);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('t')), ToggleThemePicker);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('?')), ToggleHelp);
+    bind(kb, Normal, "r", ToggleRawSource);
+    bind(kb, Normal, "t", ToggleThemePicker);
+    bind(kb, Normal, "?", ToggleHelp);
 
     // Clipboard
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('y')), CopyContent);
-    kb.set(Normal, KeyBinding::shift(KeyCode::Char('Y')), CopyAnchor);
+    bind(kb, Normal, "y", CopyContent);
+    bind(kb, Normal, "Y", CopyAnchor);
 
     // File operations
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('b')), GoBack);
-    kb.set(Normal, KeyBinding::key(KeyCode::Backspace), GoBack);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('e')), OpenInEditor);
+    bind(kb, Normal, "b", GoBack);
+    bind(kb, Normal, "Backspace", GoBack);
+    bind(kb, Normal, "e", OpenInEditor);
 
     // Application
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('q')), Quit);
-    kb.set(Normal, KeyBinding::key(KeyCode::Esc), Quit);
+    bind(kb, Normal, "q", Quit);
+    bind(kb, Normal, "Escape", Quit);
 
     // Jump to heading by number
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('1')), JumpToHeading1);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('2')), JumpToHeading2);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('3')), JumpToHeading3);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('4')), JumpToHeading4);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('5')), JumpToHeading5);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('6')), JumpToHeading6);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('7')), JumpToHeading7);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('8')), JumpToHeading8);
-    kb.set(Normal, KeyBinding::key(KeyCode::Char('9')), JumpToHeading9);
+    bind(kb, Normal, "1", JumpToHeading1);
+    bind(kb, Normal, "2", JumpToHeading2);
+    bind(kb, Normal, "3", JumpToHeading3);
+    bind(kb, Normal, "4", JumpToHeading4);
+    bind(kb, Normal, "5", JumpToHeading5);
+    bind(kb, Normal, "6", JumpToHeading6);
+    bind(kb, Normal, "7", JumpToHeading7);
+    bind(kb, Normal, "8", JumpToHeading8);
+    bind(kb, Normal, "9", JumpToHeading9);
 }
 
 fn add_help_mode(kb: &mut Keybindings) {
@@ -111,21 +116,21 @@ fn add_help_mode(kb: &mut Keybindings) {
     use KeybindingMode::Help;
 
     // Navigation
-    kb.set(Help, KeyBinding::key(KeyCode::Char('j')), HelpScrollDown);
-    kb.set(Help, KeyBinding::key(KeyCode::Down), HelpScrollDown);
-    kb.set(Help, KeyBinding::key(KeyCode::Char('k')), HelpScrollUp);
-    kb.set(Help, KeyBinding::key(KeyCode::Up), HelpScrollUp);
+    bind(kb, Help, "j", HelpScrollDown);
+    bind(kb, Help, "Down", HelpScrollDown);
+    bind(kb, Help, "k", HelpScrollUp);
+    bind(kb, Help, "Up", HelpScrollUp);
 
     // Close help
-    kb.set(Help, KeyBinding::key(KeyCode::Char('?')), ToggleHelp);
-    kb.set(Help, KeyBinding::key(KeyCode::Esc), ToggleHelp);
+    bind(kb, Help, "?", ToggleHelp);
+    bind(kb, Help, "Escape", ToggleHelp);
 
     // Clipboard (available everywhere)
-    kb.set(Help, KeyBinding::key(KeyCode::Char('y')), CopyContent);
-    kb.set(Help, KeyBinding::shift(KeyCode::Char('Y')), CopyAnchor);
+    bind(kb, Help, "y", CopyContent);
+    bind(kb, Help, "Y", CopyAnchor);
 
     // Quit
-    kb.set(Help, KeyBinding::key(KeyCode::Char('q')), Quit);
+    bind(kb, Help, "q", Quit);
 }
 
 fn add_theme_picker_mode(kb: &mut Keybindings) {
@@ -133,21 +138,21 @@ fn add_theme_picker_mode(kb: &mut Keybindings) {
     use KeybindingMode::ThemePicker;
 
     // Navigation
-    kb.set(ThemePicker, KeyBinding::key(KeyCode::Char('j')), ThemePickerNext);
-    kb.set(ThemePicker, KeyBinding::key(KeyCode::Down), ThemePickerNext);
-    kb.set(ThemePicker, KeyBinding::key(KeyCode::Char('k')), ThemePickerPrevious);
-    kb.set(ThemePicker, KeyBinding::key(KeyCode::Up), ThemePickerPrevious);
+    bind(kb, ThemePicker, "j", ThemePickerNext);
+    bind(kb, ThemePicker, "Down", ThemePickerNext);
+    bind(kb, ThemePicker, "k", ThemePickerPrevious);
+    bind(kb, ThemePicker, "Up", ThemePickerPrevious);
 
     // Actions
-    kb.set(ThemePicker, KeyBinding::key(KeyCode::Enter), ApplyTheme);
-    kb.set(ThemePicker, KeyBinding::key(KeyCode::Esc), ToggleThemePicker);
+    bind(kb, ThemePicker, "Enter", ApplyTheme);
+    bind(kb, ThemePicker, "Escape", ToggleThemePicker);
 
     // Clipboard (available everywhere)
-    kb.set(ThemePicker, KeyBinding::key(KeyCode::Char('y')), CopyContent);
-    kb.set(ThemePicker, KeyBinding::shift(KeyCode::Char('Y')), CopyAnchor);
+    bind(kb, ThemePicker, "y", CopyContent);
+    bind(kb, ThemePicker, "Y", CopyAnchor);
 
     // Quit
-    kb.set(ThemePicker, KeyBinding::key(KeyCode::Char('q')), Quit);
+    bind(kb, ThemePicker, "q", Quit);
 }
 
 fn add_interactive_mode(kb: &mut Keybindings) {
@@ -155,34 +160,34 @@ fn add_interactive_mode(kb: &mut Keybindings) {
     use KeybindingMode::Interactive;
 
     // Exit
-    kb.set(Interactive, KeyBinding::key(KeyCode::Esc), ExitInteractiveMode);
-    kb.set(Interactive, KeyBinding::key(KeyCode::Char('i')), ExitInteractiveMode);
+    bind(kb, Interactive, "Escape", ExitInteractiveMode);
+    bind(kb, Interactive, "i", ExitInteractiveMode);
 
     // Navigation
-    kb.set(Interactive, KeyBinding::key(KeyCode::Char('j')), InteractiveNext);
-    kb.set(Interactive, KeyBinding::key(KeyCode::Down), InteractiveNext);
-    kb.set(Interactive, KeyBinding::key(KeyCode::Char('k')), InteractivePrevious);
-    kb.set(Interactive, KeyBinding::key(KeyCode::Up), InteractivePrevious);
+    bind(kb, Interactive, "j", InteractiveNext);
+    bind(kb, Interactive, "Down", InteractiveNext);
+    bind(kb, Interactive, "k", InteractivePrevious);
+    bind(kb, Interactive, "Up", InteractivePrevious);
 
     // Link navigation within element
-    kb.set(Interactive, KeyBinding::key(KeyCode::Tab), InteractiveNextLink);
-    kb.set(Interactive, KeyBinding::key(KeyCode::BackTab), InteractivePreviousLink);
+    bind(kb, Interactive, "Tab", InteractiveNextLink);
+    bind(kb, Interactive, "Shift+Tab", InteractivePreviousLink); // Shift+Tab is valid (named key)
 
     // Activate element
-    kb.set(Interactive, KeyBinding::key(KeyCode::Enter), InteractiveActivate);
-    kb.set(Interactive, KeyBinding::key(KeyCode::Char(' ')), InteractiveActivate);
+    bind(kb, Interactive, "Enter", InteractiveActivate);
+    bind(kb, Interactive, "Space", InteractiveActivate);
 
     // Page navigation
-    kb.set(Interactive, KeyBinding::key(KeyCode::Char('d')), PageDown);
-    kb.set(Interactive, KeyBinding::key(KeyCode::PageDown), PageDown);
-    kb.set(Interactive, KeyBinding::key(KeyCode::Char('u')), PageUp);
-    kb.set(Interactive, KeyBinding::key(KeyCode::PageUp), PageUp);
+    bind(kb, Interactive, "d", PageDown);
+    bind(kb, Interactive, "PageDown", PageDown);
+    bind(kb, Interactive, "u", PageUp);
+    bind(kb, Interactive, "PageUp", PageUp);
 
     // Clipboard
-    kb.set(Interactive, KeyBinding::key(KeyCode::Char('y')), CopyContent);
+    bind(kb, Interactive, "y", CopyContent);
 
     // Quit
-    kb.set(Interactive, KeyBinding::key(KeyCode::Char('q')), Quit);
+    bind(kb, Interactive, "q", Quit);
 }
 
 fn add_interactive_table_mode(kb: &mut Keybindings) {
@@ -190,30 +195,30 @@ fn add_interactive_table_mode(kb: &mut Keybindings) {
     use KeybindingMode::InteractiveTable;
 
     // Exit table mode
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Esc), ExitMode);
+    bind(kb, InteractiveTable, "Escape", ExitMode);
 
     // Table navigation
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Char('h')), InteractiveLeft);
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Left), InteractiveLeft);
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Char('l')), InteractiveRight);
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Right), InteractiveRight);
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Char('j')), InteractiveNext);
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Down), InteractiveNext);
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Char('k')), InteractivePrevious);
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Up), InteractivePrevious);
+    bind(kb, InteractiveTable, "h", InteractiveLeft);
+    bind(kb, InteractiveTable, "Left", InteractiveLeft);
+    bind(kb, InteractiveTable, "l", InteractiveRight);
+    bind(kb, InteractiveTable, "Right", InteractiveRight);
+    bind(kb, InteractiveTable, "j", InteractiveNext);
+    bind(kb, InteractiveTable, "Down", InteractiveNext);
+    bind(kb, InteractiveTable, "k", InteractivePrevious);
+    bind(kb, InteractiveTable, "Up", InteractivePrevious);
 
     // Clipboard
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Char('y')), CopyContent);
-    kb.set(InteractiveTable, KeyBinding::shift(KeyCode::Char('Y')), CopyAnchor);
+    bind(kb, InteractiveTable, "y", CopyContent);
+    bind(kb, InteractiveTable, "Y", CopyAnchor);
 
     // View toggle
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Char('r')), ToggleRawSource);
+    bind(kb, InteractiveTable, "r", ToggleRawSource);
 
     // Activate (follow link or edit cell)
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Enter), InteractiveActivate);
+    bind(kb, InteractiveTable, "Enter", InteractiveActivate);
 
     // Quit
-    kb.set(InteractiveTable, KeyBinding::key(KeyCode::Char('q')), Quit);
+    bind(kb, InteractiveTable, "q", Quit);
 }
 
 fn add_link_follow_mode(kb: &mut Keybindings) {
@@ -221,38 +226,38 @@ fn add_link_follow_mode(kb: &mut Keybindings) {
     use KeybindingMode::LinkFollow;
 
     // Exit
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Esc), ExitMode);
+    bind(kb, LinkFollow, "Escape", ExitMode);
 
     // Navigation
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('j')), NextLink);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Down), NextLink);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Tab), NextLink);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('k')), PreviousLink);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Up), PreviousLink);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::BackTab), PreviousLink);
+    bind(kb, LinkFollow, "j", NextLink);
+    bind(kb, LinkFollow, "Down", NextLink);
+    bind(kb, LinkFollow, "Tab", NextLink);
+    bind(kb, LinkFollow, "k", PreviousLink);
+    bind(kb, LinkFollow, "Up", PreviousLink);
+    bind(kb, LinkFollow, "Shift+Tab", PreviousLink); // Shift+Tab is valid (named key)
 
     // Actions
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Enter), FollowLink);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('/')), LinkSearch);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('p')), JumpToParent);
+    bind(kb, LinkFollow, "Enter", FollowLink);
+    bind(kb, LinkFollow, "/", LinkSearch);
+    bind(kb, LinkFollow, "p", JumpToParent);
 
     // Jump to link by number
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('1')), JumpToLink1);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('2')), JumpToLink2);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('3')), JumpToLink3);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('4')), JumpToLink4);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('5')), JumpToLink5);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('6')), JumpToLink6);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('7')), JumpToLink7);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('8')), JumpToLink8);
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('9')), JumpToLink9);
+    bind(kb, LinkFollow, "1", JumpToLink1);
+    bind(kb, LinkFollow, "2", JumpToLink2);
+    bind(kb, LinkFollow, "3", JumpToLink3);
+    bind(kb, LinkFollow, "4", JumpToLink4);
+    bind(kb, LinkFollow, "5", JumpToLink5);
+    bind(kb, LinkFollow, "6", JumpToLink6);
+    bind(kb, LinkFollow, "7", JumpToLink7);
+    bind(kb, LinkFollow, "8", JumpToLink8);
+    bind(kb, LinkFollow, "9", JumpToLink9);
 
     // Clipboard
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('y')), CopyContent);
-    kb.set(LinkFollow, KeyBinding::shift(KeyCode::Char('Y')), CopyAnchor);
+    bind(kb, LinkFollow, "y", CopyContent);
+    bind(kb, LinkFollow, "Y", CopyAnchor);
 
     // Quit
-    kb.set(LinkFollow, KeyBinding::key(KeyCode::Char('q')), Quit);
+    bind(kb, LinkFollow, "q", Quit);
 }
 
 fn add_link_search_mode(kb: &mut Keybindings) {
@@ -260,17 +265,17 @@ fn add_link_search_mode(kb: &mut Keybindings) {
     use KeybindingMode::LinkSearch;
 
     // Exit search (back to link follow)
-    kb.set(LinkSearch, KeyBinding::key(KeyCode::Esc), ExitMode);
+    bind(kb, LinkSearch, "Escape", ExitMode);
 
     // Select filtered result
-    kb.set(LinkSearch, KeyBinding::key(KeyCode::Enter), FollowLink);
+    bind(kb, LinkSearch, "Enter", FollowLink);
 
     // Navigation while searching
-    kb.set(LinkSearch, KeyBinding::key(KeyCode::Down), NextLink);
-    kb.set(LinkSearch, KeyBinding::key(KeyCode::Up), PreviousLink);
+    bind(kb, LinkSearch, "Down", NextLink);
+    bind(kb, LinkSearch, "Up", PreviousLink);
 
     // Delete character
-    kb.set(LinkSearch, KeyBinding::key(KeyCode::Backspace), SearchBackspace);
+    bind(kb, LinkSearch, "Backspace", SearchBackspace);
 }
 
 fn add_search_mode(kb: &mut Keybindings) {
@@ -278,13 +283,13 @@ fn add_search_mode(kb: &mut Keybindings) {
     use KeybindingMode::Search;
 
     // Exit search
-    kb.set(Search, KeyBinding::key(KeyCode::Esc), ExitMode);
+    bind(kb, Search, "Escape", ExitMode);
 
     // Confirm search (select result)
-    kb.set(Search, KeyBinding::key(KeyCode::Enter), ConfirmAction);
+    bind(kb, Search, "Enter", ConfirmAction);
 
     // Delete character
-    kb.set(Search, KeyBinding::key(KeyCode::Backspace), SearchBackspace);
+    bind(kb, Search, "Backspace", SearchBackspace);
 }
 
 fn add_confirm_dialog_mode(kb: &mut Keybindings) {
@@ -292,54 +297,81 @@ fn add_confirm_dialog_mode(kb: &mut Keybindings) {
     use KeybindingMode::ConfirmDialog;
 
     // Confirm
-    kb.set(ConfirmDialog, KeyBinding::key(KeyCode::Char('y')), ConfirmAction);
-    kb.set(ConfirmDialog, KeyBinding::shift(KeyCode::Char('Y')), ConfirmAction);
-    kb.set(ConfirmDialog, KeyBinding::key(KeyCode::Enter), ConfirmAction);
+    bind(kb, ConfirmDialog, "y", ConfirmAction);
+    bind(kb, ConfirmDialog, "Y", ConfirmAction);
+    bind(kb, ConfirmDialog, "Enter", ConfirmAction);
 
     // Cancel
-    kb.set(ConfirmDialog, KeyBinding::key(KeyCode::Char('n')), CancelAction);
-    kb.set(ConfirmDialog, KeyBinding::shift(KeyCode::Char('N')), CancelAction);
-    kb.set(ConfirmDialog, KeyBinding::key(KeyCode::Esc), CancelAction);
+    bind(kb, ConfirmDialog, "n", CancelAction);
+    bind(kb, ConfirmDialog, "N", CancelAction);
+    bind(kb, ConfirmDialog, "Escape", CancelAction);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyModifiers;
+    use crossterm::event::{KeyCode, KeyEventKind, KeyEventState, KeyModifiers};
+
+    fn make_key_event(code: KeyCode, modifiers: KeyModifiers) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
 
     #[test]
     fn test_default_normal_mode() {
-        let kb = default_keybindings();
+        let mut kb = default_keybindings();
 
         // Check some common bindings
         assert_eq!(
-            kb.get_action(KeybindingMode::Normal, KeyCode::Char('j'), KeyModifiers::NONE),
+            kb.dispatch(
+                KeybindingMode::Normal,
+                make_key_event(KeyCode::Char('j'), KeyModifiers::NONE)
+            ),
             Some(Action::Next)
         );
         assert_eq!(
-            kb.get_action(KeybindingMode::Normal, KeyCode::Char('k'), KeyModifiers::NONE),
+            kb.dispatch(
+                KeybindingMode::Normal,
+                make_key_event(KeyCode::Char('k'), KeyModifiers::NONE)
+            ),
             Some(Action::Previous)
         );
         assert_eq!(
-            kb.get_action(KeybindingMode::Normal, KeyCode::Char('q'), KeyModifiers::NONE),
+            kb.dispatch(
+                KeybindingMode::Normal,
+                make_key_event(KeyCode::Char('q'), KeyModifiers::NONE)
+            ),
             Some(Action::Quit)
         );
         assert_eq!(
-            kb.get_action(KeybindingMode::Normal, KeyCode::Char('?'), KeyModifiers::NONE),
+            kb.dispatch(
+                KeybindingMode::Normal,
+                make_key_event(KeyCode::Char('?'), KeyModifiers::NONE)
+            ),
             Some(Action::ToggleHelp)
         );
     }
 
     #[test]
     fn test_default_interactive_mode() {
-        let kb = default_keybindings();
+        let mut kb = default_keybindings();
 
         assert_eq!(
-            kb.get_action(KeybindingMode::Interactive, KeyCode::Esc, KeyModifiers::NONE),
+            kb.dispatch(
+                KeybindingMode::Interactive,
+                make_key_event(KeyCode::Esc, KeyModifiers::NONE)
+            ),
             Some(Action::ExitInteractiveMode)
         );
         assert_eq!(
-            kb.get_action(KeybindingMode::Interactive, KeyCode::Tab, KeyModifiers::NONE),
+            kb.dispatch(
+                KeybindingMode::Interactive,
+                make_key_event(KeyCode::Tab, KeyModifiers::NONE)
+            ),
             Some(Action::InteractiveNextLink)
         );
     }
@@ -362,12 +394,12 @@ mod tests {
 
         for mode in modes {
             assert!(
-                kb.get_mode_bindings(mode).is_some(),
+                kb.get_mode_keybinds(mode).is_some(),
                 "Mode {:?} has no bindings",
                 mode
             );
             assert!(
-                !kb.get_mode_bindings(mode).unwrap().is_empty(),
+                !kb.get_mode_keybinds(mode).unwrap().as_slice().is_empty(),
                 "Mode {:?} has empty bindings",
                 mode
             );
