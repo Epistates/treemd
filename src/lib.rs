@@ -52,6 +52,12 @@
 /// Provides configuration management for theme choices, UI settings, and terminal preferences.
 pub mod config;
 
+/// Keybindings module for customizable keyboard shortcuts.
+///
+/// Provides a flexible keybinding system with mode-based bindings and
+/// user configuration support.
+pub mod keybindings;
+
 /// Input handling module for stdin and file sources.
 ///
 /// Provides robust input reading, format detection, and tree output parsing.

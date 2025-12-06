@@ -24,7 +24,8 @@ pub fn render_help_popup(frame: &mut Frame, app: &App, area: Rect) {
     // Clear the area
     frame.render_widget(Clear, popup_area);
 
-    let help_lines = help_text::build_help_text(theme);
+    // Use dynamic help text generation from keybindings
+    let help_lines = help_text::build_dynamic_help_text(theme, &app.keybindings);
     let help_text_len = help_lines.len();
 
     let paragraph = Paragraph::new(help_lines)
