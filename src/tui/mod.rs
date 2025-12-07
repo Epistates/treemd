@@ -6,6 +6,7 @@ pub mod terminal_compat;
 pub mod theme;
 pub mod tty; // Public module for TTY handling
 mod ui;
+mod watcher;
 
 pub use app::App;
 pub use interactive::InteractiveState;
@@ -56,8 +57,22 @@ fn run_editor(terminal: &mut DefaultTerminal, file_path: &std::path::PathBuf) ->
 pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     let mut app = app;
 
+    // Create file watcher for live reload
+    let mut file_watcher = watcher::FileWatcher::new().ok();
+    if let Some(ref mut watcher) = file_watcher {
+        let _ = watcher.watch(&app.current_file_path);
+    }
+
     loop {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
+
+        // Update file watcher if the current file changed (e.g., via navigation)
+        if app.file_path_changed {
+            app.file_path_changed = false;
+            if let Some(ref mut watcher) = file_watcher {
+                let _ = watcher.watch(&app.current_file_path);
+            }
+        }
 
         // Handle pending editor file open (from link following non-markdown files)
         if let Some(file_path) = app.pending_editor_file.take() {
@@ -79,7 +94,46 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         // Poll for events with timeout to allow status message expiration
         // Use 100ms timeout for responsive UI updates
         if !tty::poll_event(Duration::from_millis(100))? {
-            // No event, just continue loop to redraw (handles status message timeout)
+            // No keyboard event - check for file changes (unless suppressed after internal save)
+            if app.suppress_file_watch {
+                // Clear suppression and drain any pending file events
+                app.suppress_file_watch = false;
+                if let Some(ref mut watcher) = file_watcher {
+                    watcher.check_for_changes(); // Drain events, ignore result
+                }
+            } else if let Some(ref mut watcher) = file_watcher {
+                if watcher.check_for_changes() {
+                    // Save state before reload
+                    let was_interactive = app.mode == app::AppMode::Interactive;
+                    let saved_scroll = app.content_scroll;
+                    let saved_element_idx = app.interactive_state.current_index;
+
+                    // File changed externally - reload with state preservation
+                    if let Err(e) = app.reload_current_file() {
+                        app.status_message = Some(format!("✗ Reload failed: {}", e));
+                    } else {
+                        // Re-index interactive elements if in interactive mode
+                        if was_interactive {
+                            app.reindex_interactive_elements();
+                            // Restore element selection if still valid
+                            if let Some(idx) = saved_element_idx {
+                                if idx < app.interactive_state.elements.len() {
+                                    app.interactive_state.current_index = Some(idx);
+                                }
+                            }
+                        }
+                        // Restore scroll position
+                        app.content_scroll = saved_scroll.min(app.content_height.saturating_sub(1));
+                        app.content_scroll_state = app
+                            .content_scroll_state
+                            .position(app.content_scroll as usize);
+                        // Sync previous_selection to prevent update_content_metrics() from resetting scroll
+                        app.sync_previous_selection();
+
+                        app.status_message = Some("↻ File reloaded (external change)".to_string());
+                    }
+                }
+            }
             continue;
         }
 
@@ -354,6 +408,17 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                             }
                             KeyCode::Char('u') | KeyCode::PageUp => {
                                 app.scroll_page_up_interactive();
+                            }
+                            // Document search from interactive mode
+                            KeyCode::Char('/') => {
+                                app.enter_doc_search();
+                            }
+                            // Navigate search matches while in interactive mode
+                            KeyCode::Char('n') if !app.doc_search_matches.is_empty() => {
+                                app.next_doc_match();
+                            }
+                            KeyCode::Char('N') if !app.doc_search_matches.is_empty() => {
+                                app.prev_doc_match();
                             }
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
