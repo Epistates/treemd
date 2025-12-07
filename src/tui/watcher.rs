@@ -4,7 +4,7 @@
 //! to reload when modifications are detected.
 
 use notify::{
-    event::{AccessKind, AccessMode, ModifyKind},
+    event::{AccessKind, AccessMode, ModifyKind, RenameMode},
     Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
 };
 use std::path::PathBuf;
@@ -104,23 +104,63 @@ impl FileWatcher {
 
     /// Check if an event is relevant for triggering a reload.
     fn is_relevant_event(&self, event: &Event) -> bool {
-        // Only care about events for our watched file
-        if let Some(ref watched_path) = self.current_path {
-            let matches_path = event.paths.iter().any(|p| p == watched_path);
-            if !matches_path {
-                return false;
+        let Some(ref watched_path) = self.current_path else {
+            return false;
+        };
+
+        // Check if event path matches our watched file
+        // Use multiple strategies to handle platform differences
+        let matches_path = event.paths.iter().any(|event_path| {
+            // Strategy 1: Exact path match
+            if event_path == watched_path {
+                return true;
             }
-        } else {
+
+            // Strategy 2: Canonicalized path match (handles symlinks, case differences)
+            if let (Ok(event_canonical), Ok(watched_canonical)) =
+                (event_path.canonicalize(), watched_path.canonicalize())
+            {
+                if event_canonical == watched_canonical {
+                    return true;
+                }
+            }
+
+            // Strategy 3: File name match (fallback for FSEvents quirks)
+            // Only match if event is in same directory
+            if let (Some(event_name), Some(watched_name), Some(event_parent), Some(watched_parent)) = (
+                event_path.file_name(),
+                watched_path.file_name(),
+                event_path.parent(),
+                watched_path.parent(),
+            ) {
+                if event_name == watched_name {
+                    // Verify same directory (canonicalize to handle . and ..)
+                    if let (Ok(ep), Ok(wp)) = (event_parent.canonicalize(), watched_parent.canonicalize()) {
+                        return ep == wp;
+                    }
+                }
+            }
+
+            false
+        });
+
+        if !matches_path {
             return false;
         }
 
-        // Check event kind - we care about modifications and writes
+        // Check event kind - be permissive to catch various save patterns
         matches!(
             event.kind,
+            // Direct data modifications
             EventKind::Modify(ModifyKind::Data(_))
                 | EventKind::Modify(ModifyKind::Any)
+                // File closed after write
                 | EventKind::Access(AccessKind::Close(AccessMode::Write))
+                // File created (new file or recreated)
                 | EventKind::Create(_)
+                // Atomic saves: write to temp then rename to target
+                | EventKind::Modify(ModifyKind::Name(RenameMode::To))
+                | EventKind::Modify(ModifyKind::Name(RenameMode::Any))
         )
     }
 

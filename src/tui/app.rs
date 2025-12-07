@@ -531,12 +531,17 @@ impl App {
         items
     }
 
+    /// Select an outline item by index, updating both selection and scroll state.
+    fn select_outline_index(&mut self, idx: usize) {
+        self.outline_state.select(Some(idx));
+        self.outline_scroll_state = self.outline_scroll_state.position(idx);
+    }
+
     /// Select a heading by its text. Returns true if found and selected.
     fn select_by_text(&mut self, text: &str) -> bool {
         for (idx, item) in self.outline_items.iter().enumerate() {
             if item.text == text {
-                self.outline_state.select(Some(idx));
-                self.outline_scroll_state = self.outline_scroll_state.position(idx);
+                self.select_outline_index(idx);
                 return true;
             }
         }
@@ -586,8 +591,7 @@ impl App {
                 }
                 None => 0,
             };
-            self.outline_state.select(Some(i));
-            self.outline_scroll_state = self.outline_scroll_state.position(i);
+            self.select_outline_index(i);
         } else {
             // Scroll content
             let new_scroll = self.content_scroll.saturating_add(1);
@@ -604,8 +608,7 @@ impl App {
                 Some(i) => i.saturating_sub(1),
                 None => 0,
             };
-            self.outline_state.select(Some(i));
-            self.outline_scroll_state = self.outline_scroll_state.position(i);
+            self.select_outline_index(i);
         } else {
             // Scroll content
             self.content_scroll = self.content_scroll.saturating_sub(1);
@@ -617,8 +620,7 @@ impl App {
 
     pub fn first(&mut self) {
         if self.focus == Focus::Outline && !self.outline_items.is_empty() {
-            self.outline_state.select(Some(0));
-            self.outline_scroll_state = self.outline_scroll_state.position(0);
+            self.select_outline_index(0);
         } else {
             self.content_scroll = 0;
             self.content_scroll_state = self.content_scroll_state.position(0);
@@ -628,8 +630,7 @@ impl App {
     pub fn last(&mut self) {
         if self.focus == Focus::Outline && !self.outline_items.is_empty() {
             let last = self.outline_items.len() - 1;
-            self.outline_state.select(Some(last));
-            self.outline_scroll_state = self.outline_scroll_state.position(last);
+            self.select_outline_index(last);
         } else {
             let last = self.content_height.saturating_sub(1);
             self.content_scroll = last;
@@ -646,8 +647,7 @@ impl App {
                     // Search backwards for a heading with lower level (parent)
                     for i in (0..current_idx).rev() {
                         if self.outline_items[i].level < current_level {
-                            self.outline_state.select(Some(i));
-                            self.outline_scroll_state = self.outline_scroll_state.position(i);
+                            self.select_outline_index(i);
                             return;
                         }
                     }
@@ -1380,8 +1380,7 @@ impl App {
 
     pub fn jump_to_heading(&mut self, index: usize) {
         if index < self.outline_items.len() {
-            self.outline_state.select(Some(index));
-            self.outline_scroll_state = self.outline_scroll_state.position(index);
+            self.select_outline_index(index);
         }
     }
 
@@ -1669,8 +1668,7 @@ impl App {
                     for i in (0..current_idx).rev() {
                         if self.outline_items[i].level < current_level {
                             // Jump to parent in outline
-                            self.outline_state.select(Some(i));
-                            self.outline_scroll_state = self.outline_scroll_state.position(i);
+                            self.select_outline_index(i);
 
                             // Now extract links from parent's content
                             let content = if let Some(heading_text) = self.selected_heading_text() {
@@ -1834,31 +1832,29 @@ impl App {
         }
     }
 
-    /// Jump to a heading by anchor name or heading text
+    /// Jump to a heading by anchor name or heading text.
     ///
-    /// Supports two matching strategies:
-    /// 1. Normalized anchor match - for markdown links like `#mixed-links-test`
-    /// 2. Heading text match - for wikilinks like `[[#Mixed Links Test]]`
+    /// Supports two matching strategies (checked per-item, Strategy 1 takes priority):
+    /// 1. **Normalized anchor match** - compares `heading_to_anchor(item)` with lowercased anchor.
+    ///    Handles markdown links (`#features`, `#mixed-links-test`) and simple wikilinks (`[[#Features]]`).
+    /// 2. **Heading text match** - case-insensitive comparison of raw heading text.
+    ///    Handles wikilinks preserving spaces (`[[#Mixed Links Test]]`).
     fn jump_to_anchor(&mut self, anchor: &str) -> Result<(), String> {
         let anchor_lower = anchor.to_lowercase();
 
-        // Strategy 1: Try normalized anchor match (case-insensitive)
-        // Handles: [text](#features), [text](#mixed-links-test), [[#Features]]
         for (idx, item) in self.outline_items.iter().enumerate() {
-            let item_anchor = Self::heading_to_anchor(&item.text);
-            if item_anchor == anchor_lower {
-                self.outline_state.select(Some(idx));
-                self.outline_scroll_state = self.outline_scroll_state.position(idx);
+            // Strategy 1: Normalized anchor match
+            // The anchor from markdown links is already normalized (lowercase, dashes),
+            // so we just lowercase the query and compare with the item's normalized form.
+            if Self::heading_to_anchor(&item.text) == anchor_lower {
+                self.select_outline_index(idx);
                 return Ok(());
             }
-        }
 
-        // Strategy 2: Try heading text match (case-insensitive)
-        // Handles: [[#Mixed Links Test]] where spaces aren't converted to dashes
-        for (idx, item) in self.outline_items.iter().enumerate() {
-            if item.text.to_lowercase() == anchor_lower {
-                self.outline_state.select(Some(idx));
-                self.outline_scroll_state = self.outline_scroll_state.position(idx);
+            // Strategy 2: Direct heading text match (case-insensitive)
+            // Wikilinks like [[#Mixed Links Test]] preserve the original heading text.
+            if item.text.eq_ignore_ascii_case(anchor) {
+                self.select_outline_index(idx);
                 return Ok(());
             }
         }
@@ -2139,8 +2135,7 @@ impl App {
         // Restore selection and scroll position
         if let Some(selected_idx) = state.outline_state_selected {
             if selected_idx < self.outline_items.len() {
-                self.outline_state.select(Some(selected_idx));
-                self.outline_scroll_state = self.outline_scroll_state.position(selected_idx);
+                self.select_outline_index(selected_idx);
             }
         }
 
