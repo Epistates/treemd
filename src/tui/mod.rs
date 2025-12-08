@@ -563,6 +563,28 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         // Search navigation mode - n/N to navigate matches
                         match key.code {
                             KeyCode::Esc => app.clear_doc_search(),
+                            KeyCode::Enter => {
+                                // Follow selected link if match is inside a link
+                                if let Some(link_idx) = app.doc_search_selected_link_idx {
+                                    // Clear search and follow the link
+                                    app.selected_link_idx = Some(link_idx);
+                                    app.clear_doc_search();
+                                    app.mode = app::AppMode::LinkFollow;
+                                    // Re-populate links_in_view since clear_doc_search may have cleared it
+                                    let content = if let Some(heading_text) = app.selected_heading_text() {
+                                        app.document
+                                            .extract_section(heading_text)
+                                            .unwrap_or_else(|| app.document.content.clone())
+                                    } else {
+                                        app.document.content.clone()
+                                    };
+                                    app.links_in_view = crate::parser::links::extract_links(&content);
+                                    app.filtered_link_indices = (0..app.links_in_view.len()).collect();
+                                    app.selected_link_idx = Some(link_idx.min(app.links_in_view.len().saturating_sub(1)));
+                                    // Now follow the link
+                                    let _ = app.follow_selected_link();
+                                }
+                            }
                             KeyCode::Char('n') => app.next_doc_match(),
                             KeyCode::Char('N') => app.prev_doc_match(),
                             KeyCode::Char('/') => {
@@ -574,6 +596,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 app.doc_search_query.clear();
                                 app.doc_search_matches.clear();
                                 app.doc_search_current_idx = None;
+                                app.doc_search_selected_link_idx = None;
                             }
                             KeyCode::Char('q') => return Ok(()),
                             // Allow navigation while in search mode

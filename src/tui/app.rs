@@ -274,6 +274,7 @@ pub struct App {
     pub doc_search_current_idx: Option<usize>,
     pub doc_search_active: bool,        // Whether search input is active
     pub doc_search_from_interactive: bool, // Whether search was started from interactive mode
+    pub doc_search_selected_link_idx: Option<usize>, // Index into links_in_view if match is in a link
 
     // Command palette state
     pub command_query: String,
@@ -420,6 +421,7 @@ impl App {
             doc_search_current_idx: None,
             doc_search_active: false,
             doc_search_from_interactive: false,
+            doc_search_selected_link_idx: None,
 
             // Command palette state
             command_query: String::new(),
@@ -837,8 +839,11 @@ impl App {
         self.scroll_to_doc_search_match();
     }
 
-    /// Scroll to the current search match
+    /// Scroll to the current search match and detect if it's inside a link
     fn scroll_to_doc_search_match(&mut self) {
+        // Reset link selection
+        self.doc_search_selected_link_idx = None;
+
         if let Some(idx) = self.doc_search_current_idx {
             if let Some(m) = self.doc_search_matches.get(idx) {
                 let match_line = m.line as u16;
@@ -850,6 +855,55 @@ impl App {
                 self.content_scroll_state = self
                     .content_scroll_state
                     .position(self.content_scroll as usize);
+
+                // Check if this match is inside a link
+                self.detect_link_at_search_match(m.line, m.col_start, m.len);
+            }
+        }
+    }
+
+    /// Detect if a search match position overlaps with a link and select it
+    fn detect_link_at_search_match(&mut self, match_line: usize, match_col: usize, match_len: usize) {
+        use crate::parser::links::extract_links;
+
+        // Get current section content
+        let content = if let Some(heading_text) = self.selected_heading_text() {
+            self.document
+                .extract_section(heading_text)
+                .unwrap_or_else(|| self.document.content.clone())
+        } else {
+            self.document.content.clone()
+        };
+
+        // Convert line/col to byte offset
+        let mut byte_offset = 0;
+        for (line_num, line) in content.lines().enumerate() {
+            if line_num == match_line {
+                byte_offset += match_col;
+                break;
+            }
+            byte_offset += line.len() + 1; // +1 for newline
+        }
+
+        let match_end = byte_offset + match_len;
+
+        // Extract links and populate links_in_view for potential following
+        self.links_in_view = extract_links(&content);
+        self.filtered_link_indices = (0..self.links_in_view.len()).collect();
+
+        // Find if match overlaps with any link
+        for (idx, link) in self.links_in_view.iter().enumerate() {
+            let link_start = link.offset;
+            // Estimate link end based on its display text length + some syntax overhead
+            // For markdown: [text](url) - we care about the text portion
+            // For wikilinks: [[target|text]] - we care about the display text
+            let link_end = link_start + link.text.len() + 20; // generous estimate for syntax
+
+            // Check if match overlaps with link region
+            if byte_offset < link_end && match_end > link_start {
+                self.doc_search_selected_link_idx = Some(idx);
+                self.selected_link_idx = Some(idx); // Also set link mode selection
+                break;
             }
         }
     }
@@ -877,6 +931,7 @@ impl App {
         self.doc_search_query.clear();
         self.doc_search_matches.clear();
         self.doc_search_current_idx = None;
+        self.doc_search_selected_link_idx = None;
         // Sync to prevent update_content_metrics() from resetting scroll
         self.sync_previous_selection();
     }
@@ -893,6 +948,7 @@ impl App {
         self.doc_search_query.clear();
         self.doc_search_matches.clear();
         self.doc_search_current_idx = None;
+        self.doc_search_selected_link_idx = None;
         // Sync to prevent update_content_metrics() from resetting scroll
         self.sync_previous_selection();
     }
@@ -937,7 +993,18 @@ impl App {
         } else {
             let current = self.doc_search_current_idx.unwrap_or(0) + 1;
             let total = self.doc_search_matches.len();
-            format!("Search: {} ({}/{})", self.doc_search_query, current, total)
+            let base = format!("Search: {} ({}/{})", self.doc_search_query, current, total);
+
+            // Add link indicator if match is inside a link
+            if let Some(link_idx) = self.doc_search_selected_link_idx {
+                if let Some(link) = self.links_in_view.get(link_idx) {
+                    format!("{} → [{}] (Enter to follow)", base, link.text)
+                } else {
+                    base
+                }
+            } else {
+                base
+            }
         }
     }
 
