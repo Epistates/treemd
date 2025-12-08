@@ -1376,6 +1376,27 @@ impl App {
             .map(|item| item.text.as_str())
     }
 
+    /// Get the source line number (1-indexed) for the currently selected heading.
+    ///
+    /// Returns None if no heading is selected or if the selection is the document overview.
+    pub fn selected_heading_source_line(&self) -> Option<u32> {
+        let selected_text = self.selected_heading_text()?;
+
+        // Document overview doesn't have a source line
+        if selected_text == DOCUMENT_OVERVIEW {
+            return Some(1); // Return line 1 for document overview
+        }
+
+        // Find the heading in the document by text
+        let heading = self.document.headings.iter().find(|h| h.text == selected_text)?;
+
+        // Convert byte offset to line number (1-indexed)
+        let offset = heading.offset.min(self.document.content.len());
+        let before = &self.document.content[..offset];
+        let line = before.chars().filter(|&c| c == '\n').count() + 1;
+        Some(line as u32)
+    }
+
     /// Sync previous_selection to current selection (prevents spurious scroll resets)
     pub fn sync_previous_selection(&mut self) {
         self.previous_selection = self.selected_heading_text().map(|s| s.to_string());

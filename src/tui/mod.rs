@@ -19,26 +19,32 @@ use crossterm::event::{Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use opensesame::Editor;
 use ratatui::DefaultTerminal;
 use std::io::stdout;
+use std::path::Path;
 use std::time::Duration;
 
-/// Suspend the TUI, run an external editor, then restore the TUI
-fn run_editor(terminal: &mut DefaultTerminal, file_path: &std::path::PathBuf) -> Result<()> {
+/// Suspend the TUI, run an external editor, then restore the TUI.
+///
+/// If line is provided and the editor supports it, the file will be opened at that line.
+fn run_editor(terminal: &mut DefaultTerminal, file: &Path, line: Option<u32>) -> Result<()> {
     // Leave alternate screen and disable raw mode to give editor full terminal control
     stdout().execute(LeaveAlternateScreen)?;
     disable_raw_mode()?;
 
     // Open file in editor (blocks until editor closes)
-    let result = edit::edit_file(file_path);
+    let result = match line {
+        Some(l) => Editor::open_at(file, l),
+        None => Editor::open(file),
+    };
 
     // Restore terminal state
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
     terminal.clear()?;
 
-    // Return editor result
-    result.map_err(|e| e.into())
+    result.map_err(|e| color_eyre::eyre::eyre!("{}", e))
 }
 
 /// Run the TUI application.
@@ -80,7 +86,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("file");
-            match run_editor(terminal, &file_path) {
+            match run_editor(terminal, &file_path, None) {
                 Ok(_) => {
                     app.status_message = Some(format!("✓ Opened {} in editor", filename));
                 }
@@ -671,8 +677,11 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         KeyCode::Char('Y') => app.copy_anchor(),
                         // Edit file
                         KeyCode::Char('e') => {
+                            // Get the source line for the selected heading (if any)
+                            let line = app.selected_heading_source_line();
+
                             // Run editor with proper terminal suspend/restore
-                            match run_editor(terminal, &app.current_file_path) {
+                            match run_editor(terminal, &app.current_file_path, line) {
                                 Ok(_) => {
                                     // Reload file after successful edit
                                     if let Err(e) = app.reload_current_file() {

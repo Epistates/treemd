@@ -61,9 +61,6 @@ arboard = { version = "3.4", features = ["wayland-data-control"] }
 # Open URLs in default browser
 open = "5.3"
 
-# Open files in default editor
-edit = "0.1"
-
 # Atomic file operations
 tempfile = "3.15"
 
@@ -76,6 +73,9 @@ supports-color = "3.0"
 
 # File system watching for live reload
 notify = "8.0"
+
+# Open files in editor with line:column positioning
+opensesame = "0.1"
 
 # Unix system calls for TTY handling
 [target.'cfg(unix)'.dependencies]
