@@ -1,14 +1,14 @@
 //! JSON output types for nested, markdown-intelligent structure
 //!
-//! Block-level content types are re-exported from turbovault-core for
+//! Block-level content types are re-exported from turbovault-parser for
 //! unified parsing with OFM (Obsidian Flavored Markdown) support and
 //! proper code block awareness.
 
 use serde::{Deserialize, Serialize};
 
-// Re-export content block types from turbovault-core
+// Re-export content block types from turbovault-parser
 // These provide code-block-aware parsing and OFM support
-pub use turbovault_core::{
+pub use turbovault_parser::{
     ContentBlock as Block,
     InlineElement,
     ListItem,

@@ -107,7 +107,7 @@ mod tests {
 
         assert_eq!(blocks.len(), 1);
         if let Block::Paragraph { inline, .. } = &blocks[0] {
-            use turbovault_core::InlineElement;
+            use turbovault_parser::InlineElement;
 
             // Find the link elements
             let links: Vec<_> = inline
@@ -150,7 +150,7 @@ Also [[Another Valid]]
         let mut wikilink_count = 0;
         for block in &blocks {
             if let Block::Paragraph { inline, .. } = block {
-                use turbovault_core::InlineElement;
+                use turbovault_parser::InlineElement;
                 for elem in inline {
                     if let InlineElement::Link { url, .. } = elem {
                         if url.starts_with("wikilink:") {

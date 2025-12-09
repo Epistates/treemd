@@ -8,7 +8,7 @@
 //! link extraction.
 
 use std::path::PathBuf;
-use turbovault_core::LinkType;
+use turbovault_parser::LinkType;
 
 /// Represents a link found in markdown content.
 #[derive(Debug, Clone, PartialEq)]
