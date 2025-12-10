@@ -11,7 +11,7 @@ repository = "https://github.com/epistates/treemd"
 homepage = "https://github.com/epistates/treemd"
 documentation = "https://docs.rs/treemd"
 readme = "README.md"
-rust-version = "1.85"
+rust-version = "1.90"
 
 [lib]
 name = "treemd"
@@ -26,11 +26,10 @@ path = "src/main.rs"
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
 
-# Markdown parsing - fully delegated to turbovault-parser for OFM support
 unicode-width = "0.2"
 
 # Turbovault integration - OFM parsing with code-block awareness
-turbovault-parser = "1.2.1"
+turbovault-parser = "1.2.3"
 
 # Tree data structure for heading hierarchy
 indextree = "4.7"

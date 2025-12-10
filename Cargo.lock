@@ -92,12 +92,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.100"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
-
-[[package]]
 name = "arboard"
 version = "3.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1202,12 +1196,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "minimal-lexical"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
-
-[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1237,16 +1225,6 @@ checksum = "80986bbbcf925ebd3be54c26613d861255284584501595cf418320c078945608"
 dependencies = [
  "num-traits",
  "pxfm",
-]
-
-[[package]]
-name = "nom"
-version = "7.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
-dependencies = [
- "memchr",
- "minimal-lexical",
 ]
 
 [[package]]
@@ -2250,7 +2228,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8765b90061cba6c22b5831f675da109ae5561588290f9fa2317adab2714d5a6"
 dependencies = [
  "memchr",
- "nom 8.0.0",
+ "nom",
  "petgraph",
 ]
 
@@ -2286,15 +2264,13 @@ dependencies = [
 
 [[package]]
 name = "turbovault-core"
-version = "1.2.1"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b4f8edebf2e9126c7e047cc54750e9acf43a5556368e51e573fb128715b0d3e"
+checksum = "794a9e074a65a3fbc968d51d1581c9f74e4d4f0fd1b3e85445deaa8c7ec58a59"
 dependencies = [
- "anyhow",
  "chrono",
  "log",
  "parking_lot",
- "regex",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2306,19 +2282,16 @@ dependencies = [
 
 [[package]]
 name = "turbovault-parser"
-version = "1.2.1"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2309795de61fddbf9e34873245de7edccf51e7b19be57427314e89118ee0bbe3"
+checksum = "8117b3902b8d30de63fcbae7d827fd1210f35936254378fba1ebb66f4e18522f"
 dependencies = [
- "anyhow",
  "log",
- "nom 7.1.3",
  "pulldown-cmark",
  "regex",
  "serde",
  "serde_json",
  "serde_yaml",
- "thiserror 1.0.69",
  "turbovault-core",
 ]
 
