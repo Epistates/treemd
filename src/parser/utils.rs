@@ -7,18 +7,41 @@
 /// This is useful when comparing heading text extracted from events (which strips formatting)
 /// against the raw markdown source (which contains formatting).
 ///
+/// Handles: `**bold**`, `__bold__`, `*italic*`, `_italic_` (with snake_case protection),
+/// `` `code` ``, and `~~strikethrough~~`.
+///
 /// # Examples
 ///
 /// ```
 /// # use treemd::parser::utils::strip_markdown_inline;
 /// assert_eq!(strip_markdown_inline("**bold** text"), "bold text");
 /// assert_eq!(strip_markdown_inline("`code` here"), "code here");
+/// assert_eq!(strip_markdown_inline("snake_case_var"), "snake_case_var");
 /// ```
 pub fn strip_markdown_inline(text: &str) -> String {
-    text.replace("**", "")
-        .replace("*", "")
-        .replace("`", "")
-        .replace("~~", "")
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+    let patterns = PATTERNS.get_or_init(|| {
+        vec![
+            (Regex::new(r"~~(.+?)~~").unwrap(), "$1"),
+            (Regex::new(r"\*\*(.+?)\*\*").unwrap(), "$1"),
+            (Regex::new(r"__(.+?)__").unwrap(), "$1"),
+            (Regex::new(r"`([^`]+)`").unwrap(), "$1"),
+            (Regex::new(r"\*(.+?)\*").unwrap(), "$1"),
+            (
+                Regex::new(r"(^|[^a-zA-Z0-9])_([^_]+)_([^a-zA-Z0-9]|$)").unwrap(),
+                "$1$2$3",
+            ),
+        ]
+    });
+
+    let mut result = text.to_string();
+    for (pattern, replacement) in patterns {
+        result = pattern.replace_all(&result, *replacement).to_string();
+    }
+    result
 }
 
 /// Extract the heading level from a line of markdown text.
@@ -63,13 +86,20 @@ mod tests {
     #[test]
     fn test_strip_markdown_inline() {
         assert_eq!(strip_markdown_inline("**bold**"), "bold");
+        assert_eq!(strip_markdown_inline("__bold__"), "bold");
         assert_eq!(strip_markdown_inline("*italic*"), "italic");
+        assert_eq!(strip_markdown_inline("_italic_"), "italic");
         assert_eq!(strip_markdown_inline("`code`"), "code");
-        assert_eq!(strip_markdown_inline("~~strike~~"), "strike");
+        assert_eq!(strip_markdown_inline("~~strikethrough~~"), "strikethrough");
+        assert_eq!(strip_markdown_inline("**bold** and *italic*"), "bold and italic");
+        assert_eq!(strip_markdown_inline("**_bold italic_**"), "bold italic");
+        assert_eq!(strip_markdown_inline("*`code in italic`*"), "code in italic");
         assert_eq!(
             strip_markdown_inline("**turbocli-parser** (850 LOC)"),
             "turbocli-parser (850 LOC)"
         );
+        assert_eq!(strip_markdown_inline("snake_case_var"), "snake_case_var");
+        assert_eq!(strip_markdown_inline("plain text"), "plain text");
     }
 
     #[test]
