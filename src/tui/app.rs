@@ -239,6 +239,7 @@ pub struct App {
     pub theme: Theme,
     pub show_theme_picker: bool,
     pub theme_picker_selected: usize,
+    pub theme_picker_original: Option<ThemeName>, // Original theme before picker opened (for cancel)
     previous_selection: Option<String>, // Track previous selection to detect changes
 
     // Link following state
@@ -394,6 +395,7 @@ impl App {
             theme,
             show_theme_picker: false,
             theme_picker_selected: 0,
+            theme_picker_original: None,
             previous_selection: None,
 
             // Link following state
@@ -1959,9 +1961,15 @@ impl App {
     }
 
     pub fn toggle_theme_picker(&mut self) {
-        self.show_theme_picker = !self.show_theme_picker;
         if self.show_theme_picker {
-            // Set selected to current theme when opening
+            // Closing picker - restore original theme if set (user pressed Esc)
+            if let Some(original) = self.theme_picker_original.take() {
+                self.apply_theme_preview(original);
+            }
+            self.show_theme_picker = false;
+        } else {
+            // Opening picker - store current theme and set selection
+            self.theme_picker_original = Some(self.current_theme);
             self.theme_picker_selected = match self.current_theme {
                 ThemeName::OceanDark => 0,
                 ThemeName::Nord => 1,
@@ -1972,23 +1980,13 @@ impl App {
                 ThemeName::TokyoNight => 6,
                 ThemeName::CatppuccinMocha => 7,
             };
+            self.show_theme_picker = true;
         }
     }
 
-    pub fn theme_picker_next(&mut self) {
-        if self.theme_picker_selected < 7 {
-            self.theme_picker_selected += 1;
-        }
-    }
-
-    pub fn theme_picker_previous(&mut self) {
-        if self.theme_picker_selected > 0 {
-            self.theme_picker_selected -= 1;
-        }
-    }
-
-    pub fn apply_selected_theme(&mut self) {
-        let new_theme = match self.theme_picker_selected {
+    /// Convert theme picker selection index to ThemeName
+    fn theme_name_from_index(idx: usize) -> ThemeName {
+        match idx {
             0 => ThemeName::OceanDark,
             1 => ThemeName::Nord,
             2 => ThemeName::Dracula,
@@ -1998,17 +1996,42 @@ impl App {
             6 => ThemeName::TokyoNight,
             7 => ThemeName::CatppuccinMocha,
             _ => ThemeName::OceanDark,
-        };
+        }
+    }
 
-        self.current_theme = new_theme;
-        // Apply color mode when setting theme (also apply custom colors from config)
-        self.theme = Theme::from_name(new_theme)
-            .with_color_mode(self.color_mode, new_theme)
+    /// Apply a theme preview (doesn't save to config)
+    fn apply_theme_preview(&mut self, theme_name: ThemeName) {
+        self.current_theme = theme_name;
+        self.theme = Theme::from_name(theme_name)
+            .with_color_mode(self.color_mode, theme_name)
             .with_custom_colors(&self.config.theme, self.color_mode);
+    }
+
+    pub fn theme_picker_next(&mut self) {
+        if self.theme_picker_selected < 7 {
+            self.theme_picker_selected += 1;
+            // Apply theme preview immediately
+            let theme_name = Self::theme_name_from_index(self.theme_picker_selected);
+            self.apply_theme_preview(theme_name);
+        }
+    }
+
+    pub fn theme_picker_previous(&mut self) {
+        if self.theme_picker_selected > 0 {
+            self.theme_picker_selected -= 1;
+            // Apply theme preview immediately
+            let theme_name = Self::theme_name_from_index(self.theme_picker_selected);
+            self.apply_theme_preview(theme_name);
+        }
+    }
+
+    pub fn apply_selected_theme(&mut self) {
+        // Theme is already applied via preview, just save to config and close
+        self.theme_picker_original = None; // Clear so toggle doesn't restore
         self.show_theme_picker = false;
 
         // Save to config (silently ignore errors)
-        let _ = self.config.set_theme(new_theme);
+        let _ = self.config.set_theme(self.current_theme);
     }
 
     pub fn copy_content(&mut self) {
