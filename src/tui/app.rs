@@ -2965,7 +2965,8 @@ impl App {
                     .trim();
 
                 // Check if this matches our target checkbox
-                if line_text == clean_text {
+                let stripped_line_text = crate::parser::utils::strip_markdown_inline(line_text);
+                if stripped_line_text == clean_text {
                     // Toggle the checkbox
                     let new_line = if current_checked {
                         // Change [x] or [X] to [ ]
