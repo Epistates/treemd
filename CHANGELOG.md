@@ -7,20 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] - 2025-12-11
 
+### Added
+
+- **Customizable keybindings system** - Full keybinding customization via config file
+  - Configure any key for any action using intuitive TOML syntax
+  - Multi-key sequences supported (e.g., `"g g" = "First"`)
+  - 12 distinct modes: Normal, Help, ThemePicker, Interactive, InteractiveTable, LinkFollow, LinkSearch, Search, DocSearch, CommandPalette, ConfirmDialog, CellEdit
+  - 70+ bindable actions covering all application functionality
+  - Uses [keybinds-rs](https://crates.io/crates/keybinds) for robust key parsing
+  - Built-in defaults following vim conventions
+  - Example configuration:
+    ```toml
+    [keybindings.Normal]
+    "j" = "Next"
+    "k" = "Previous"
+    "Ctrl+c" = "Quit"
+    "g g" = "First"  # Multi-key sequences!
+
+    [keybindings.Interactive]
+    "Escape" = "ExitInteractiveMode"
+    ```
+
+- **Unified search system** - Consistent search experience across outline and content
+  - Press `s` to search/filter the outline tree
+  - Press `/` to search document content
+  - Press `Tab` to toggle between outline and content search (preserving query)
+  - Both modes highlight matches with themeable colors
+  - `n`/`N` navigate matches in both modes after pressing Enter
+  - Visual search bar with cursor and clear mode indicator
+
+- **Open links from search** - Follow links directly from document search results
+  - When search matches a link, press Enter to follow it
+  - Works with anchor links, file links, wikilinks, and external URLs
+
+- **Open editor at location** - Jump to specific line when editing
+  - Press `e` to open current file at the selected heading's line number
+  - Uses [opensesame](https://crates.io/crates/opensesame) for cross-editor line support
+  - Works with VS Code, vim, neovim, emacs, and most editors
+
+- **Themeable search highlighting** - Customize search match colors in config
+  - `search_match_bg` / `search_match_fg` for matches
+  - `search_current_bg` / `search_current_fg` for focused match
+  - Works consistently in both outline and content views
+
+### Changed
+
+- **Parser rewrite using turbovault** - Switched to turbovault-parser for markdown parsing
+  - More robust handling of complex nested structures
+  - Better performance on large documents
+  - Improved code block detection in list items
+  - Proper handling of inline formatting in all contexts
+
 ### Fixed
+
+- **Checkbox toggle with inline markdown** - Fixed toggling checkboxes when task items contain inline formatting ([PR #38](https://github.com/Epistates/treemd/pull/38) by @viniciussoares)
+  - Checkboxes with bold, italic, code, or links now toggle correctly
+  - Uses regex-based markdown stripping instead of brittle character parsing
+  - Example: `- [x] **Important** task` now works properly
 
 - **Query engine missing code blocks in list items** - Code blocks nested inside numbered/bulleted list items are now correctly extracted for queries
   - Queries like `.code` and `.code[pattern]` now find code blocks inside list items
   - Also extracts images and tables nested within list items
   - Recursively extracts from blockquotes and details blocks as well
-  - Example: Installation instructions with indented code blocks are now queryable
+
+- **Nested code blocks in lists** - Code blocks inside list items now render correctly
+  - Fixed indentation detection for nested blocks
+  - Proper syntax highlighting maintained
+
+- **Interactive element parsing** - Fixed element detection after parser rewrite
+  - All interactive elements (checkboxes, tables, code blocks, links) correctly indexed
+
+- **Wikilink resolution** - Fixed wikilinks with path separators
+  - `[[docs/guide]]` now correctly resolves to `docs/guide.md`
+
+- **Search mode stability** - Fixed various search mode issues
+  - Backspace, Escape, Enter all work correctly in search modes
+  - Ctrl+U clears search query
+  - Search state properly preserved when toggling between modes
 
 ### Technical
 
+- **Keybindings module** (`src/keybindings/`)
+  - `action.rs` - 70+ actions with descriptive names and categories
+  - `defaults.rs` - Built-in vim-style defaults for all modes
+  - `mod.rs` - `Keybindings` struct wrapping keybinds-rs with mode dispatch
+  - Actions serializable for config file persistence
+
+- **Parser refactoring** (`src/parser/`)
+  - Migrated from pulldown-cmark to turbovault-parser 1.2.3
+  - Simplified content.rs from ~1000 lines to focused wrapper
+  - Better link extraction with improved anchor handling
+
+- **Search infrastructure** (`src/tui/`)
+  - `outline_search_active` and `doc_search_active` for input state tracking
+  - `toggle_search_mode()` for seamless Tab switching
+  - Shared highlighting utilities in `ui/util.rs`
+
 - **Recursive block extraction** (`src/query/eval.rs`)
-  - Added `extract_nested_blocks()` helper function for recursive extraction
-  - `extract_blocks()` now descends into `Block::List`, `Block::Blockquote`, and `Block::Details`
-  - Maintains flat index of code blocks, images, and tables for efficient querying
+  - Added `extract_nested_blocks()` helper function
+  - `extract_blocks()` now descends into List, Blockquote, and Details blocks
+
+### Dependencies
+
+- Added `keybinds = "0.2"` with crossterm and serde features
+- Added `strum = "0.27"` for action enum iteration
+- Added `opensesame = "0.1"` for editor line positioning
+- Updated `turbovault-parser = "1.2.3"` (replaces direct pulldown-cmark usage)
 
 ## [0.4.8] - 2025-12-07
 

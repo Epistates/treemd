@@ -5,49 +5,82 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/epistates/treemd/rust.yml?branch=main)](https://github.com/epistates/treemd/actions)
 
-A markdown navigator with tree-based structural navigation. Like `tree`, but interactive—navigate markdown documents using an expandable/collapsible heading tree with a synchronized content view.
+A markdown navigator with tree-based structural navigation. Like the `tree` command, but interactive—navigate markdown documents using an expandable/collapsible heading tree with a synchronized content view.
 
-<img src="assets/screenshot.webp" alt="treemd" style="width: 100%; max-width: 100%; margin: 20px 0;"/>
+<img src="assets/screenshot.webp" alt="treemd screenshot showing dual-pane interface" style="width: 100%; max-width: 100%; margin: 20px 0;"/>
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+  - [Interactive TUI](#interactive-tui)
+  - [CLI Mode](#cli-mode)
+- [Installation](#installation)
+- [Usage](#usage)
+  - [TUI Mode](#tui-mode-interactive)
+  - [CLI Mode](#cli-mode-non-interactive)
+  - [Query Language](#query-language)
+- [Releases](#releases)
+- [Configuration](#configuration)
+  - [Basic Settings](#basic-configuration)
+  - [Custom Keybindings](#custom-keybindings)
+  - [Custom Theme Colors](#custom-theme-colors)
+- [Contributing](#contributing)
+- [Roadmap](#roadmap)
+- [Why treemd?](#why-treemd)
+- [Similar Tools](#similar-tools)
+- [License](#license)
 
 ## Overview
 
-**treemd** is a modern markdown viewer that combines the structural clarity of the `tree` command with powerful interactive navigation. Whether you're exploring large documentation files, analyzing markdown structure, or just reading comfortably in your terminal, treemd provides both CLI tools for scripting and a beautiful TUI for interactive exploration.
+**treemd** is a modern markdown viewer that combines the structural clarity of the `tree` command with powerful interactive navigation. Whether you're exploring large documentation files, analyzing markdown structure, or reading comfortably in your terminal, treemd provides both CLI tools for scripting and a beautiful TUI for interactive exploration.
+
+Use it to:
+- **Navigate** large documents by collapsing/expanding heading sections
+- **Search** headings or full document content with highlighted matches
+- **Edit** tables, toggle checkboxes, and follow links—all without leaving the terminal
+- **Extract** specific sections or query markdown elements with a [jq](https://jqlang.github.io/jq/)-like syntax
+- **Pipe** markdown from stdin for shell-scripted workflows
 
 ## Features
 
 ### Interactive TUI
 
-- **Dual-pane interface** - Navigate outline while viewing content
-- **Interactive mode** - Navigate, edit, and interact with all markdown elements (tables, checkboxes, links, code blocks)
-- **Table navigation & editing** - Navigate cells with vim keys (`hjkl`), edit cell content in-place, copy cells/rows/tables
-- **Checkbox toggling** - Toggle task list items with instant file updates
-- **Live editing** - Edit files in default editor with auto-reload (respects `$VISUAL`/`$EDITOR`)
-- **Link following** - Follow markdown links with visual popup, supports anchor/file/wikilink/external URLs
-- **Navigation history** - Back/forward between files with full state preservation
-- **Syntax highlighting** - 50+ languages with full syntect integration
-- **Vim-style navigation** - `j`/`k`, `g`/`G`, `d`/`u`, `p` (parent) for efficient browsing
-- **Search & filter** - Press `/` to filter headings or search document content with `n/N` navigation
-- **Collapsible tree** - Expand/collapse sections with `Space`/`Enter`
-- **Bookmarks** - Mark positions (`m`) and jump back (`'`)
-- **Adjustable layout** - Toggle outline visibility, resize panes
-- **Rich rendering** - Bold, italic, inline code, lists, blockquotes, code blocks, tables with box-drawing characters
+| Feature | Description |
+|---------|-------------|
+| **Dual-pane interface** | Navigate the outline while viewing synchronized content |
+| **Interactive mode** | Navigate, edit, and interact with tables, checkboxes, links, and code blocks |
+| **Table editing** | Navigate cells with vim keys (`hjkl`), edit in-place, copy cells/rows/tables |
+| **Checkbox toggling** | Toggle task list items with instant file updates |
+| **Live editing** | Open files in your editor with auto-reload (respects `$VISUAL`/`$EDITOR`) |
+| **Link following** | Follow markdown links via visual popup—supports anchors, files, wikilinks, and URLs |
+| **Navigation history** | Go back/forward between files with full state preservation |
+| **Syntax highlighting** | 50+ languages via [syntect](https://crates.io/crates/syntect) |
+| **Vim-style navigation** | `j`/`k`, `g`/`G`, `d`/`u`, `p` (parent) |
+| **Search & filter** | Filter headings (`s`) or search content (`/`) with `n`/`N` navigation |
+| **Collapsible tree** | Expand/collapse sections with `Space`/`Enter` |
+| **Bookmarks** | Mark positions (`m`) and jump back (`'`) |
+| **8 color themes** | Nord, Dracula, Solarized, Monokai, Gruvbox, Tokyo Night, Catppuccin Mocha, Ocean Dark |
+| **Customizable keybindings** | Remap any key via [config file](#custom-keybindings) |
 
 ### CLI Mode
 
-- **Query language** - jq-like syntax for extracting markdown elements (`-q '.h2 | text'`)
-- **List headings** - Quick overview of document structure
-- **Tree visualization** - Hierarchical display with box-drawing
-- **Section extraction** - Extract specific sections by heading name
-- **Smart filtering** - Filter by text or heading level
-- **Multiple formats** - Plain text, JSON output
-- **Statistics** - Count headings by level
-- **Stdin support** - Pipe markdown content (`cat doc.md | treemd -q '.h'`)
+| Feature | Description |
+|---------|-------------|
+| **[Query language](#query-language)** | jq-like syntax for extracting markdown elements |
+| **List headings** | Quick overview with `-l` |
+| **Tree visualization** | Hierarchical display with `--tree` |
+| **Section extraction** | Extract by heading name with `-s` |
+| **Smart filtering** | Filter by text or level (`--filter`, `-L`) |
+| **Multiple formats** | Plain text or JSON output (`-o json`) |
+| **Statistics** | Count headings by level (`--count`) |
+| **Stdin support** | Pipe markdown content (`cat doc.md \| treemd -q '.h'`) |
 
-**treemd** is incredibly powerful as a CLI utility. Using the `--tree` visualizations with `--section` enables rapid piecewise consumption of even the largest `.md` files. The query language brings jq-like power to markdown extraction.
+**Pro tip:** Combine `--tree` with `--section` for rapid navigation of large files. The query language brings [jq](https://jqlang.github.io/jq/)-like power to markdown extraction.
 
 ## Installation
 
-### From crates.io
+### From [crates.io](https://crates.io/crates/treemd)
 
 ```bash
 cargo install treemd
@@ -61,135 +94,139 @@ cd treemd
 cargo install --path .
 ```
 
-### Using a package manager
+### Package managers
 
-`treemd` is available as a native package on Arch Linux and NetBSD.
-
-**Arch Linux ([`extra`](https://archlinux.org/packages/extra/x86_64/treemd/) repo):**
-
-```bash
-pacman -S treemd
-```
-
-**NetBSD:**
-
-```bash
-pkgin install treemd
-```
-
-[Homebrew](https://brew.sh) hosts precompiled binaries for macOS and Linux.
-To install it, simply run:
-
+**[Homebrew](https://brew.sh)** (macOS/Linux):
 ```bash
 brew install treemd
 ```
 
+**[Arch Linux](https://archlinux.org/packages/extra/x86_64/treemd/)** (`extra` repo):
+```bash
+pacman -S treemd
+```
+
+**[NetBSD](https://pkgsrc.se/textproc/treemd)**:
+```bash
+pkgin install treemd
+```
+
 ## Usage
 
-### TUI Mode (Interactive - Default)
+### TUI Mode (Interactive)
 
-Simply run treemd without flags to launch the interactive interface:
+Launch the interactive interface by running treemd with a file:
 
 ```bash
 treemd README.md
 ```
 
-**Keyboard Shortcuts:**
+#### Keyboard Shortcuts
 
-*Navigation:*
-- `j/k` or `↓/↑` - Navigate up/down
-- `g/G` - Jump to top/bottom
-- `p` - Jump to parent heading
-- `d/u` - Page down/up (in content)
-- `Tab` - Switch between outline and content
-- `1-9` - Jump to heading 1-9 (instant access)
+<details>
+<summary><strong>Navigation</strong></summary>
 
-*Tree Operations:*
-- `Enter/Space` - Toggle expand/collapse
-- `h/l` or `←/→` - Collapse/expand heading
+| Key | Action |
+|-----|--------|
+| `j` / `k` or `↓` / `↑` | Move down/up |
+| `g` / `G` | Jump to top/bottom |
+| `p` | Jump to parent heading |
+| `d` / `u` | Page down/up |
+| `Tab` | Switch focus between outline and content |
+| `1`-`9` | Jump to heading by number |
 
-*UX Features:*
-- `w` - Toggle outline visibility (full-width content)
-- `[` `]` - Decrease/increase outline width (20%, 30%, 40%)
-- `m` - Set bookmark at current position
-- `'` - Jump to bookmarked position
+</details>
 
-*Link Following:*
-- `f` - Enter link follow mode (shows popup with all links)
-- `Tab`/`Shift+Tab` - Navigate through links
-- `j/k` or `↓/↑` - Navigate links (in link mode)
-- `1-9` - Jump directly to link by number
-- `p` - Jump to parent heading's links (stays in link mode)
-- `Enter` - Follow selected link (opens browser, loads file, or jumps to anchor)
-- `b`/`Backspace` - Go back to previous file
-- `Shift+F` - Go forward in navigation history
-- `Esc` - Exit link follow mode
+<details>
+<summary><strong>Tree Operations</strong></summary>
 
-*Interactive Mode:*
-- `i` - Enter interactive mode (navigate all interactive elements)
-- `Tab`/`j`/`k` or `↓/↑` - Navigate between elements
-- `Enter` - Activate element (toggle checkbox, follow link, enter table mode)
-- `Space` - Toggle checkboxes or details blocks
-- `y` - Copy element content (code blocks, table cells, links)
-- `Esc` - Exit interactive mode
+| Key | Action |
+|-----|--------|
+| `Enter` / `Space` | Toggle expand/collapse |
+| `h` / `l` or `←` / `→` | Collapse/expand heading |
+| `w` | Toggle outline visibility |
+| `[` / `]` | Adjust outline width (20%, 30%, 40%) |
 
-*Table Navigation (in interactive mode):*
-- `Enter` on table - Enter table navigation mode
-- `h`/`j`/`k`/`l` or arrow keys - Navigate table cells
-- `y` - Copy current cell content
-- `Y` - Copy current row (tab-separated)
-- `r` - Copy entire table as markdown
-- `Enter` on cell - Edit cell content
-- `Esc` - Exit table navigation mode
+</details>
 
-*Editing & System:*
-- `e` - Edit current file in default editor (respects `$VISUAL` or `$EDITOR`)
-- `t` - Cycle color theme
-- `y` - Copy current section content to clipboard
-- `Y` - Copy anchor link to clipboard
+<details>
+<summary><strong>Search</strong></summary>
 
-*Search & Help:*
-- `/` - Search (in outline: filter headings; in content: search text)
-- `n/N` - Next/previous search match (in content search)
-- `?` - Toggle help overlay
-- `q/Esc` - Quit
+| Key | Action |
+|-----|--------|
+| `s` | Search/filter headings in outline |
+| `/` | Search document content |
+| `Tab` (in search) | Toggle between outline and content search |
+| `n` / `N` | Next/previous match |
+| `Esc` | Exit search mode |
 
-**Interface Features:**
-- **Live editing** - Edit files in your default editor and auto-reload (press `e`)
-- **Interactive mode** - Navigate and interact with all markdown elements (press `i`)
-- **Table editing** - Navigate cells with vim keys, edit cell content in-place
-- **Checkbox toggling** - Toggle task list items and save changes to file
-- **Link following popup** - Visual navigator shows all links with highlighting (press `f`)
-- **Multi-file navigation** - Load files via links with full history (back/forward)
-- **External URL opening** - Opens links in default browser automatically
-- **Syntax-highlighted code blocks** - 50+ languages supported
-- **Inline formatting** - Bold, italic, inline code with colors
-- **Real-time search** - Filter headings or search content with highlighted matches (press `/`)
-- **Toggle outline** - Hide for full-width reading (press `w`)
-- **Adjustable layout** - Resize outline 20%/30%/40% (press `[` `]`)
-- **Quick navigation** - Jump to any heading 1-9 instantly, parent with `p`
-- **Bookmarks** - Mark and return to positions (press `m` and `'`)
-- **Color-coded headings** - 5 distinct levels
-- **Scrollbars** - Position indicators on both panes
-- **Smart status bar** - Shows position, link details, navigation history
-- **Help overlay** - Always available (press `?`)
+</details>
+
+<details>
+<summary><strong>Link Following</strong></summary>
+
+| Key | Action |
+|-----|--------|
+| `f` | Enter link follow mode |
+| `Tab` / `Shift+Tab` | Navigate links |
+| `1`-`9` | Jump to link by number |
+| `Enter` | Follow selected link |
+| `b` / `Backspace` | Go back |
+| `F` (Shift+F) | Go forward |
+| `Esc` | Exit link mode |
+
+</details>
+
+<details>
+<summary><strong>Interactive Mode</strong></summary>
+
+| Key | Action |
+|-----|--------|
+| `i` | Enter interactive mode |
+| `Tab` / `j` / `k` | Navigate elements |
+| `Enter` | Activate element |
+| `Space` | Toggle checkboxes/details |
+| `y` | Copy content |
+| `Esc` | Exit interactive mode |
+
+</details>
+
+<details>
+<summary><strong>Table Navigation</strong> (within interactive mode)</summary>
+
+| Key | Action |
+|-----|--------|
+| `h` / `j` / `k` / `l` | Navigate cells |
+| `y` | Copy cell |
+| `Y` | Copy row |
+| `r` | Copy table as markdown |
+| `Enter` | Edit cell |
+| `Esc` | Exit table mode |
+
+</details>
+
+<details>
+<summary><strong>Editing & System</strong></summary>
+
+| Key | Action |
+|-----|--------|
+| `e` | Edit file in `$VISUAL` or `$EDITOR` |
+| `t` | Cycle color theme |
+| `y` | Copy current section |
+| `Y` | Copy anchor link |
+| `m` | Set bookmark |
+| `'` | Jump to bookmark |
+| `?` | Toggle help overlay |
+| `q` / `Esc` | Quit |
+
+</details>
 
 ### CLI Mode (Non-Interactive)
 
-#### List all headings
+#### List headings
 
 ```bash
 treemd -l README.md
-```
-
-Output:
-```
-# treemd
-## Features
-### Phase 1: CLI Mode
-### Phase 2: TUI Mode
-## Installation
-...
 ```
 
 #### Show heading tree
@@ -198,295 +235,220 @@ Output:
 treemd --tree README.md
 ```
 
-Output:
-```
-└─ # treemd
-    ├─ ## Features
-    │   ├─ ### Phase 1: CLI Mode
-    │   └─ ### Phase 2: TUI Mode
-    ├─ ## Installation
-    ...
-```
-
 #### Extract a section
 
 ```bash
 treemd -s "Installation" README.md
 ```
 
-Output:
-```
-## Installation
-
-cargo install --path .
-...
-```
-
-#### Filter headings
+#### Filter and level options
 
 ```bash
-treemd -l --filter "usage" README.md
+treemd -l --filter "usage" README.md    # Filter by text
+treemd -l -L 2 README.md                # Only ## headings
 ```
 
-#### Show only specific heading level
+#### Count and JSON output
 
 ```bash
-treemd -l -L 2 README.md  # Only ## headings
-```
-
-#### Count headings
-
-```bash
-treemd --count README.md
-```
-
-Output:
-```
-Heading counts:
-  #: 1
-  ##: 5
-  ###: 6
-
-Total: 12
-```
-
-#### JSON output
-
-```bash
-treemd -l -o json README.md
+treemd --count README.md                # Count by level
+treemd -l -o json README.md             # JSON output
 ```
 
 ### Query Language
 
-treemd includes a powerful jq-like query language for extracting and filtering markdown elements. Use `-q` to execute queries and `--query-help` for full documentation.
+treemd includes a powerful [jq](https://jqlang.github.io/jq/)-like query language for extracting markdown elements. Use `-q` to execute queries and `--query-help` for full documentation.
 
 #### Element Selectors
 
 ```bash
-# All headings
-treemd -q '.h' doc.md
-
-# Specific heading levels
-treemd -q '.h2' doc.md
-
-# Code blocks, links, images, tables
-treemd -q '.code' doc.md
-treemd -q '.link' doc.md
-treemd -q '.img' doc.md
-treemd -q '.table' doc.md
+treemd -q '.h' doc.md         # All headings
+treemd -q '.h2' doc.md        # Level 2 headings
+treemd -q '.code' doc.md      # Code blocks
+treemd -q '.link' doc.md      # Links
+treemd -q '.img' doc.md       # Images
+treemd -q '.table' doc.md     # Tables
 ```
 
 #### Filters and Indexing
 
 ```bash
-# Fuzzy text filter
-treemd -q '.h2[Features]' doc.md
-
-# Exact text match
-treemd -q '.h2["Installation"]' doc.md
-
-# By index (first, last, slice)
-treemd -q '.h2[0]' doc.md
-treemd -q '.h2[-1]' doc.md
-treemd -q '.h2[1:3]' doc.md
-
-# Code blocks by language
-treemd -q '.code[rust]' doc.md
-treemd -q '.code[python]' doc.md
+treemd -q '.h2[Features]' doc.md       # Fuzzy match
+treemd -q '.h2["Installation"]' doc.md # Exact match
+treemd -q '.h2[0]' doc.md              # First h2
+treemd -q '.h2[-1]' doc.md             # Last h2
+treemd -q '.h2[1:3]' doc.md            # Slice
+treemd -q '.code[rust]' doc.md         # By language
 ```
 
 #### Pipes and Functions
 
 ```bash
-# Get heading text (strips ## prefix)
-treemd -q '.h2 | text' doc.md
-
-# Count elements
-treemd -q '[.h2] | count' doc.md
-
-# First/last n elements
-treemd -q '[.h] | limit(5)' doc.md
-treemd -q '[.h] | skip(2) | limit(3)' doc.md
-
-# Filter with conditions (three equivalent ways)
-treemd -q '.h | select(contains("API"))' doc.md
-treemd -q '.h | where(contains("API"))' doc.md
-treemd -q '.h[API]' doc.md
-
-# String transformations
-treemd -q '.h2 | text | upper' doc.md
-treemd -q '.h2 | text | slugify' doc.md
-
-# Get URLs from links
-treemd -q '.link | url' doc.md
-treemd -q '.link[external] | url' doc.md
-
-# Code block languages
-treemd -q '.code | lang' doc.md
+treemd -q '.h2 | text' doc.md                    # Get text (strips ##)
+treemd -q '[.h2] | count' doc.md                 # Count elements
+treemd -q '[.h] | limit(5)' doc.md               # First 5
+treemd -q '.h | select(contains("API"))' doc.md  # Filter
+treemd -q '.h2 | text | slugify' doc.md          # URL slug
+treemd -q '.link | url' doc.md                   # Extract URLs
 ```
 
 #### Hierarchy Operators
 
 ```bash
-# Direct children (h2s under h1)
-treemd -q '.h1 > .h2' doc.md
-
-# All descendants (code anywhere under h1)
-treemd -q '.h1 >> .code' doc.md
-
-# Combined with filters
-treemd -q '.h1[Features] > .h2' doc.md
+treemd -q '.h1 > .h2' doc.md           # Direct children
+treemd -q '.h1 >> .code' doc.md        # All descendants
+treemd -q '.h1[Features] > .h2' doc.md # Combined
 ```
 
-#### Aggregation and Grouping
+#### Aggregation
 
 ```bash
-# Document statistics
-treemd -q '. | stats' doc.md
-
-# Heading counts by level
-treemd -q '. | levels' doc.md
-
-# Code blocks by language
-treemd -q '. | langs' doc.md
-
-# Group headings by level
-treemd -q '[.h] | group_by("level")' doc.md
+treemd -q '. | stats' doc.md           # Document statistics
+treemd -q '. | levels' doc.md          # Heading counts by level
+treemd -q '. | langs' doc.md           # Code blocks by language
 ```
 
 #### Output Formats
 
 ```bash
-# Plain text (default)
-treemd -q '.h2' doc.md
-
-# JSON
-treemd -q '.h2' --query-output json doc.md
-
-# Pretty JSON
-treemd -q '.h2' --query-output json-pretty doc.md
-
-# Line-delimited JSON
-treemd -q '.h2' --query-output jsonl doc.md
+treemd -q '.h2' --query-output json doc.md        # JSON
+treemd -q '.h2' --query-output json-pretty doc.md # Pretty JSON
+treemd -q '.h2' --query-output jsonl doc.md       # JSON Lines
 ```
 
 #### Stdin Support
 
 ```bash
-# Pipe markdown content
 cat doc.md | treemd -q '.h2'
-
-# Pipe from other commands
 curl -s https://raw.githubusercontent.com/.../README.md | treemd -q '.h'
-
-# Tree output to treemd (with TUI)
-tree | treemd
-
-# Explicit stdin
-treemd -q '.code' -
+tree | treemd                          # Pipe tree output to TUI
 ```
 
-For complete documentation: `treemd --query-help`
+Run `treemd --query-help` for complete documentation.
 
 ## Releases
 
-### Cross-Platform Binaries
+### Pre-built Binaries
 
-Pre-built binaries for multiple platforms are available on the [releases page](https://github.com/epistates/treemd/releases). Supported platforms:
+Download from the [releases page](https://github.com/epistates/treemd/releases):
 
-- **Linux x86_64** - `treemd-x86_64-unknown-linux-gnu`
-- **Linux ARM64** - `treemd-aarch64-unknown-linux-gnu`
-- **macOS x86_64** - `treemd-x86_64-apple-darwin`
-- **macOS ARM64** (Apple Silicon) - `treemd-aarch64-apple-darwin`
-- **Windows x86_64** - `treemd-x86_64-pc-windows-msvc.exe`
+| Platform | Binary |
+|----------|--------|
+| Linux x86_64 | `treemd-x86_64-unknown-linux-gnu` |
+| Linux ARM64 | `treemd-aarch64-unknown-linux-gnu` |
+| macOS x86_64 | `treemd-x86_64-apple-darwin` |
+| macOS ARM64 (Apple Silicon) | `treemd-aarch64-apple-darwin` |
+| Windows x86_64 | `treemd-x86_64-pc-windows-msvc.exe` |
+
+**macOS binaries** are signed with Developer ID and notarized by Apple.
 
 ### Building from Source
 
-To build binaries locally for all platforms (requires `cross` for Linux ARM targets):
-
 ```bash
-# Install cross for Linux ARM support
-cargo install cross
-
-# Build all platforms
-./scripts/build-all.sh
+cargo install cross              # For ARM cross-compilation
+./scripts/build-all.sh           # Build all platforms
 ```
 
-Artifacts will be in `target/release-artifacts/`.
-
-#### Code Signing
-
-**macOS:** Pre-built binaries are signed with Developer ID and notarized by Apple, so you won't see any Gatekeeper warnings.
-
-**Linux & Windows:** Binaries are provided as-is. These are standard CLI tools that work on all systems.
+Artifacts are output to `target/release-artifacts/`.
 
 ## Configuration
 
-treemd supports persistent configuration through a TOML file located at:
-- **Linux/Unix**: `~/.config/treemd/config.toml`
-- **macOS**: `~/Library/Application Support/treemd/config.toml`
-- **Windows**: `%APPDATA%\treemd\config.toml`
+treemd stores configuration in a TOML file:
 
-The configuration file is created automatically when you change settings (like theme selection with `t` or outline width with `[` `]`).
+| Platform | Location |
+|----------|----------|
+| Linux/Unix | `~/.config/treemd/config.toml` |
+| macOS | `~/Library/Application Support/treemd/config.toml` |
+| Windows | `%APPDATA%\treemd\config.toml` |
+
+The file is created automatically when you change settings (theme with `t`, outline width with `[`/`]`).
 
 ### Basic Configuration
 
 ```toml
 [ui]
-theme = "Nord"              # Selected base theme
-outline_width = 30          # Outline panel width (20, 30, or 40)
+theme = "Nord"         # OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
+outline_width = 30     # 20, 30, or 40
 
 [terminal]
-color_mode = "auto"         # Color mode: "auto", "rgb", or "256"
-warned_terminal_app = false # Whether Terminal.app warning was shown
+color_mode = "auto"    # "auto", "rgb", or "256"
 ```
+
+### Custom Keybindings
+
+Remap any key for any mode using intuitive TOML syntax. Multi-key sequences are supported.
+
+```toml
+[keybindings.Normal]
+"j" = "Next"
+"k" = "Previous"
+"Ctrl+c" = "Quit"
+"g g" = "First"          # Multi-key sequence
+
+[keybindings.Interactive]
+"Escape" = "ExitInteractiveMode"
+"Tab" = "InteractiveNext"
+
+[keybindings.Search]
+"Ctrl+n" = "NextMatch"
+"Ctrl+p" = "PrevMatch"
+```
+
+Available modes: `Normal`, `Help`, `ThemePicker`, `Interactive`, `InteractiveTable`, `LinkFollow`, `LinkSearch`, `Search`, `DocSearch`, `CommandPalette`, `ConfirmDialog`, `CellEdit`
+
+See the built-in defaults in [`src/keybindings/defaults.rs`](src/keybindings/defaults.rs) for all available actions.
 
 ### Custom Theme Colors
 
-You can override any color from your selected base theme by adding a `[theme]` section. This is perfect for personalizing your favorite theme or adapting it to your terminal's color scheme.
+Override any color from your base theme. Colors can be specified as:
 
-#### Color Format Options
-
-Colors can be specified in three formats:
-
-1. **Named colors**: `"Red"`, `"Cyan"`, `"White"`, `"DarkGray"`, etc.
-2. **RGB colors**: `{ rgb = [red, green, blue] }` (0-255 for each value)
-3. **Indexed colors**: `{ indexed = 235 }` (0-255 for 256-color palette)
-
-#### Available Color Fields
-
-All color fields are optional—only override what you want to change:
+- **Named**: `"Red"`, `"Cyan"`, `"White"`, `"DarkGray"`
+- **RGB**: `{ rgb = [255, 128, 0] }`
+- **Indexed**: `{ indexed = 235 }` (256-color palette)
 
 ```toml
 [ui]
-theme = "Nord"  # Start with Nord as base
+theme = "Nord"
 
 [theme]
-# Override specific colors while keeping the rest from Nord
-background = { rgb = [25, 25, 35] }        # Darker background
-foreground = { rgb = [220, 220, 230] }     # Lighter text
+background = { rgb = [25, 25, 35] }
+heading_1 = { rgb = [120, 200, 255] }
+heading_2 = "LightBlue"
+border_focused = "Cyan"
+search_match_bg = { rgb = [100, 100, 50] }
+search_match_fg = "White"
+```
+
+<details>
+<summary><strong>All available color fields</strong></summary>
+
+```toml
+[theme]
+# Background and text
+background = { rgb = [25, 25, 35] }
+foreground = { rgb = [220, 220, 230] }
 
 # Headings (5 levels)
-heading_1 = { rgb = [120, 200, 255] }      # Custom cyan
-heading_2 = "LightBlue"                     # Named color
-heading_3 = { indexed = 114 }               # 256-color palette
+heading_1 = { rgb = [120, 200, 255] }
+heading_2 = "LightBlue"
+heading_3 = { indexed = 114 }
 heading_4 = "Yellow"
 heading_5 = "Gray"
 
-# Borders and UI elements
-border_focused = "Cyan"                     # Active pane border
-border_unfocused = "DarkGray"               # Inactive pane border
-selection_bg = { rgb = [45, 45, 60] }       # Selection highlight
+# Borders and UI
+border_focused = "Cyan"
+border_unfocused = "DarkGray"
+selection_bg = { rgb = [45, 45, 60] }
 selection_fg = "White"
 
 # Status bar
 status_bar_bg = { rgb = [30, 30, 45] }
 status_bar_fg = { rgb = [200, 200, 210] }
 
-# Code styling
-inline_code_fg = { rgb = [255, 200, 100] }  # Inline `code` color
+# Code
+inline_code_fg = { rgb = [255, 200, 100] }
 inline_code_bg = { rgb = [40, 40, 50] }
-code_fence = { rgb = [150, 180, 200] }      # Code block fence
+code_fence = { rgb = [150, 180, 200] }
 
 # Text formatting
 bold_fg = "White"
@@ -498,109 +460,66 @@ blockquote_border = { rgb = [100, 100, 120] }
 blockquote_fg = { rgb = [150, 150, 170] }
 
 # Search highlighting
-search_match_bg = { rgb = [100, 100, 50] }    # Background for search matches
-search_match_fg = "White"                      # Text color for search matches
-search_current_bg = "Yellow"                   # Current/focused match background
-search_current_fg = "Black"                    # Current/focused match text
+search_match_bg = { rgb = [100, 100, 50] }
+search_match_fg = "White"
+search_current_bg = "Yellow"
+search_current_fg = "Black"
 ```
 
-#### Example: Dark Blue Custom Theme
-
-```toml
-[ui]
-theme = "OceanDark"  # Start with OceanDark
-
-[theme]
-# Make it even darker with more blue tint
-background = { rgb = [15, 18, 25] }
-foreground = { rgb = [200, 210, 220] }
-heading_1 = { rgb = [80, 180, 255] }
-heading_2 = { rgb = [100, 200, 255] }
-heading_3 = { rgb = [120, 220, 255] }
-selection_bg = { rgb = [30, 35, 50] }
-border_focused = { rgb = [80, 180, 255] }
-```
-
-#### Example: High Contrast
-
-```toml
-[ui]
-theme = "Dracula"
-
-[theme]
-# Maximize contrast for accessibility
-background = { rgb = [0, 0, 0] }
-foreground = { rgb = [255, 255, 255] }
-heading_1 = { rgb = [0, 255, 255] }       # Bright cyan
-heading_2 = { rgb = [255, 255, 0] }       # Bright yellow
-heading_3 = { rgb = [0, 255, 0] }         # Bright green
-border_focused = { rgb = [255, 0, 255] }  # Bright magenta
-selection_bg = { rgb = [50, 50, 50] }
-selection_fg = { rgb = [255, 255, 255] }
-```
-
-#### Color Application Order
-
-Colors are applied in this order:
-1. **Base theme** - One of 8 built-in themes (OceanDark, Nord, Dracula, etc.)
-2. **Custom overrides** - Your `[theme]` section colors (optional)
-3. **Color mode conversion** - Automatic RGB → 256-color on incompatible terminals
-
-This means your custom RGB colors will automatically degrade gracefully on terminals that don't support true color.
+</details>
 
 ### CLI Overrides
 
-You can override settings for a single session using command-line flags:
+Override settings for a single session:
 
 ```bash
-# Use a different theme for this session
 treemd --theme Dracula README.md
-
-# Force 256-color mode (useful for testing or screenshots)
 treemd --color-mode 256 README.md
-
-# Force RGB mode (override terminal detection)
 treemd --color-mode rgb README.md
 ```
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a [Pull Request](https://github.com/epistates/treemd/pulls).
 
 ## Roadmap
 
 **Completed:**
-- [x] Query language (jq-like syntax for markdown)
+- [x] Query language (jq-like syntax)
 - [x] Stdin/pipe support
-- [x] Multiple color themes (8 themes: Nord, Dracula, Solarized, etc.)
-- [x] Configuration file support
-- [x] Link following with navigation history
+- [x] 8 color themes
+- [x] Configuration file
+- [x] Link following with history
 - [x] WikiLinks support
+- [x] Customizable keybindings
+- [x] Live file watching (auto-reload)
 
 **Planned:**
-- Obsidian Flavored Markdown (callouts)
-- Fuzzy search improvements
-- Multiple file tabs
-- Watch mode (auto-reload on file change)
-- Custom function plugins for query language
+- [ ] Obsidian Flavored Markdown (callouts)
+- [ ] Fuzzy search improvements
+- [ ] Multiple file tabs
+- [ ] Custom query language plugins
 
 ## Why treemd?
 
-- **Tree-based navigation**: Unlike `less` or `cat`, treemd understands document structure and lets you explore it like a file tree
-- **Expandable outline**: Drill down into sections by collapsing/expanding headings—just like `tree` command
-- **Interactive TUI**: Beautiful dual-pane interface with vim-style navigation and synchronized scrolling
-- **CLI and TUI modes**: Use interactively for reading or in scripts for extraction/filtering
-- **Fast**: Built in Rust, optimized binary with syntax highlighting
-- **Rich rendering**: Color-coded headings, syntax-highlighted code blocks (50+ languages), styled inline formatting
-- **User-friendly**: Scrollbars, help overlays, bookmarks, and fuzzy search
+| Feature | treemd | [`less`](https://linux.die.net/man/1/less) | [`glow`](https://github.com/charmbracelet/glow) | [`bat`](https://github.com/sharkdp/bat) |
+|---------|--------|------|------|-----|
+| Tree-based navigation | Yes | No | No | No |
+| Interactive exploration | Yes | Limited | No | No |
+| Syntax highlighting | Yes | No | Yes | Yes |
+| Markdown-aware | Yes | No | Yes | No |
+| Query language | Yes | No | No | No |
+| Edit tables/checkboxes | Yes | No | No | No |
+
+**treemd** understands markdown structure. Navigate documents like a file tree, drill into sections, search content, edit tables, and follow links—all from your terminal.
 
 ## Similar Tools
 
-- `tree` - File tree explorer (inspiration for outline navigation)
-- `glow` - Beautiful markdown rendering (presentation-focused, not interactive)
-- `mdcat` - Markdown rendering to terminal (no navigation)
-- `bat` - Syntax highlighting pager (not markdown-aware)
-- `less` - Classic pager (no structure awareness)
+- [`tree`](https://linux.die.net/man/1/tree) — File tree explorer (inspiration for outline navigation)
+- [`glow`](https://github.com/charmbracelet/glow) — Beautiful markdown rendering (presentation-focused)
+- [`mdcat`](https://github.com/swsnr/mdcat) — Markdown rendering to terminal
+- [`bat`](https://github.com/sharkdp/bat) — Syntax highlighting pager
+- [`less`](https://linux.die.net/man/1/less) — Classic pager
 
 treemd combines the best of these: **tree-based exploration** + interactive navigation + comfortable reading + CLI scriptability.
 
@@ -610,4 +529,4 @@ treemd combines the best of these: **tree-based exploration** + interactive navi
 
 ## License
 
-MIT
+[MIT](LICENSE)
