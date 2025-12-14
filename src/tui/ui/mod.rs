@@ -9,8 +9,8 @@ use crate::tui::app::{App, AppMode, Focus};
 use crate::tui::theme::Theme;
 use popups::{
     render_cell_edit_overlay, render_command_palette, render_file_create_confirm,
-    render_help_popup, render_link_picker, render_save_before_quit_confirm,
-    render_save_width_confirm, render_theme_picker,
+    render_help_popup, render_link_picker, render_save_before_nav_confirm,
+    render_save_before_quit_confirm, render_save_width_confirm, render_theme_picker,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -115,6 +115,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Render save before quit confirmation dialog
     if matches!(app.mode, AppMode::ConfirmSaveBeforeQuit) {
         render_save_before_quit_confirm(frame, app.pending_edits.len(), &app.theme);
+    }
+
+    // Render save before navigate confirmation dialog
+    if matches!(app.mode, AppMode::ConfirmSaveBeforeNav) {
+        render_save_before_nav_confirm(frame, app.pending_edits.len(), &app.theme);
     }
 
     // Render command palette

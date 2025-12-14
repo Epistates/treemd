@@ -389,6 +389,12 @@ fn add_confirm_dialog_mode(kb: &mut Keybindings) {
     bind(kb, ConfirmDialog, "n", CancelAction);
     bind(kb, ConfirmDialog, "N", CancelAction);
     bind(kb, ConfirmDialog, "Escape", CancelAction);
+
+    // Discard and quit (for unsaved changes dialogs)
+    bind(kb, ConfirmDialog, "q", DiscardAndQuit);
+
+    // Discard and continue (for navigation with unsaved changes)
+    bind(kb, ConfirmDialog, "d", DiscardAndContinue);
 }
 
 fn add_cell_edit_mode(kb: &mut Keybindings) {

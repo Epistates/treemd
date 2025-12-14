@@ -40,6 +40,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Hierarchical status display: `▸Navigation > Table: 5×3`
   - Expansion state persists after exiting interactive mode
 
+- **Safe edit buffer system** - Table cell edits are now buffered in memory instead of immediately written to file
+  - Changes are applied to in-memory document for immediate display
+  - Explicit save required with `:w` command to write changes to disk
+  - Status shows "X unsaved change(s)" after edits
+  - Prevents accidental data loss from unforeseen bugs
+
+- **Save command (`:w`)** - New command to save pending edits
+  - `:w`, `:write`, or `:save` writes all buffered edits to file atomically
+  - Shows confirmation: "Saved X change(s) to filename.md"
+
+- **Undo command (`:u` and `Ctrl+z`)** - Undo table cell edits before saving
+  - `:u` or `:undo` in command palette undoes last edit
+  - `Ctrl+z` keybinding in Interactive and InteractiveTable modes
+  - Stack-based undo: each edit can be individually reverted
+  - Shows remaining unsaved changes count after undo
+
+- **Quit confirmation for unsaved changes** - Prompts before quitting with unsaved edits
+  - Dialog shows number of unsaved changes
+  - `Enter`/`y` saves changes and quits
+  - `Escape` cancels and returns to normal mode
+
 ### Changed
 
 - **Status bar shows context-aware position** - Position info based on focused pane
@@ -59,6 +80,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Table row bounds** - Can now navigate to last row in tables
   - Fixed off-by-one error in `table_move_down()`
+
+- **Table cell edit affecting all tables** - Fixed critical bug where editing one table cell modified all tables
+  - Root cause: table index wasn't being tracked correctly across multiple tables
+  - Now correctly identifies and modifies only the target table using table index calculation
+
+- **Table cell edit mode not triggering** - Fixed Enter key not entering edit mode when in table navigation
+  - `InteractiveActivate` now checks `is_in_table_mode()` before deciding behavior
 
 ### Technical
 
@@ -84,6 +112,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **HTML parsing utility** (`src/parser/utils.rs`)
   - Added `parse_inline_html()` function for HTML tag to InlineElement conversion
+
+- **Edit buffer system** (`src/tui/app.rs`)
+  - Added `PendingEdit` struct with table_index, row, col, original_value, new_value fields
+  - Added `pending_edits: Vec<PendingEdit>` stack for buffered edits
+  - Added `has_unsaved_changes: bool` flag for quit confirmation
+  - Added `cell_edit_original_value` field to track original value before editing
+  - `save_edited_cell()` now buffers to memory instead of writing to file
+  - `save_pending_edits_to_file()` performs atomic file write
+  - `undo_last_edit()` pops from edit stack and reverts in-memory content
+  - `calculate_current_table_index()` helper for accurate table identification
+
+- **Edit buffer commands** (`src/tui/app.rs`)
+  - Added `CommandAction::SaveFile` and `CommandAction::Undo` to command palette
+  - Added `AppMode::ConfirmSaveBeforeQuit` for quit confirmation dialog
+  - Updated `handle_confirm_action()` to return `Option<ActionResult>` for quit flow
+
+- **Undo keybinding** (`src/keybindings/action.rs`, `src/keybindings/defaults.rs`)
+  - Added `Action::UndoEdit` for undo functionality
+  - Bound `Ctrl+z` to `UndoEdit` in Interactive and InteractiveTable modes
+
+- **Save confirmation dialog** (`src/tui/ui/popups.rs`)
+  - Added `render_save_before_quit_confirm()` for unsaved changes prompt
 
 ## [0.5.1] - 2025-12-12
 

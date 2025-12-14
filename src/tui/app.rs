@@ -42,10 +42,22 @@ pub enum AppMode {
     Help,
     CellEdit,
     ConfirmFileCreate,
-    DocSearch,           // In-document search mode (n/N navigation)
-    CommandPalette,      // Fuzzy-searchable command palette
-    ConfirmSaveWidth,    // Modal confirmation for saving outline width
-    ConfirmSaveBeforeQuit, // Prompt to save unsaved changes before quitting
+    DocSearch,              // In-document search mode (n/N navigation)
+    CommandPalette,         // Fuzzy-searchable command palette
+    ConfirmSaveWidth,       // Modal confirmation for saving outline width
+    ConfirmSaveBeforeQuit,  // Prompt to save unsaved changes before quitting
+    ConfirmSaveBeforeNav,   // Prompt to save unsaved changes before navigating
+}
+
+/// Type of pending navigation when user has unsaved changes
+#[derive(Debug, Clone)]
+pub enum PendingNavigation {
+    /// Navigate back in file history
+    Back,
+    /// Navigate forward in file history
+    Forward,
+    /// Load a file (relative path, optional anchor)
+    LoadFile(PathBuf, Option<String>),
 }
 
 /// Available commands in the command palette
@@ -365,6 +377,9 @@ pub struct App {
 
     // Customizable keybindings
     pub keybindings: Keybindings,
+
+    // Pending navigation (for confirm save dialog when navigating with unsaved changes)
+    pub pending_navigation: Option<PendingNavigation>,
 }
 
 /// Saved state for file navigation history
@@ -527,6 +542,9 @@ impl App {
             // Customizable keybindings (loaded from config)
             // Note: keybindings() called before config is moved into struct
             keybindings,
+
+            // Pending navigation (for confirm save dialog)
+            pending_navigation: None,
         }
     }
 
@@ -574,7 +592,8 @@ impl App {
             AppMode::CellEdit => KeybindingMode::CellEdit,
             AppMode::ConfirmFileCreate
             | AppMode::ConfirmSaveWidth
-            | AppMode::ConfirmSaveBeforeQuit => KeybindingMode::ConfirmDialog,
+            | AppMode::ConfirmSaveBeforeQuit
+            | AppMode::ConfirmSaveBeforeNav => KeybindingMode::ConfirmDialog,
             AppMode::DocSearch => KeybindingMode::DocSearch,
             AppMode::CommandPalette => KeybindingMode::CommandPalette,
         }
@@ -790,12 +809,28 @@ impl App {
 
             // === File Operations ===
             GoBack => {
-                if self.go_back().is_ok() {
+                // Check if there's anything to go back to
+                if self.file_history.is_empty() {
+                    return ActionResult::Continue;
+                }
+                // Check for unsaved changes
+                if self.has_unsaved_changes {
+                    self.pending_navigation = Some(PendingNavigation::Back);
+                    self.mode = AppMode::ConfirmSaveBeforeNav;
+                } else if self.go_back().is_ok() {
                     self.update_content_metrics();
                 }
             }
             GoForward => {
-                if self.go_forward().is_ok() {
+                // Check if there's anything to go forward to
+                if self.file_future.is_empty() {
+                    return ActionResult::Continue;
+                }
+                // Check for unsaved changes
+                if self.has_unsaved_changes {
+                    self.pending_navigation = Some(PendingNavigation::Forward);
+                    self.mode = AppMode::ConfirmSaveBeforeNav;
+                } else if self.go_forward().is_ok() {
                     self.update_content_metrics();
                 }
             }
@@ -817,6 +852,14 @@ impl App {
                 }
             }
             CancelAction => self.handle_cancel_action(),
+            DiscardAndQuit => {
+                if let Some(result) = self.handle_discard_and_quit() {
+                    return result;
+                }
+            }
+            DiscardAndContinue => {
+                self.handle_discard_and_continue();
+            }
 
             // === Jump to Heading by Number ===
             JumpToHeading1 => self.jump_to_heading(0),
@@ -941,7 +984,8 @@ impl App {
             AppMode::Normal
             | AppMode::ConfirmFileCreate
             | AppMode::ConfirmSaveWidth
-            | AppMode::ConfirmSaveBeforeQuit => {
+            | AppMode::ConfirmSaveBeforeQuit
+            | AppMode::ConfirmSaveBeforeNav => {
                 // In normal mode, show hint for quitting
                 self.set_status_message("Press q to quit • : for commands • ? for help");
             }
@@ -993,6 +1037,17 @@ impl App {
                     return Some(ActionResult::Quit);
                 }
             }
+            AppMode::ConfirmSaveBeforeNav => {
+                // Save pending changes and then navigate
+                if let Err(e) = self.save_pending_edits_to_file() {
+                    self.status_message = Some(format!("✗ Save failed: {}", e));
+                    self.mode = AppMode::Normal;
+                    self.pending_navigation = None;
+                } else {
+                    // Execute the pending navigation
+                    self.execute_pending_navigation();
+                }
+            }
             AppMode::Search => self.show_search = false,
             AppMode::DocSearch => self.accept_doc_search(),
             AppMode::CommandPalette => {
@@ -1024,7 +1079,76 @@ impl App {
                 self.mode = AppMode::Normal;
                 self.status_message = Some("Quit cancelled".to_string());
             }
+            AppMode::ConfirmSaveBeforeNav => {
+                // Cancel navigation - go back to normal mode
+                self.mode = AppMode::Normal;
+                self.pending_navigation = None;
+                self.status_message = Some("Navigation cancelled".to_string());
+            }
             _ => self.exit_current_mode(),
+        }
+    }
+
+    /// Handle discard and quit action (quit without saving)
+    fn handle_discard_and_quit(&mut self) -> Option<ActionResult> {
+        match self.mode {
+            AppMode::ConfirmSaveBeforeQuit => {
+                // Discard changes and quit
+                self.pending_edits.clear();
+                self.has_unsaved_changes = false;
+                Some(ActionResult::Quit)
+            }
+            AppMode::ConfirmSaveBeforeNav => {
+                // Discard changes and quit (instead of navigating)
+                self.pending_edits.clear();
+                self.has_unsaved_changes = false;
+                self.pending_navigation = None;
+                Some(ActionResult::Quit)
+            }
+            _ => None,
+        }
+    }
+
+    /// Handle discard and continue action (discard changes and proceed with navigation)
+    fn handle_discard_and_continue(&mut self) {
+        match self.mode {
+            AppMode::ConfirmSaveBeforeNav => {
+                // Discard changes and navigate
+                self.pending_edits.clear();
+                self.has_unsaved_changes = false;
+                self.execute_pending_navigation();
+            }
+            AppMode::ConfirmSaveBeforeQuit => {
+                // In quit dialog, 'd' doesn't make sense - ignore or treat as quit
+                // We'll ignore for now, user should use 'q' for quit without saving
+            }
+            _ => {}
+        }
+    }
+
+    /// Execute the pending navigation action
+    fn execute_pending_navigation(&mut self) {
+        let nav = self.pending_navigation.take();
+        self.mode = AppMode::Normal;
+
+        match nav {
+            Some(PendingNavigation::Back) => {
+                if self.go_back().is_ok() {
+                    self.update_content_metrics();
+                }
+            }
+            Some(PendingNavigation::Forward) => {
+                if self.go_forward().is_ok() {
+                    self.update_content_metrics();
+                }
+            }
+            Some(PendingNavigation::LoadFile(path, anchor)) => {
+                // Call internal load_file_internal that skips the unsaved check
+                if let Err(e) = self.load_file_internal(&path, anchor.as_deref()) {
+                    self.status_message = Some(format!("✗ {}", e));
+                }
+            }
+            None => {}
         }
     }
 
@@ -3006,11 +3130,33 @@ impl App {
         Err(format!("Heading '{}' not found", anchor))
     }
 
-    /// Load a file by relative path
+    /// Load a file by relative path (checks for unsaved changes first)
     ///
     /// Security: Validates path to prevent directory traversal attacks.
     /// Files must be within the current file's directory or its subdirectories.
     fn load_file(&mut self, relative_path: &PathBuf, anchor: Option<&str>) -> Result<(), String> {
+        // Check for unsaved changes before navigating to a different file
+        if self.has_unsaved_changes {
+            self.pending_navigation = Some(PendingNavigation::LoadFile(
+                relative_path.clone(),
+                anchor.map(|s| s.to_string()),
+            ));
+            self.mode = AppMode::ConfirmSaveBeforeNav;
+            return Ok(()); // Not an error - we're asking user to confirm
+        }
+
+        self.load_file_internal(relative_path, anchor)
+    }
+
+    /// Internal file loading - skips unsaved changes check
+    ///
+    /// Security: Validates path to prevent directory traversal attacks.
+    /// Files must be within the current file's directory or its subdirectories.
+    fn load_file_internal(
+        &mut self,
+        relative_path: &PathBuf,
+        anchor: Option<&str>,
+    ) -> Result<(), String> {
         // Reject absolute paths
         if relative_path.is_absolute() {
             return Err("Absolute paths are not allowed for security reasons".to_string());

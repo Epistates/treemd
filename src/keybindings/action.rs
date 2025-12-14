@@ -125,6 +125,10 @@ pub enum Action {
     ConfirmAction,
     /// Cancel action in dialog
     CancelAction,
+    /// Discard changes and quit (for unsaved changes dialogs)
+    DiscardAndQuit,
+    /// Discard changes and continue navigation (for unsaved changes dialogs)
+    DiscardAndContinue,
 
     // === Application ===
     /// Quit the application
@@ -259,6 +263,8 @@ impl Action {
             // Dialog
             Action::ConfirmAction => "Confirm",
             Action::CancelAction => "Cancel",
+            Action::DiscardAndQuit => "Discard changes and quit",
+            Action::DiscardAndContinue => "Discard changes and continue",
 
             // Application
             Action::Quit => "Quit",
@@ -362,7 +368,10 @@ impl Action {
 
             Action::GoBack | Action::GoForward | Action::OpenInEditor | Action::UndoEdit => "Files",
 
-            Action::ConfirmAction | Action::CancelAction => "Dialog",
+            Action::ConfirmAction
+            | Action::CancelAction
+            | Action::DiscardAndQuit
+            | Action::DiscardAndContinue => "Dialog",
 
             Action::Quit => "Application",
 
