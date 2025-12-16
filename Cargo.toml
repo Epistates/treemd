@@ -29,7 +29,7 @@ clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
 unicode-width = "0.2"
 
 # Turbovault integration - OFM parsing with code-block awareness
-turbovault-parser = { path = "../turbovault/crates/turbovault-parser" }
+turbovault-parser = "1.2.6"
 
 # Tree data structure for heading hierarchy
 indextree = "4.7"
