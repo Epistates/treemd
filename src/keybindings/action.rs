@@ -119,6 +119,8 @@ pub enum Action {
     OpenInEditor,
     /// Undo last table cell edit
     UndoEdit,
+    /// Open file picker to switch between markdown files
+    OpenFilePicker,
 
     // === Dialog Actions ===
     /// Confirm action in dialog
@@ -261,6 +263,7 @@ impl Action {
             Action::GoForward => "Go forward",
             Action::OpenInEditor => "Open in editor",
             Action::UndoEdit => "Undo last edit",
+            Action::OpenFilePicker => "Open file picker",
 
             // Dialog
             Action::ConfirmAction => "Confirm",
@@ -369,7 +372,7 @@ impl Action {
 
             Action::CopyContent | Action::CopyAnchor => "Clipboard",
 
-            Action::GoBack | Action::GoForward | Action::OpenInEditor | Action::UndoEdit => "Files",
+            Action::GoBack | Action::GoForward | Action::OpenInEditor | Action::UndoEdit | Action::OpenFilePicker => "Files",
 
             Action::ConfirmAction
             | Action::CancelAction

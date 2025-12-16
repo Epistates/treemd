@@ -30,6 +30,12 @@ pub fn default_keybindings() -> Keybindings {
     // Link search mode
     add_link_search_mode(&mut kb);
 
+    // File picker mode
+    add_file_picker_mode(&mut kb);
+
+    // File search mode
+    add_file_search_mode(&mut kb);
+
     // Search mode
     add_search_mode(&mut kb);
 
@@ -107,6 +113,8 @@ fn add_normal_mode(kb: &mut Keybindings) {
     bind(kb, Normal, "Backspace", GoBack);
     bind(kb, Normal, "F", GoForward);
     bind(kb, Normal, "e", OpenInEditor);
+    bind(kb, Normal, "Ctrl+o", OpenFilePicker);
+    bind(kb, Normal, "o", OpenFilePicker);
 
     // Application
     bind(kb, Normal, "q", Quit);
@@ -412,6 +420,45 @@ fn add_cell_edit_mode(kb: &mut Keybindings) {
 
     // Delete character
     bind(kb, CellEdit, "Backspace", SearchBackspace);
+}
+
+fn add_file_picker_mode(kb: &mut Keybindings) {
+    use Action::*;
+    use KeybindingMode::FilePicker;
+
+    // Navigation
+    bind(kb, FilePicker, "j", Next);
+    bind(kb, FilePicker, "Down", Next);
+    bind(kb, FilePicker, "k", Previous);
+    bind(kb, FilePicker, "Up", Previous);
+    bind(kb, FilePicker, "Tab", Next);
+    bind(kb, FilePicker, "Shift+Tab", Previous);
+
+    // Selection
+    bind(kb, FilePicker, "Enter", FollowLink);
+
+    // Search
+    bind(kb, FilePicker, "/", LinkSearch);
+
+    // Exit
+    bind(kb, FilePicker, "Escape", ExitMode);
+}
+
+fn add_file_search_mode(kb: &mut Keybindings) {
+    use Action::*;
+    use KeybindingMode::FileSearch;
+
+    // Navigation while searching
+    bind(kb, FileSearch, "Tab", Next);
+    bind(kb, FileSearch, "Down", Next);
+    bind(kb, FileSearch, "Up", Previous);
+
+    // Exit search
+    bind(kb, FileSearch, "Escape", ExitMode);
+    bind(kb, FileSearch, "Enter", FollowLink);
+
+    // Delete character
+    bind(kb, FileSearch, "Backspace", SearchBackspace);
 }
 
 #[cfg(test)]

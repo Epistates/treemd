@@ -62,6 +62,10 @@ pub enum KeybindingMode {
     CellEdit,
     /// Confirmation dialog
     ConfirmDialog,
+    /// File picker for switching between files
+    FilePicker,
+    /// File picker search/filter mode
+    FileSearch,
 }
 
 impl KeybindingMode {
@@ -80,6 +84,8 @@ impl KeybindingMode {
             KeybindingMode::CommandPalette => "Command Palette",
             KeybindingMode::CellEdit => "Cell Edit",
             KeybindingMode::ConfirmDialog => "Confirm",
+            KeybindingMode::FilePicker => "File Picker",
+            KeybindingMode::FileSearch => "File Search",
         }
     }
 }
