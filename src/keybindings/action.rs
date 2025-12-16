@@ -185,6 +185,8 @@ pub enum Action {
     CommandPaletteNext,
     /// Navigate to previous command
     CommandPalettePrev,
+    /// Autocomplete selected command
+    CommandPaletteAutocomplete,
 
     // === Doc Search Navigation ===
     /// Next search match
@@ -310,6 +312,7 @@ impl Action {
             Action::OpenCommandPalette => "Open command palette",
             Action::CommandPaletteNext => "Next command",
             Action::CommandPalettePrev => "Previous command",
+            Action::CommandPaletteAutocomplete => "Autocomplete command",
 
             // Doc search
             Action::NextMatch => "Next search match",
@@ -405,7 +408,8 @@ impl Action {
 
             Action::OpenCommandPalette
             | Action::CommandPaletteNext
-            | Action::CommandPalettePrev => "Command Palette",
+            | Action::CommandPalettePrev
+            | Action::CommandPaletteAutocomplete => "Command Palette",
         }
     }
 }

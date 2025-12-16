@@ -368,9 +368,12 @@ fn add_command_palette_mode(kb: &mut Keybindings) {
 
     // Navigation
     bind(kb, CommandPalette, "Down", CommandPaletteNext);
-    bind(kb, CommandPalette, "Tab", CommandPaletteNext);
+    bind(kb, CommandPalette, "j", CommandPaletteNext);
     bind(kb, CommandPalette, "Up", CommandPalettePrev);
-    bind(kb, CommandPalette, "Shift+Tab", CommandPalettePrev);
+    bind(kb, CommandPalette, "k", CommandPalettePrev);
+
+    // Autocomplete selected command
+    bind(kb, CommandPalette, "Tab", CommandPaletteAutocomplete);
 
     // Delete character
     bind(kb, CommandPalette, "Backspace", SearchBackspace);
