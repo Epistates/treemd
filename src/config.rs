@@ -1,5 +1,6 @@
 use crate::keybindings::{Keybindings, KeybindingsConfig};
 use crate::tui::theme::ThemeName;
+use opensesame::EditorConfig;
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -18,6 +19,10 @@ pub struct Config {
 
     #[serde(default)]
     pub keybindings: KeybindingsConfig,
+
+    /// Editor configuration for external file editing
+    #[serde(default)]
+    pub editor: EditorConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
