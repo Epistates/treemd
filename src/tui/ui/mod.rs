@@ -9,7 +9,7 @@ use crate::tui::app::{App, AppMode, Focus};
 use crate::tui::theme::Theme;
 use popups::{
     render_cell_edit_overlay, render_command_palette, render_file_create_confirm,
-    render_help_popup, render_link_picker, render_save_before_nav_confirm,
+    render_file_picker, render_help_popup, render_link_picker, render_save_before_nav_confirm,
     render_save_before_quit_confirm, render_save_width_confirm, render_theme_picker,
 };
 use ratatui::Frame;
@@ -110,6 +110,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Render link picker if in link follow mode with links
     if matches!(app.mode, crate::tui::app::AppMode::LinkFollow) && !app.links_in_view.is_empty() {
         render_link_picker(frame, app, area);
+    }
+
+    // Render file picker modal
+    if matches!(app.mode, AppMode::FilePicker | AppMode::FileSearch) {
+        render_file_picker(frame, app, area);
     }
 
     // Render file creation confirmation dialog

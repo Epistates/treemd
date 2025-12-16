@@ -786,3 +786,205 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
 
     frame.render_widget(paragraph, area);
 }
+
+/// Render the file picker modal
+pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = &app.theme;
+
+    // Create centered popup area
+    let popup_area = popup_area(area, 80, 60, 30, 8);
+
+    // Clear background
+    frame.render_widget(Clear, popup_area);
+
+    // Build header with search info
+    let header_text = if app.file_search_active || !app.file_search_query.is_empty() {
+        format!(
+            "Files ({}/{}) - /: search, Enter: open, Esc: {}",
+            app.filtered_file_indices.len(),
+            app.files_in_directory.len(),
+            if app.file_search_active {
+                "stop search"
+            } else {
+                "cancel"
+            }
+        )
+    } else {
+        format!(
+            "Markdown Files in Current Directory ({} found) - /: search, j/k: navigate, Enter: open",
+            app.files_in_directory.len()
+        )
+    };
+
+    let mut lines = vec![Line::from(vec![Span::styled(
+        header_text,
+        Style::default()
+            .fg(theme.modal_title())
+            .add_modifier(Modifier::BOLD),
+    )])];
+
+    // Show search bar if active or has query
+    if app.file_search_active || !app.file_search_query.is_empty() {
+        let search_style = if app.file_search_active {
+            Style::default()
+                .fg(theme.modal_selected_fg())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.modal_description())
+        };
+
+        let cursor = if app.file_search_active { "▌" } else { "" };
+        lines.push(Line::from(vec![
+            Span::styled("Filter: ", Style::default().fg(theme.modal_key_fg())),
+            Span::styled(format!("{}{}", app.file_search_query, cursor), search_style),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    let mut selected_line_start: u16 = 0;
+
+    // Iterate over filtered files
+    for (display_idx, &real_idx) in app.filtered_file_indices.iter().enumerate() {
+        let file_path = &app.files_in_directory[real_idx];
+        let is_selected = app.selected_file_idx == Some(display_idx);
+        let is_current = file_path == &app.current_file_path;
+
+        if is_selected {
+            selected_line_start = lines.len() as u16;
+        }
+
+        let filename = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        let current_marker = if is_current { " [current]" } else { "" };
+        let number = format!("[{}] ", real_idx + 1);
+
+        if is_selected {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "▶ ",
+                    Style::default()
+                        .fg(theme.selection_indicator_fg)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(number, Style::default().fg(theme.modal_key_fg())),
+                Span::styled(
+                    filename,
+                    Style::default()
+                        .fg(theme.selection_indicator_fg)
+                        .bg(theme.modal_selected_fg())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    current_marker,
+                    Style::default()
+                        .fg(theme.modal_description())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        } else {
+            let text_style = if is_current {
+                Style::default()
+                    .fg(theme.modal_text())
+                    .add_modifier(Modifier::ITALIC)
+            } else {
+                Style::default().fg(theme.modal_text())
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(number, Style::default().fg(theme.modal_description())),
+                Span::styled(filename, text_style),
+                Span::styled(
+                    current_marker,
+                    Style::default()
+                        .fg(theme.modal_description())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        }
+
+        if display_idx < app.filtered_file_indices.len() - 1 {
+            lines.push(Line::from(""));
+        }
+    }
+
+    // Show "no matches" message
+    if app.filtered_file_indices.is_empty() && !app.files_in_directory.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "No files match your search",
+            Style::default()
+                .fg(theme.modal_description())
+                .add_modifier(Modifier::ITALIC),
+        )]));
+    }
+
+    // Footer
+    lines.push(Line::from(""));
+    let footer_text = if app.file_search_active {
+        "Type to filter • Enter: select • Esc: stop search • Backspace: delete"
+    } else {
+        "j/k: Navigate • /: Filter • 1-9: Jump • Enter: Open • Esc: Cancel"
+    };
+    lines.push(Line::from(vec![Span::styled(
+        footer_text,
+        Style::default()
+            .fg(theme.modal_description())
+            .add_modifier(Modifier::ITALIC),
+    )]));
+
+    let total_lines = lines.len();
+    let inner_height = popup_area.height.saturating_sub(2) as usize;
+    let header_lines = 2;
+    let footer_lines = 2;
+    let visible_area = inner_height.saturating_sub(header_lines + footer_lines);
+
+    let scroll_offset = if selected_line_start > 0 && visible_area > 0 {
+        let target_line = selected_line_start.saturating_sub(header_lines as u16);
+        let center_offset = (visible_area / 2) as u16;
+
+        if target_line > center_offset {
+            let max_scroll = (total_lines.saturating_sub(inner_height)) as u16;
+            (target_line.saturating_sub(center_offset)).min(max_scroll)
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.modal_border()))
+            .title(" File Picker ")
+            .style(Style::default().bg(theme.modal_bg())),
+    );
+
+    frame.render_widget(
+        paragraph.scroll((scroll_offset, 0)),
+        popup_area,
+    );
+
+    // Scrollbar if needed
+    if total_lines > inner_height {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"))
+            .style(Style::default().fg(theme.modal_border()));
+
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll_offset as usize);
+
+        frame.render_stateful_widget(
+            scrollbar,
+            popup_area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
+}

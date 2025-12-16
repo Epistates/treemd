@@ -75,6 +75,11 @@ fn run_editor(
 pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     let mut app = app;
 
+    // Handle startup file picker if needed
+    if app.startup_needs_file_picker {
+        app.enter_file_picker();
+    }
+
     // Create file watcher for live reload
     let mut file_watcher = watcher::FileWatcher::new().ok();
     if let Some(ref mut watcher) = file_watcher {
@@ -275,6 +280,14 @@ fn handle_text_input(
     if app.mode == app::AppMode::LinkFollow && app.link_search_active {
         if let KeyCode::Char(c) = code {
             app.link_search_push(c);
+            return true;
+        }
+    }
+
+    // File search input mode
+    if app.mode == app::AppMode::FileSearch {
+        if let KeyCode::Char(c) = code {
+            app.file_search_push(c);
             return true;
         }
     }

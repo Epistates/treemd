@@ -47,6 +47,8 @@ pub enum AppMode {
     ConfirmSaveWidth,      // Modal confirmation for saving outline width
     ConfirmSaveBeforeQuit, // Prompt to save unsaved changes before quitting
     ConfirmSaveBeforeNav,  // Prompt to save unsaved changes before navigating
+    FilePicker,            // File picker modal for switching files
+    FileSearch,            // File picker search/filter mode
 }
 
 /// Type of pending navigation when user has unsaved changes
@@ -333,6 +335,15 @@ pub struct App {
     pub selected_link_idx: Option<usize>, // Currently selected index in filtered list
     pub link_search_query: String,  // Search query for filtering links
     pub link_search_active: bool,   // Whether search input is active
+
+    // File picker state
+    pub files_in_directory: Vec<PathBuf>,     // All .md files in cwd
+    pub filtered_file_indices: Vec<usize>,    // Indices after filtering
+    pub selected_file_idx: Option<usize>,     // Selected index in filtered list
+    pub file_search_query: String,            // Search query for filtering files
+    pub file_search_active: bool,             // Whether search input is active
+    pub startup_needs_file_picker: bool,      // True if started without file arg
+
     pub file_history: Vec<FileState>, // Back navigation stack
     pub file_future: Vec<FileState>, // Forward navigation stack (for undo back)
     pub status_message: Option<String>, // Temporary status message to display
@@ -499,6 +510,15 @@ impl App {
             selected_link_idx: None,
             link_search_query: String::new(),
             link_search_active: false,
+
+            // File picker state
+            files_in_directory: Vec::new(),
+            filtered_file_indices: Vec::new(),
+            selected_file_idx: None,
+            file_search_query: String::new(),
+            file_search_active: false,
+            startup_needs_file_picker: false,
+
             file_history: Vec::new(),
             file_future: Vec::new(),
             status_message: None,
@@ -609,6 +629,14 @@ impl App {
             | AppMode::ConfirmSaveBeforeNav => KeybindingMode::ConfirmDialog,
             AppMode::DocSearch => KeybindingMode::DocSearch,
             AppMode::CommandPalette => KeybindingMode::CommandPalette,
+            AppMode::FilePicker => {
+                if self.file_search_active {
+                    KeybindingMode::FileSearch
+                } else {
+                    KeybindingMode::FilePicker
+                }
+            }
+            AppMode::FileSearch => KeybindingMode::FileSearch,
         }
     }
 
@@ -656,14 +684,26 @@ impl App {
             // === Navigation ===
             Next => {
                 let count = self.take_count();
-                for _ in 0..count {
-                    self.next();
+                if self.mode == AppMode::FilePicker {
+                    for _ in 0..count {
+                        self.next_file();
+                    }
+                } else {
+                    for _ in 0..count {
+                        self.next();
+                    }
                 }
             }
             Previous => {
                 let count = self.take_count();
-                for _ in 0..count {
-                    self.previous();
+                if self.mode == AppMode::FilePicker {
+                    for _ in 0..count {
+                        self.previous_file();
+                    }
+                } else {
+                    for _ in 0..count {
+                        self.previous();
+                    }
                 }
             }
             First => {
@@ -723,12 +763,32 @@ impl App {
             NextLink => self.next_link(),
             PreviousLink => self.previous_link(),
             FollowLink => {
-                if let Err(e) = self.follow_selected_link() {
-                    self.status_message = Some(format!("✗ Error: {}", e));
+                match self.mode {
+                    AppMode::LinkFollow => {
+                        if let Err(e) = self.follow_selected_link() {
+                            self.status_message = Some(format!("✗ Error: {}", e));
+                        }
+                        self.update_content_metrics();
+                    }
+                    AppMode::FilePicker | AppMode::FileSearch => {
+                        if let Err(e) = self.select_file_from_picker() {
+                            self.status_message = Some(format!("✗ Error: {}", e));
+                        }
+                        self.update_content_metrics();
+                    }
+                    _ => {}
                 }
-                self.update_content_metrics();
             }
-            LinkSearch => self.start_link_search(),
+            LinkSearch => {
+                match self.mode {
+                    AppMode::LinkFollow => self.start_link_search(),
+                    AppMode::FilePicker => {
+                        self.file_search_active = true;
+                        self.mode = AppMode::FileSearch;
+                    }
+                    _ => {}
+                }
+            }
 
             // === Interactive Mode ===
             InteractiveNext => {
@@ -856,6 +916,9 @@ impl App {
                 if let Err(e) = self.undo_last_edit() {
                     self.status_message = Some(format!("✗ Undo failed: {}", e));
                 }
+            }
+            OpenFilePicker => {
+                self.enter_file_picker();
             }
 
             // === Dialog Actions ===
@@ -994,6 +1057,15 @@ impl App {
             AppMode::Help => {
                 // Close help
                 self.show_help = false;
+            }
+            AppMode::FileSearch => {
+                self.file_search_active = false;
+                self.mode = AppMode::FilePicker;
+            }
+            AppMode::FilePicker => {
+                self.mode = AppMode::Normal;
+                self.file_search_query.clear();
+                self.file_search_active = false;
             }
             AppMode::Normal
             | AppMode::ConfirmFileCreate
@@ -1178,6 +1250,7 @@ impl App {
             AppMode::Search => self.search_backspace(),
             AppMode::DocSearch => self.doc_search_backspace(),
             AppMode::LinkFollow if self.link_search_active => self.link_search_pop(),
+            AppMode::FileSearch => self.file_search_pop(),
             AppMode::CommandPalette => self.command_palette_backspace(),
             AppMode::CellEdit => {
                 self.cell_edit_value.pop();
@@ -3008,6 +3081,174 @@ impl App {
                     self.status_message = Some("⚠ Already at top-level heading".to_string());
                 }
             }
+        }
+    }
+
+    // ===== File Picker Methods =====
+
+    /// Scan current directory for .md files (non-recursive, alphabetically sorted)
+    pub fn scan_markdown_files(&mut self) {
+        use std::fs;
+
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let mut files: Vec<PathBuf> = fs::read_dir(&cwd)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path.extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext == "md" || ext == "markdown")
+                        .unwrap_or(false)
+            })
+            .collect();
+
+        files.sort();
+        self.files_in_directory = files;
+        self.update_file_filter();
+    }
+
+    /// Update filtered file list based on search query
+    pub fn update_file_filter(&mut self) {
+        if self.file_search_query.is_empty() {
+            self.filtered_file_indices = (0..self.files_in_directory.len()).collect();
+        } else {
+            let query_lower = self.file_search_query.to_lowercase();
+            self.filtered_file_indices = self
+                .files_in_directory
+                .iter()
+                .enumerate()
+                .filter(|(_, path)| {
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|name| name.to_lowercase().contains(&query_lower))
+                        .unwrap_or(false)
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+        }
+
+        // Reset selection if current is out of bounds
+        if let Some(sel) = self.selected_file_idx {
+            if sel >= self.filtered_file_indices.len() {
+                self.selected_file_idx = if self.filtered_file_indices.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                };
+            }
+        } else if !self.filtered_file_indices.is_empty() {
+            self.selected_file_idx = Some(0);
+        }
+    }
+
+    /// Push character to file search query
+    pub fn file_search_push(&mut self, c: char) {
+        self.file_search_query.push(c);
+        self.update_file_filter();
+    }
+
+    /// Pop character from file search query
+    pub fn file_search_pop(&mut self) {
+        self.file_search_query.pop();
+        self.update_file_filter();
+    }
+
+    /// Enter file picker mode
+    pub fn enter_file_picker(&mut self) {
+        self.scan_markdown_files();
+
+        // Highlight current file if present
+        if let Some(current_idx) = self.files_in_directory.iter().position(|p| p == &self.current_file_path) {
+            self.selected_file_idx = Some(current_idx);
+        } else if !self.filtered_file_indices.is_empty() {
+            self.selected_file_idx = Some(0);
+        }
+
+        self.mode = AppMode::FilePicker;
+    }
+
+    /// Select file from picker and load it
+    pub fn select_file_from_picker(&mut self) -> Result<(), String> {
+        let selected_display_idx = self.selected_file_idx.ok_or("No file selected")?;
+        let real_idx = self
+            .filtered_file_indices
+            .get(selected_display_idx)
+            .ok_or("Invalid selection")?;
+        let file_path = self.files_in_directory[*real_idx].clone();
+
+        // Don't reload if it's already the current file
+        if file_path == self.current_file_path {
+            self.mode = AppMode::Normal;
+            self.file_search_query.clear();
+            self.file_search_active = false;
+            return Ok(());
+        }
+
+        // Save current state to history
+        let current_state = FileState {
+            path: self.current_file_path.clone(),
+            document: self.document.clone(),
+            filename: self.filename.clone(),
+            selected_heading: self.selected_heading_text().map(|s| s.to_string()),
+            content_scroll: self.content_scroll,
+            outline_state_selected: self.outline_state.selected(),
+        };
+        self.file_history.push(current_state);
+        self.file_future.clear(); // Clear forward history when navigating to new file
+
+        // Load new file
+        let content = std::fs::read_to_string(&file_path)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+        let document = crate::parser::parse_markdown(&content);
+        let filename = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown.md")
+            .to_string();
+
+        self.load_document(document, filename, file_path);
+
+        // Exit picker mode
+        self.mode = AppMode::Normal;
+        self.file_search_query.clear();
+        self.file_search_active = false;
+
+        Ok(())
+    }
+
+    /// Cycle to the next file (in FilePicker mode)
+    pub fn next_file(&mut self) {
+        if self.mode == AppMode::FilePicker && !self.filtered_file_indices.is_empty() {
+            self.selected_file_idx = Some(match self.selected_file_idx {
+                Some(idx) => {
+                    if idx >= self.filtered_file_indices.len() - 1 {
+                        0 // Wrap to first
+                    } else {
+                        idx + 1
+                    }
+                }
+                None => 0,
+            });
+        }
+    }
+
+    /// Cycle to the previous file (in FilePicker mode)
+    pub fn previous_file(&mut self) {
+        if self.mode == AppMode::FilePicker && !self.filtered_file_indices.is_empty() {
+            self.selected_file_idx = Some(match self.selected_file_idx {
+                Some(idx) => {
+                    if idx == 0 {
+                        self.filtered_file_indices.len() - 1 // Wrap to last
+                    } else {
+                        idx - 1
+                    }
+                }
+                None => 0,
+            });
         }
     }
 
