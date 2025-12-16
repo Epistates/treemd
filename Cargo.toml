@@ -1,6 +1,6 @@
 [package]
 name = "treemd"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
 authors = ["epistates, inc. <nick@epistates.com>"]
 description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
@@ -29,7 +29,7 @@ clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
 unicode-width = "0.2"
 
 # Turbovault integration - OFM parsing with code-block awareness
-turbovault-parser = "1.2.5"
+turbovault-parser = { path = "../turbovault/crates/turbovault-parser" }
 
 # Tree data structure for heading hierarchy
 indextree = "4.7"
@@ -80,7 +80,7 @@ supports-color = "3.0"
 notify = "8.0"
 
 # Open files in editor with line:column positioning
-opensesame = "0.1"
+opensesame = { path = "../opensesame", features = ["serde"] }
 
 # Unix system calls for TTY handling
 [target.'cfg(unix)'.dependencies]
