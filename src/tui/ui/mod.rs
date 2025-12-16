@@ -62,8 +62,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     const MIN_TOTAL_WIDTH: u16 = MIN_OUTLINE_WIDTH + MIN_CONTENT_WIDTH;
 
     // Decide whether to show outline based on terminal width
-    let effective_show_outline =
-        app.show_outline && content_area.width >= MIN_TOTAL_WIDTH;
+    let effective_show_outline = app.show_outline && content_area.width >= MIN_TOTAL_WIDTH;
 
     let content_chunks = if effective_show_outline {
         let content_width = 100 - app.outline_width;
@@ -446,7 +445,11 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let status_text = if app.mode == AppMode::Interactive {
         // Interactive mode status with position info
         let total = app.interactive_state.elements.len();
-        let current = app.interactive_state.current_index.map(|i| i + 1).unwrap_or(0);
+        let current = app
+            .interactive_state
+            .current_index
+            .map(|i| i + 1)
+            .unwrap_or(0);
         let percentage = if total > 0 && current > 0 {
             current * 100 / total
         } else {
@@ -516,7 +519,10 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 } else {
                     0
                 };
-                ("Outline", format!("{}/{} ({}%)", selected_idx + 1, total, percentage))
+                (
+                    "Outline",
+                    format!("{}/{} ({}%)", selected_idx + 1, total, percentage),
+                )
             }
             Focus::Content => {
                 // Show content scroll position
@@ -527,7 +533,10 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 } else {
                     0
                 };
-                ("Content", format!("Line {} ({}%)", scroll_pos + 1, percentage))
+                (
+                    "Content",
+                    format!("Line {} ({}%)", scroll_pos + 1, percentage),
+                )
             }
         };
 
@@ -551,11 +560,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
         format!(
             " [{}] {}{}{} • {}",
-            focus_indicator,
-            position_info,
-            bookmark_indicator,
-            history_indicator,
-            outline_status
+            focus_indicator, position_info, bookmark_indicator, history_indicator, outline_status
         )
     };
 
@@ -606,11 +611,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 let element_hint = match app.interactive_state.current_element() {
                     Some(elem) => match &elem.element_type {
                         ElementType::Checkbox { .. } => {
-                            vec![
-                                ("j/k", "Navigate"),
-                                ("Space", "Toggle"),
-                                ("Esc", "Exit"),
-                            ]
+                            vec![("j/k", "Navigate"), ("Space", "Toggle"), ("Esc", "Exit")]
                         }
                         ElementType::Table { .. } => {
                             vec![
@@ -629,32 +630,16 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                             ]
                         }
                         ElementType::Details { .. } => {
-                            vec![
-                                ("j/k", "Navigate"),
-                                ("Enter", "Expand"),
-                                ("Esc", "Exit"),
-                            ]
+                            vec![("j/k", "Navigate"), ("Enter", "Expand"), ("Esc", "Exit")]
                         }
                         ElementType::CodeBlock { .. } => {
-                            vec![
-                                ("j/k", "Navigate"),
-                                ("y", "Copy"),
-                                ("Esc", "Exit"),
-                            ]
+                            vec![("j/k", "Navigate"), ("y", "Copy"), ("Esc", "Exit")]
                         }
                         ElementType::Image { .. } => {
-                            vec![
-                                ("j/k", "Navigate"),
-                                ("Enter", "Open"),
-                                ("Esc", "Exit"),
-                            ]
+                            vec![("j/k", "Navigate"), ("Enter", "Open"), ("Esc", "Exit")]
                         }
                     },
-                    None => vec![
-                        ("j/k", "Navigate"),
-                        ("Enter", "Action"),
-                        ("Esc", "Exit"),
-                    ],
+                    None => vec![("j/k", "Navigate"), ("Enter", "Action"), ("Esc", "Exit")],
                 };
                 element_hint
             }
@@ -677,17 +662,10 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             ]
         }
         AppMode::CellEdit => {
-            vec![
-                ("Enter", "Save"),
-                ("Esc", "Cancel"),
-            ]
+            vec![("Enter", "Save"), ("Esc", "Cancel")]
         }
         AppMode::CommandPalette => {
-            vec![
-                ("j/k", "Navigate"),
-                ("Enter", "Select"),
-                ("Esc", "Cancel"),
-            ]
+            vec![("j/k", "Navigate"), ("Enter", "Select"), ("Esc", "Cancel")]
         }
         _ => {
             // Normal mode - show based on focus
@@ -1257,12 +1235,9 @@ fn render_markdown_enhanced(
                             + nested_idx * crate::tui::interactive::DETAILS_NESTED_MULTIPLIER;
 
                         // Check various offsets for different block types
-                        let table_id =
-                            nested_sub_idx + crate::tui::interactive::TABLE_OFFSET;
-                        let code_id =
-                            nested_sub_idx + crate::tui::interactive::CODE_BLOCK_OFFSET;
-                        let image_id =
-                            nested_sub_idx + crate::tui::interactive::IMAGE_OFFSET;
+                        let table_id = nested_sub_idx + crate::tui::interactive::TABLE_OFFSET;
+                        let code_id = nested_sub_idx + crate::tui::interactive::CODE_BLOCK_OFFSET;
+                        let image_id = nested_sub_idx + crate::tui::interactive::IMAGE_OFFSET;
 
                         let is_nested_selected = selected_element_id
                             .map(|sel_id| {
@@ -1302,8 +1277,7 @@ fn render_markdown_enhanced(
                                     .map(|state| state.is_in_table_mode())
                                     .unwrap_or(false);
                                 let cell = if in_mode {
-                                    interactive_state
-                                        .and_then(|state| state.get_table_position())
+                                    interactive_state.and_then(|state| state.get_table_position())
                                 } else {
                                     None
                                 };
@@ -1581,7 +1555,8 @@ fn render_block_to_lines(
             ..
         } => {
             // Render details with collapsed indicator
-            let mut summary_spans = vec![Span::styled("▶ ", Style::default().fg(theme.list_bullet))];
+            let mut summary_spans =
+                vec![Span::styled("▶ ", Style::default().fg(theme.list_bullet))];
 
             // Parse and render inline HTML in summary (e.g., <strong>Navigation</strong>)
             let summary_elements = parse_inline_html(summary);
@@ -1624,7 +1599,8 @@ fn render_block_to_lines(
                     format_inline_markdown(&item.content, theme)
                 };
 
-                let mut line_spans = vec![Span::styled(marker, Style::default().fg(theme.list_bullet))];
+                let mut line_spans =
+                    vec![Span::styled(marker, Style::default().fg(theme.list_bullet))];
                 line_spans.extend(item_spans);
                 lines.push(Line::from(line_spans));
 

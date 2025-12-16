@@ -409,7 +409,12 @@ pub fn render_cell_edit_overlay(frame: &mut Frame, app: &App, area: Rect) {
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
 
-    let edit_area = Rect { x, y, width, height };
+    let edit_area = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
 
     // Clear background
     frame.render_widget(Clear, edit_area);
@@ -576,11 +581,17 @@ pub fn render_save_before_quit_confirm(frame: &mut Frame, edit_count: usize, the
         Line::from(""),
         Line::from(vec![
             Span::styled("[y/Enter]", Style::default().fg(theme.modal_key_fg())),
-            Span::styled(" Save & Quit", Style::default().fg(theme.modal_description())),
+            Span::styled(
+                " Save & Quit",
+                Style::default().fg(theme.modal_description()),
+            ),
         ]),
         Line::from(vec![
             Span::styled("[q]", Style::default().fg(theme.modal_key_fg())),
-            Span::styled(" Quit without saving", Style::default().fg(theme.modal_description())),
+            Span::styled(
+                " Quit without saving",
+                Style::default().fg(theme.modal_description()),
+            ),
         ]),
         Line::from(vec![
             Span::styled("[Esc]", Style::default().fg(theme.modal_key_fg())),
@@ -635,15 +646,24 @@ pub fn render_save_before_nav_confirm(frame: &mut Frame, edit_count: usize, them
         Line::from(""),
         Line::from(vec![
             Span::styled("[y/Enter]", Style::default().fg(theme.modal_key_fg())),
-            Span::styled(" Save & Navigate", Style::default().fg(theme.modal_description())),
+            Span::styled(
+                " Save & Navigate",
+                Style::default().fg(theme.modal_description()),
+            ),
         ]),
         Line::from(vec![
             Span::styled("[d]", Style::default().fg(theme.modal_key_fg())),
-            Span::styled(" Discard & Navigate", Style::default().fg(theme.modal_description())),
+            Span::styled(
+                " Discard & Navigate",
+                Style::default().fg(theme.modal_description()),
+            ),
         ]),
         Line::from(vec![
             Span::styled("[q]", Style::default().fg(theme.modal_key_fg())),
-            Span::styled(" Discard & Quit", Style::default().fg(theme.modal_description())),
+            Span::styled(
+                " Discard & Quit",
+                Style::default().fg(theme.modal_description()),
+            ),
         ]),
         Line::from(vec![
             Span::styled("[Esc]", Style::default().fg(theme.modal_key_fg())),

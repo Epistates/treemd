@@ -217,12 +217,12 @@ impl InteractiveState {
                                         ),
                                     });
 
-                                    self.element_states
-                                        .entry(nested_id)
-                                        .or_insert(ElementState::Table {
+                                    self.element_states.entry(nested_id).or_insert(
+                                        ElementState::Table {
                                             selected_row: 0,
                                             selected_col: 0,
-                                        });
+                                        },
+                                    );
 
                                     current_line += table_lines;
                                 }
@@ -280,37 +280,35 @@ impl InteractiveState {
                                                 ),
                                             };
 
-                                            let target =
-                                                if let Some(wikilink_target) =
-                                                    url.strip_prefix("wikilink:")
-                                                {
-                                                    LinkTarget::WikiLink {
-                                                        target: wikilink_target.to_string(),
-                                                        alias: if text != wikilink_target {
-                                                            Some(text.clone())
-                                                        } else {
-                                                            None
-                                                        },
-                                                    }
-                                                } else if let Some(anchor) = url.strip_prefix('#') {
-                                                    LinkTarget::Anchor(anchor.to_string())
-                                                } else if url.starts_with("http://")
-                                                    || url.starts_with("https://")
-                                                {
-                                                    LinkTarget::External(url.clone())
-                                                } else if let Some((path, anchor)) =
-                                                    url.split_once('#')
-                                                {
-                                                    LinkTarget::RelativeFile {
-                                                        path: path.into(),
-                                                        anchor: Some(anchor.to_string()),
-                                                    }
-                                                } else {
-                                                    LinkTarget::RelativeFile {
-                                                        path: url.into(),
-                                                        anchor: None,
-                                                    }
-                                                };
+                                            let target = if let Some(wikilink_target) =
+                                                url.strip_prefix("wikilink:")
+                                            {
+                                                LinkTarget::WikiLink {
+                                                    target: wikilink_target.to_string(),
+                                                    alias: if text != wikilink_target {
+                                                        Some(text.clone())
+                                                    } else {
+                                                        None
+                                                    },
+                                                }
+                                            } else if let Some(anchor) = url.strip_prefix('#') {
+                                                LinkTarget::Anchor(anchor.to_string())
+                                            } else if url.starts_with("http://")
+                                                || url.starts_with("https://")
+                                            {
+                                                LinkTarget::External(url.clone())
+                                            } else if let Some((path, anchor)) = url.split_once('#')
+                                            {
+                                                LinkTarget::RelativeFile {
+                                                    path: path.into(),
+                                                    anchor: Some(anchor.to_string()),
+                                                }
+                                            } else {
+                                                LinkTarget::RelativeFile {
+                                                    path: url.into(),
+                                                    anchor: None,
+                                                }
+                                            };
 
                                             self.elements.push(InteractiveElement {
                                                 id: nested_id,
@@ -832,7 +830,9 @@ impl InteractiveState {
                     };
                     format!("Link: {}", text)
                 }
-                ElementType::Checkbox { content, checked, .. } => {
+                ElementType::Checkbox {
+                    content, checked, ..
+                } => {
                     let mark = if *checked { "☑" } else { "☐" };
                     let text = if content.len() > 15 {
                         format!("{}...", &content[..12])

@@ -41,7 +41,9 @@ fn run_editor(
     disable_raw_mode()?;
 
     // Build editor command with config
-    let mut builder = Editor::builder().file(file).with_config(editor_config.clone());
+    let mut builder = Editor::builder()
+        .file(file)
+        .with_config(editor_config.clone());
 
     if let Some(l) = line {
         builder = builder.line(l);
@@ -166,10 +168,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                     let digit_handled = if let KeyCode::Char(c) = key.code {
                         if c.is_ascii_digit()
                             && key.modifiers.is_empty()
-                            && matches!(
-                                app.mode,
-                                app::AppMode::Normal | app::AppMode::Interactive
-                            )
+                            && matches!(app.mode, app::AppMode::Normal | app::AppMode::Interactive)
                         {
                             // Special case: '0' without existing count goes to start (like vim)
                             if c == '0' && !app.has_count() {

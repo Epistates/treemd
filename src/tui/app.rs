@@ -42,11 +42,11 @@ pub enum AppMode {
     Help,
     CellEdit,
     ConfirmFileCreate,
-    DocSearch,              // In-document search mode (n/N navigation)
-    CommandPalette,         // Fuzzy-searchable command palette
-    ConfirmSaveWidth,       // Modal confirmation for saving outline width
-    ConfirmSaveBeforeQuit,  // Prompt to save unsaved changes before quitting
-    ConfirmSaveBeforeNav,   // Prompt to save unsaved changes before navigating
+    DocSearch,             // In-document search mode (n/N navigation)
+    CommandPalette,        // Fuzzy-searchable command palette
+    ConfirmSaveWidth,      // Modal confirmation for saving outline width
+    ConfirmSaveBeforeQuit, // Prompt to save unsaved changes before quitting
+    ConfirmSaveBeforeNav,  // Prompt to save unsaved changes before navigating
 }
 
 /// Type of pending navigation when user has unsaved changes
@@ -64,8 +64,8 @@ pub enum PendingNavigation {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CommandAction {
     SaveWidth,
-    SaveFile,  // Save pending edits to file (:w)
-    Undo,      // Undo last pending edit
+    SaveFile, // Save pending edits to file (:w)
+    Undo,     // Undo last pending edit
     ToggleOutline,
     ToggleHelp,
     ToggleRawSource,
@@ -238,7 +238,13 @@ pub const PALETTE_COMMANDS: &[PaletteCommand] = &[
     ),
     PaletteCommand::new(
         "Collapse level",
-        &["collapse 1", "collapse 2", "collapse 3", "collapse 4", "collapse 5"],
+        &[
+            "collapse 1",
+            "collapse 2",
+            "collapse 3",
+            "collapse 4",
+            "collapse 5",
+        ],
         "Collapse headings at specific level",
         CommandAction::CollapseLevel,
     ),
@@ -1276,7 +1282,10 @@ impl App {
         if let Some(d) = digit.to_digit(10) {
             let current = self.count_prefix.unwrap_or(0);
             // Limit to reasonable count (max 9999)
-            let new_count = current.saturating_mul(10).saturating_add(d as usize).min(9999);
+            let new_count = current
+                .saturating_mul(10)
+                .saturating_add(d as usize)
+                .min(9999);
             self.count_prefix = Some(new_count);
             true
         } else {
@@ -2237,7 +2246,10 @@ impl App {
     }
 
     /// Recursively collect headings at a specific level that have children
-    fn collect_headings_at_level_with_children(node: &HeadingNode, target_level: usize) -> Vec<String> {
+    fn collect_headings_at_level_with_children(
+        node: &HeadingNode,
+        target_level: usize,
+    ) -> Vec<String> {
         let mut result = Vec::new();
 
         if node.heading.level == target_level && !node.children.is_empty() {
@@ -2246,7 +2258,10 @@ impl App {
 
         // Always recurse to find nested headings at the target level
         for child in &node.children {
-            result.extend(Self::collect_headings_at_level_with_children(child, target_level));
+            result.extend(Self::collect_headings_at_level_with_children(
+                child,
+                target_level,
+            ));
         }
 
         result
