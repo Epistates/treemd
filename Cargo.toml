@@ -50,6 +50,10 @@ ratatui = "0.29"
 crossterm = "0.29"
 color-eyre = "0.6"
 
+# Image rendering in TUI
+ratatui-image = { version = "1.0", features = ["crossterm"] }
+image = "0.25"
+
 # Syntax highlighting
 syntect = "5.2"
 
