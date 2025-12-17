@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::keybindings::{Action, KeybindingMode, Keybindings};
 use crate::parser::{Document, HeadingNode, Link, extract_links};
 use crate::tui::help_text;
+use crate::tui::image_cache::ImageCache;
 use crate::tui::interactive::InteractiveState;
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
@@ -398,6 +399,9 @@ pub struct App {
 
     // Pending navigation (for confirm save dialog when navigating with unsaved changes)
     pub pending_navigation: Option<PendingNavigation>,
+
+    // Image cache for lazy-loaded images
+    pub image_cache: ImageCache,
 }
 
 /// Saved state for file navigation history
@@ -573,6 +577,9 @@ impl App {
 
             // Pending navigation (for confirm save dialog)
             pending_navigation: None,
+
+            // Image cache (initialized later after entering alternate screen)
+            image_cache: ImageCache::new(),
         }
     }
 
@@ -636,6 +643,7 @@ impl App {
                     KeybindingMode::FilePicker
                 }
             }
+            // FileSearch mode is no longer used - we use FilePicker mode with file_search_active flag
             AppMode::FileSearch => KeybindingMode::FileSearch,
         }
     }
@@ -784,7 +792,6 @@ impl App {
                     AppMode::LinkFollow => self.start_link_search(),
                     AppMode::FilePicker => {
                         self.file_search_active = true;
-                        self.mode = AppMode::FileSearch;
                     }
                     _ => {}
                 }
@@ -1063,9 +1070,16 @@ impl App {
                 self.mode = AppMode::FilePicker;
             }
             AppMode::FilePicker => {
-                self.mode = AppMode::Normal;
-                self.file_search_query.clear();
-                self.file_search_active = false;
+                if self.file_search_active {
+                    // Exit search mode, but stay in file picker
+                    self.file_search_active = false;
+                    self.file_search_query.clear();
+                } else {
+                    // Exit file picker entirely
+                    self.mode = AppMode::Normal;
+                    self.file_search_query.clear();
+                    self.file_search_active = false;
+                }
             }
             AppMode::Normal
             | AppMode::ConfirmFileCreate
@@ -4585,5 +4599,33 @@ impl App {
         }
 
         new_parts.join("|")
+    }
+
+    /// Resolve an image path relative to the current markdown file.
+    ///
+    /// Supports both relative and absolute paths:
+    /// - Relative paths are resolved against the current file's directory
+    /// - Absolute paths are returned as-is
+    ///
+    /// # Examples
+    ///
+    /// If current file is `/docs/file.md`:
+    /// - `./images/photo.png` → `/docs/images/photo.png`
+    /// - `../assets/logo.png` → `/assets/logo.png`
+    /// - `/etc/hosts` → `/etc/hosts`
+    pub fn resolve_image_path(&self, src: &str) -> Result<std::path::PathBuf, String> {
+        let path = std::path::Path::new(src);
+
+        if path.is_absolute() {
+            return Ok(path.to_path_buf());
+        }
+
+        // Resolve relative to markdown file's directory
+        let base_dir = self
+            .current_file_path
+            .parent()
+            .ok_or_else(|| "No parent directory for current file".to_string())?;
+
+        Ok(base_dir.join(src))
     }
 }

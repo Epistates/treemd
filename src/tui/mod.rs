@@ -1,5 +1,6 @@
 mod app;
 mod help_text;
+mod image_cache;
 mod interactive;
 mod syntax;
 pub mod terminal_compat;
@@ -84,6 +85,12 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     let mut file_watcher = watcher::FileWatcher::new().ok();
     if let Some(ref mut watcher) = file_watcher {
         let _ = watcher.watch(&app.current_file_path);
+    }
+
+    // Initialize image picker for graphics protocol detection
+    if let Err(e) = app.image_cache.initialize() {
+        eprintln!("Warning: Image rendering unavailable: {}", e);
+        // Continue without images - will fallback to placeholders
     }
 
     loop {
@@ -284,8 +291,9 @@ fn handle_text_input(
         }
     }
 
-    // File search input mode
-    if app.mode == app::AppMode::FileSearch {
+    // File search input mode (FilePicker with file_search_active flag)
+    if (app.mode == app::AppMode::FilePicker && app.file_search_active)
+        || app.mode == app::AppMode::FileSearch {
         if let KeyCode::Char(c) = code {
             app.file_search_push(c);
             return true;

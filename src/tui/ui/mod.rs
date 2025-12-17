@@ -112,7 +112,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         render_link_picker(frame, app, area);
     }
 
-    // Render file picker modal
+    // Render file picker modal (FileSearch is only used as a fallback for old code)
     if matches!(app.mode, AppMode::FilePicker | AppMode::FileSearch) {
         render_file_picker(frame, app, area);
     }
