@@ -620,17 +620,19 @@ impl App {
         };
 
         for path in images_to_load {
-            // Try to load image file
-            if let Some(img_data) = image::ImageReader::open(&path)
-                .ok()
-                .and_then(|r| r.decode().ok())
-            {
-                // Use default rendering area (will be adjusted during actual render)
-                let rect = ratatui::layout::Rect::new(0, 0, 80, 16);
+            // Try to load image file (with GIF first-frame extraction)
+            match crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
+                Ok(img_data) => {
+                    // Use default rendering area (will be adjusted during actual render)
+                    let rect = ratatui::layout::Rect::new(0, 0, 80, 16);
 
-                // Create protocol using picker
-                if let Ok(protocol) = picker.new_protocol(img_data, rect, Resize::Fit(None)) {
-                    self.image_protocols.insert(path, protocol);
+                    // Create protocol using picker
+                    if let Ok(protocol) = picker.new_protocol(img_data, rect, Resize::Fit(None)) {
+                        self.image_protocols.insert(path, protocol);
+                    }
+                }
+                Err(_) => {
+                    // Image load failed, skip it
                 }
             }
         }
