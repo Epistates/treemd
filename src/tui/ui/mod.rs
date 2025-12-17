@@ -443,39 +443,46 @@ fn render_content_images(frame: &mut Frame, app: &mut App, content: &str, area: 
     // Update image state every frame (recreates protocol with current dimensions)
     app.refresh_image_state();
 
-    // Only render if we have an image in the first position
+    // Only render if we have an image
     if let (Some(protocol_state), Some(_path)) = (&mut app.image_state, &app.image_path) {
-        // Check if image is at the start of content (first block)
+        // Find the first image block (can appear anywhere, not just at start)
         let blocks = parse_content(content, 0);
-        if let Some(first) = blocks.first() {
-            if let ContentBlock::Image { alt, .. } = first {
+        for block in blocks {
+            if let ContentBlock::Image { alt, .. } = block {
                 // Allocate space in top-right corner for the image
                 // Use ~30% of width for image, leave text on left
                 let img_panel_width = (area.width / 3).max(20);
-                let img_area = Rect {
+                let img_panel_area = Rect {
                     x: area.x + area.width.saturating_sub(img_panel_width),
                     y: area.y + 1,
                     width: img_panel_width,
                     height: area.height.saturating_sub(2),
                 };
 
-                // Render the stateful image with resizing
-                let img_widget = StatefulImage::new().resize(Resize::Fit(None));
-                frame.render_stateful_widget(img_widget, img_area, protocol_state);
+                // Render border around image panel
+                let border = ratatui::widgets::Block::default()
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .style(ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray));
+                let inner_area = border.inner(img_panel_area);
+                frame.render_widget(border, img_panel_area);
 
-                // Render alt text caption below
-                let caption_y = img_area.bottom().saturating_sub(1);
-                if caption_y > img_area.y {
+                // Render the stateful image inside the border
+                let img_widget = StatefulImage::new().resize(Resize::Fit(None));
+                frame.render_stateful_widget(img_widget, inner_area, protocol_state);
+
+                // Render alt text caption below border
+                let caption_y = img_panel_area.bottom() + 1;
+                if caption_y < area.bottom() {
                     let caption_area = Rect {
-                        x: img_area.x,
+                        x: img_panel_area.x,
                         y: caption_y,
-                        width: img_area.width,
+                        width: img_panel_width,
                         height: 1,
                     };
                     let caption = ratatui::widgets::Paragraph::new(
                         ratatui::text::Line::from(
                             ratatui::text::Span::styled(
-                                format!("📷 {}", alt),
+                                alt.clone(),
                                 ratatui::style::Style::default()
                                     .fg(ratatui::style::Color::Cyan),
                             )
@@ -484,6 +491,7 @@ fn render_content_images(frame: &mut Frame, app: &mut App, content: &str, area: 
                     .alignment(ratatui::prelude::Alignment::Center);
                     frame.render_widget(caption, caption_area);
                 }
+                break; // Only render first image
             }
         }
     }
