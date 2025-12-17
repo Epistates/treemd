@@ -466,8 +466,10 @@ fn render_content_images(frame: &mut Frame, app: &mut App, content: &str, area: 
                 let inner_area = border.inner(img_panel_area);
                 frame.render_widget(border, img_panel_area);
 
-                // Render the stateful image inside the border
-                let img_widget = StatefulImage::new().resize(Resize::Fit(None));
+                // Render the stateful image inside the border with scaling
+                // Use Scale to upscale small images like GIF frames
+                use ratatui_image::FilterType;
+                let img_widget = StatefulImage::new().resize(Resize::Scale(Some(FilterType::Triangle)));
                 frame.render_stateful_widget(img_widget, inner_area, protocol_state);
 
                 // Render alt text caption below border
