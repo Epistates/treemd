@@ -457,7 +457,8 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Maximum image width: 80% of content area, but reasonable constraints
     let max_image_width = ((inner.width as usize * 80) / 100).max(20) as u16;
-    let max_image_height = (inner.height / 2).max(3); // Max 50% of content height, min 3 lines
+    // Max 12 lines per image to avoid covering too much text
+    let max_image_height = 12u16;
 
     // Render all images that are visible in the current scroll viewport
     for elem in &app.interactive_state.elements {
@@ -529,6 +530,8 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
+    let theme = &app.theme;
+
     // Recreate protocol each frame for proper resizing
     if let Some(path) = app.viewing_image_path.clone() {
         if let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
@@ -553,17 +556,22 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
             height: modal_height,
         };
 
-        // Render dark background behind modal
+        // Render semi-dark background (using theme colors instead of pure black)
+        // This preserves visibility of content behind the modal
         let bg = ratatui::widgets::Block::default().style(
-            Style::default().bg(Color::Rgb(0, 0, 0)).fg(Color::Gray),
+            Style::default()
+                .bg(theme.background)
+                .fg(theme.foreground)
+                .add_modifier(Modifier::DIM),
         );
         frame.render_widget(bg, area);
 
-        // Render modal border
+        // Render modal border with theme colors
         let modal_border = ratatui::widgets::Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-            .title(" Image (Esc: Close) ");
+            .border_style(Style::default().fg(theme.heading_1).add_modifier(Modifier::BOLD))
+            .title(" Image (Esc: Close) ")
+            .style(Style::default().bg(theme.background).fg(theme.foreground));
         let inner_area = modal_border.inner(modal_area);
         frame.render_widget(modal_border, modal_area);
 
@@ -978,6 +986,16 @@ fn render_markdown_enhanced(
                 }
 
                 lines.push(Line::from(formatted));
+
+                // If paragraph contains images, add blank lines to reserve space for them
+                // Images will be rendered on top at this position, so we need to push text below down
+                let has_images = inline.iter().any(|elem| matches!(elem, InlineElement::Image { .. }));
+                if has_images {
+                    // Reserve space for image (max 12 lines + 1 blank line separator)
+                    for _ in 0..13 {
+                        lines.push(Line::from(vec![]));
+                    }
+                }
             }
             ContentBlock::Code {
                 language, content, ..

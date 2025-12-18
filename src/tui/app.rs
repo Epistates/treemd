@@ -1655,6 +1655,23 @@ impl App {
             // Reset content scroll when selection changes
             self.content_scroll = 0;
             self.previous_selection = current_selection.clone();
+
+            // Reindex interactive elements for the new section
+            let content_text = if let Some(heading_text) = &current_selection {
+                if let Some(_heading) = self.document.find_heading(heading_text) {
+                    self.document
+                        .extract_section(heading_text)
+                        .unwrap_or_else(|| self.document.content.clone())
+                } else {
+                    self.document.content.clone()
+                }
+            } else {
+                self.document.content.clone()
+            };
+
+            use crate::parser::content::parse_content;
+            let blocks = parse_content(&content_text, 0);
+            self.interactive_state.index_elements(&blocks);
         }
 
         // Update content height based on current section
@@ -3830,6 +3847,12 @@ impl App {
         // Load first image from the new document
         let content = self.document.content.clone();
         self.load_first_image(&content);
+
+        // Index interactive elements (links, images, etc.) even in normal mode
+        // This allows inline images to render without entering interactive mode
+        use crate::parser::content::parse_content;
+        let blocks = parse_content(&content, 0);
+        self.interactive_state.index_elements(&blocks);
     }
 
     /// Navigate back in file history

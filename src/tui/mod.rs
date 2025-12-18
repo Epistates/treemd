@@ -171,6 +171,16 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
 
         if let Event::Key(key) = tty::read_event()? {
             if key.kind == KeyEventKind::Press {
+                // When image modal is open, only allow Escape to close it
+                // All other keys are blocked to prevent manipulating content behind modal
+                if app.is_image_modal_open() {
+                    if key.code == KeyCode::Esc {
+                        app.close_image_modal();
+                        app.status_message = Some("Image modal closed".to_string());
+                    }
+                    continue;
+                }
+
                 // Handle text input modes separately - these need raw character input
                 let handled = handle_text_input(&mut app, key.code, key.modifiers);
 
