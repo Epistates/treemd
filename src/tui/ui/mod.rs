@@ -107,6 +107,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         render_cell_edit_overlay(frame, app, area);
     }
 
+    // Render image modal if viewing an image
+    render_image_modal(frame, app, area);
+
     // Render link picker if in link follow mode with links
     if matches!(app.mode, crate::tui::app::AppMode::LinkFollow) && !app.links_in_view.is_empty() {
         render_link_picker(frame, app, area);
@@ -418,9 +421,6 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_widget(paragraph, area);
 
-    // Render images overlaid on content area
-    render_content_images(frame, app, &content_text, area);
-
     // Render scrollbar
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .begin_symbol(Some("↑"))
@@ -437,95 +437,64 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn render_content_images(frame: &mut Frame, app: &mut App, content: &str, area: Rect) {
+fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     use ratatui_image::{StatefulImage, Resize, FilterType};
 
-    // Update image state every frame (recreates protocol with current dimensions)
-    app.refresh_image_state();
+    if !app.is_image_modal_open() {
+        return;
+    }
 
-    // Only render if we have an image
-    if let (Some(protocol_state), Some(_path)) = (&mut app.image_state, &app.image_path) {
-        // Find the first image (checking both inline and block-level for robustness)
-        // Note: Most images appear as inline elements within Paragraph blocks
-        let blocks = parse_content(content, 0);
-
-        for block in blocks {
-            let alt_text = match &block {
-                ContentBlock::Image { alt, .. } => Some(alt.clone()),
-                ContentBlock::Paragraph { inline, .. } => {
-                    // Look for first inline image in paragraph
-                    inline.iter()
-                        .find_map(|elem| {
-                            if let crate::parser::output::InlineElement::Image { alt, .. } = elem {
-                                Some(alt.clone())
-                            } else {
-                                None
-                            }
-                        })
-                }
-                _ => None,
-            };
-
-            if let Some(alt) = alt_text {
-                // Allocate space in top-right corner for the image
-                // Use ~30% of width for image, leave text on left
-                let img_panel_width = (area.width / 3).max(20);
-                let img_panel_area = Rect {
-                    x: area.x + area.width.saturating_sub(img_panel_width),
-                    y: area.y + 1,
-                    width: img_panel_width,
-                    height: area.height.saturating_sub(2),
-                };
-
-                // Render border around image panel
-                let border = ratatui::widgets::Block::default()
-                    .borders(ratatui::widgets::Borders::ALL)
-                    .style(ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray));
-                let inner_area = border.inner(img_panel_area);
-                frame.render_widget(border, img_panel_area);
-
-                // Render the stateful image inside the border with scaling
-                // Use Scale to upscale small images like GIF frames (like figif does)
-                let resize = Resize::Scale(Some(FilterType::Triangle));
-
-                // Calculate the actual size the image will render at
-                let image_size = protocol_state.size_for(resize.clone(), inner_area);
-
-                // Render the image into a centered area within the inner_area
-                let centered_area = Rect {
-                    x: inner_area.x + (inner_area.width.saturating_sub(image_size.width)) / 2,
-                    y: inner_area.y + (inner_area.height.saturating_sub(image_size.height)) / 2,
-                    width: image_size.width,
-                    height: image_size.height,
-                };
-
-                let img_widget = StatefulImage::new().resize(resize);
-                frame.render_stateful_widget(img_widget, centered_area, protocol_state);
-
-                // Render alt text caption below border
-                let caption_y = img_panel_area.bottom() + 1;
-                if caption_y < area.bottom() {
-                    let caption_area = Rect {
-                        x: img_panel_area.x,
-                        y: caption_y,
-                        width: img_panel_width,
-                        height: 1,
-                    };
-                    let caption = ratatui::widgets::Paragraph::new(
-                        ratatui::text::Line::from(
-                            ratatui::text::Span::styled(
-                                alt,
-                                ratatui::style::Style::default()
-                                    .fg(ratatui::style::Color::Cyan),
-                            )
-                        )
-                    )
-                    .alignment(ratatui::prelude::Alignment::Center);
-                    frame.render_widget(caption, caption_area);
-                }
-                break; // Only render first image
+    // Recreate protocol each frame for proper resizing
+    if let Some(path) = app.viewing_image_path.clone() {
+        if let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
+            if let Some(picker) = &mut app.picker {
+                let protocol = picker.new_resize_protocol(img_data);
+                app.viewing_image_state = Some(protocol);
             }
         }
+    }
+
+    if let Some(protocol_state) = &mut app.viewing_image_state {
+        // Create modal area - centered on screen with some padding
+        let modal_width = (area.width * 80) / 100;
+        let modal_height = (area.height * 80) / 100;
+        let modal_x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+        let modal_y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+
+        let modal_area = Rect {
+            x: modal_x,
+            y: modal_y,
+            width: modal_width,
+            height: modal_height,
+        };
+
+        // Render dark background behind modal
+        let bg = ratatui::widgets::Block::default().style(
+            Style::default().bg(Color::Rgb(0, 0, 0)).fg(Color::Gray),
+        );
+        frame.render_widget(bg, area);
+
+        // Render modal border
+        let modal_border = ratatui::widgets::Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .title(" Image (Esc: Close) ");
+        let inner_area = modal_border.inner(modal_area);
+        frame.render_widget(modal_border, modal_area);
+
+        // Render image centered in modal
+        let resize = Resize::Scale(Some(FilterType::Triangle));
+        let image_size = protocol_state.size_for(resize.clone(), inner_area);
+
+        let centered_area = Rect {
+            x: inner_area.x + (inner_area.width.saturating_sub(image_size.width)) / 2,
+            y: inner_area.y + (inner_area.height.saturating_sub(image_size.height)) / 2,
+            width: image_size.width,
+            height: image_size.height,
+        };
+
+        let img_widget = StatefulImage::new().resize(resize);
+        frame.render_stateful_widget(img_widget, centered_area, protocol_state);
     }
 }
 

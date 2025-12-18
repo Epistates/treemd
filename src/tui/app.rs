@@ -409,6 +409,10 @@ pub struct App {
     // Stateful image protocols for rendering (resizable, first image only)
     pub image_state: Option<ratatui_image::protocol::StatefulProtocol>,
     pub image_path: Option<std::path::PathBuf>,
+
+    // Image modal viewing state
+    pub viewing_image_path: Option<std::path::PathBuf>,
+    pub viewing_image_state: Option<ratatui_image::protocol::StatefulProtocol>,
 }
 
 /// Saved state for file navigation history
@@ -594,6 +598,10 @@ impl App {
             // First image in document for rendering (stateful for resizing)
             image_state: None,
             image_path: None,
+
+            // Image modal viewing state
+            viewing_image_path: None,
+            viewing_image_state: None,
         }
     }
 
@@ -701,6 +709,31 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Open image modal for a given image path
+    pub fn open_image_modal(&mut self, image_src: &str) {
+        // Try to resolve and load the image
+        if let Ok(path) = self.resolve_image_path(image_src) {
+            if let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
+                if let Some(picker) = &mut self.picker {
+                    let protocol = picker.new_resize_protocol(img_data);
+                    self.viewing_image_path = Some(path);
+                    self.viewing_image_state = Some(protocol);
+                }
+            }
+        }
+    }
+
+    /// Close the image modal
+    pub fn close_image_modal(&mut self) {
+        self.viewing_image_path = None;
+        self.viewing_image_state = None;
+    }
+
+    /// Check if image modal is open
+    pub fn is_image_modal_open(&self) -> bool {
+        self.viewing_image_path.is_some()
     }
 
     /// Update the content viewport height (called by UI when terminal size is known)
@@ -1132,6 +1165,13 @@ impl App {
 
     /// Exit the current mode based on app state
     fn exit_current_mode(&mut self) {
+        // Close image modal if open
+        if self.is_image_modal_open() {
+            self.close_image_modal();
+            self.status_message = Some("Image modal closed".to_string());
+            return;
+        }
+
         // Handle outline search - clear everything
         if self.show_search {
             self.search_query.clear();
@@ -4032,9 +4072,9 @@ impl App {
                 Ok(())
             }
             ElementType::Image { src, alt, .. } => {
-                // Copy image path to clipboard
-                self.copy_to_clipboard(src)?;
-                self.status_message = Some(format!("✓ Image path copied: {}", alt));
+                // Open image modal to view the image fullscreen
+                self.open_image_modal(src);
+                self.status_message = Some(format!("📸 Viewing: {} (Esc:Close)", alt));
                 Ok(())
             }
             ElementType::Table { rows, cols, .. } => {
