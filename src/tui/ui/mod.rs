@@ -449,55 +449,73 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    // Determine which image to display
-    // Priority: selected image in interactive mode, otherwise first loaded image
-    let image_path_to_display = if app.mode == crate::tui::app::AppMode::Interactive {
-        // Check if currently selected element is an image
-        app.interactive_state
-            .current_element()
-            .and_then(|elem| {
-                if let ElementType::Image { src, .. } = &elem.element_type {
-                    let resolved = app.resolve_image_path(src).ok();
-                    resolved
-                } else {
-                    None
-                }
-            })
-    } else {
-        // Not in interactive mode, show first loaded image
-        app.image_path.clone()
-    };
+    // Account for borders and padding
+    let inner = area.inner(ratatui::layout::Margin {
+        vertical: 1,
+        horizontal: 1,
+    });
 
-    if let Some(image_path) = image_path_to_display {
-        // Render the inline image in the top-right area of the content block
-        // Account for borders (1 char margin on all sides)
-        let inner = area.inner(ratatui::layout::Margin {
-            vertical: 1,
-            horizontal: 1,
-        });
+    // Maximum image width: 80% of content area, but reasonable constraints
+    let max_image_width = ((inner.width as usize * 80) / 100).max(20) as u16;
+    let max_image_height = (inner.height / 2).max(3); // Max 50% of content height, min 3 lines
 
-        // Image area: top-right corner, max 40% width and 25% height
-        let image_width = ((inner.width as usize) * 40 / 100).max(20) as u16;
-        let image_height = ((inner.height as usize) * 25 / 100).max(3) as u16;
+    // Render all images that are visible in the current scroll viewport
+    for elem in &app.interactive_state.elements {
+        if let ElementType::Image { src, block_idx: _, .. } = &elem.element_type {
+            let (line_start, line_end) = elem.line_range;
 
-        let image_area = Rect {
-            x: inner.right().saturating_sub(image_width + 1),
-            y: inner.y,
-            width: image_width,
-            height: image_height,
-        };
+            // Check if this image is visible in current scroll window
+            let scroll = app.content_scroll as usize;
+            let viewport_height = app.content_viewport_height as usize;
+            let viewport_end = scroll + viewport_height;
 
-        // Only render if image area is reasonable
-        if image_area.width >= 8 && image_area.height >= 3 {
-            // Load and render the image
-            if let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(&image_path) {
-                if let Some(picker) = &mut app.picker {
-                    let protocol = picker.new_resize_protocol(img_data);
+            // Skip if image is outside visible area
+            if line_end < scroll || line_start >= viewport_end {
+                continue;
+            }
 
-                    let resize = Resize::Scale(Some(FilterType::Triangle));
-                    let img_widget = StatefulImage::new().resize(resize);
-                    let mut protocol_state = protocol;
-                    frame.render_stateful_widget(img_widget, image_area, &mut protocol_state);
+            // Calculate Y position: convert line number to screen coordinate
+            // Line positions are relative to the full document, need to account for scroll
+            let y_offset = if line_start >= scroll {
+                (line_start - scroll) as u16
+            } else {
+                0
+            };
+
+            let image_y = inner.y + y_offset;
+
+            // Only render if there's space on screen
+            if image_y >= inner.bottom() {
+                continue;
+            }
+
+            let available_height = inner.bottom().saturating_sub(image_y);
+            if available_height < 3 {
+                continue; // Not enough space for image
+            }
+
+            let image_height = available_height.min(max_image_height);
+
+            // Resolve image path
+            if let Ok(image_path) = app.resolve_image_path(src) {
+                // Load and render the image
+                if let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(&image_path) {
+                    if let Some(picker) = &mut app.picker {
+                        let protocol = picker.new_resize_protocol(img_data);
+                        let resize = Resize::Scale(Some(FilterType::Triangle));
+
+                        // Get the actual size that the image will take
+                        let image_area = Rect {
+                            x: inner.x,
+                            y: image_y,
+                            width: max_image_width.min(inner.width),
+                            height: image_height,
+                        };
+
+                        let img_widget = StatefulImage::new().resize(resize);
+                        let mut protocol_state = protocol;
+                        frame.render_stateful_widget(img_widget, image_area, &mut protocol_state);
+                    }
                 }
             }
         }
@@ -1866,27 +1884,9 @@ fn render_inline_elements(
                         .add_modifier(Modifier::CROSSED_OUT),
                 ));
             }
-            InlineElement::Image { alt, .. } => {
-                if is_selected {
-                    // Add selection indicator before selected image (with background for visibility)
-                    spans.push(Span::styled(
-                        "▸ ",
-                        Style::default()
-                            .fg(theme.selection_indicator_fg)
-                            .bg(theme.selection_indicator_bg)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                }
-                let style = if is_selected {
-                    // Highlighted selected image
-                    Style::default()
-                        .fg(theme.link_selected_fg)
-                        .bg(theme.link_selected_bg)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Rgb(180, 180, 200))
-                };
-                spans.push(Span::styled(format!("🖼 {}", alt), style));
+            InlineElement::Image { .. } => {
+                // Images are rendered separately, not as placeholder text
+                // This allows them to appear in-place without text alongside
             }
         }
     }
