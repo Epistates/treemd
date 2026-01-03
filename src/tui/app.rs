@@ -4,6 +4,7 @@ use crate::parser::{Document, HeadingNode, Link, extract_links};
 use crate::tui::help_text;
 use crate::tui::image_cache::ImageCache;
 use crate::tui::interactive::InteractiveState;
+use crate::tui::kitty_animation::{self, KittyAnimation};
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
 use crate::tui::theme::{Theme, ThemeName};
@@ -421,6 +422,10 @@ pub struct App {
     pub modal_last_rendered_frame: Option<usize>,
     pub modal_last_frame_update: Option<Instant>,
     pub modal_animation_paused: bool,
+
+    // Native Kitty animation (for flicker-free GIF playback)
+    pub kitty_animation: Option<KittyAnimation>,
+    pub use_kitty_animation: bool, // Whether to use native Kitty animation
 }
 
 /// Saved state for file navigation history
@@ -618,6 +623,10 @@ impl App {
             modal_last_rendered_frame: None,
             modal_last_frame_update: None,
             modal_animation_paused: false,
+
+            // Native Kitty animation
+            kitty_animation: None,
+            use_kitty_animation: kitty_animation::is_kitty_terminal(),
         }
     }
 
@@ -633,15 +642,15 @@ impl App {
                 // Check if font size seems reasonable (at least 4x4 pixels per cell)
                 let (w, h) = picker.font_size();
                 if w < 4 || h < 4 {
-                    // Font size detection failed - use reasonable default
-                    Some(Picker::from_fontsize((9, 18)))
+                    // Font size detection failed - use halfblocks fallback
+                    Some(Picker::halfblocks())
                 } else {
                     Some(picker)
                 }
             }
             Err(_) => {
-                // Query failed - use fallback with common font size (9x18 pixels per cell)
-                Some(Picker::from_fontsize((9, 18)))
+                // Query failed - use halfblocks (unicode rendering, works everywhere)
+                Some(Picker::halfblocks())
             }
         }
     }
@@ -735,15 +744,17 @@ impl App {
             if let Ok(frames) = crate::tui::image_cache::ImageCache::extract_all_frames(&path) {
                 if !frames.is_empty() {
                     if let Some(picker) = &mut self.picker {
-                        // Create initial protocol for first frame
-                        let protocol = picker.new_resize_protocol(frames[0].image.clone());
+                        // Create initial protocol for first frame only.
+                        // Subsequent frames will be created on-demand during animation
+                        // to avoid memory overhead of pre-computing all protocols.
+                        let initial_protocol = picker.new_resize_protocol(frames[0].image.clone());
 
                         self.viewing_image_path = Some(path);
-                        self.viewing_image_state = Some(protocol);
+                        self.viewing_image_state = Some(initial_protocol);
                         self.modal_gif_frames = frames;
-                        self.modal_frame_protocols.clear(); // Not used in single-protocol approach
+                        self.modal_frame_protocols.clear(); // Not used anymore
                         self.modal_frame_index = 0;
-                        self.modal_last_rendered_frame = Some(0);
+                        self.modal_last_rendered_frame = Some(0); // Mark first frame as rendered
                         self.modal_last_frame_update = Some(Instant::now());
                     }
                 }
@@ -753,6 +764,13 @@ impl App {
 
     /// Close the image modal
     pub fn close_image_modal(&mut self) {
+        // Delete Kitty animation if active
+        if let Some(ref anim) = self.kitty_animation {
+            let mut stdout = std::io::stdout();
+            let _ = kitty_animation::delete_animation(&mut stdout, anim);
+        }
+        self.kitty_animation = None;
+
         self.viewing_image_path = None;
         self.viewing_image_state = None;
         self.modal_gif_frames.clear();
@@ -787,6 +805,17 @@ impl App {
     /// Toggle animation play/pause
     pub fn modal_toggle_animation(&mut self) {
         self.modal_animation_paused = !self.modal_animation_paused;
+
+        // Control Kitty animation if active
+        if let Some(ref anim) = self.kitty_animation {
+            let mut stdout = std::io::stdout();
+            if self.modal_animation_paused {
+                let _ = kitty_animation::pause_animation(&mut stdout, anim);
+            } else {
+                let _ = kitty_animation::resume_animation(&mut stdout, anim);
+            }
+        }
+
         if !self.modal_animation_paused {
             // Reset the timer when resuming
             self.modal_last_frame_update = Some(Instant::now());
@@ -796,6 +825,79 @@ impl App {
     /// Check if image modal is open
     pub fn is_image_modal_open(&self) -> bool {
         self.viewing_image_path.is_some()
+    }
+
+    /// Start Kitty native animation for GIF playback.
+    /// Called from render when we know the exact coordinates.
+    /// Returns true if animation was started successfully.
+    pub fn start_kitty_animation(&mut self, col: u16, row: u16) -> bool {
+        // Only start if:
+        // 1. Use Kitty animation is enabled
+        // 2. We have multiple frames (GIF)
+        // 3. Animation hasn't started yet
+        if !self.use_kitty_animation
+            || self.modal_gif_frames.len() <= 1
+            || self.kitty_animation.is_some()
+        {
+            return false;
+        }
+
+        // Prepare frames for Kitty animation
+        let frames: Vec<(image::DynamicImage, u32)> = self
+            .modal_gif_frames
+            .iter()
+            .map(|f| (f.image.clone(), f.delay_ms))
+            .collect();
+
+        // Transmit animation to Kitty terminal
+        let mut stdout = std::io::stdout();
+        match kitty_animation::transmit_animation(&mut stdout, &frames, col, row) {
+            Ok(Some(anim)) => {
+                self.kitty_animation = Some(anim);
+                true
+            }
+            Ok(None) => false,
+            Err(_) => {
+                // Fall back to software animation
+                self.use_kitty_animation = false;
+                false
+            }
+        }
+    }
+
+    /// Check if Kitty animation is active
+    pub fn has_kitty_animation(&self) -> bool {
+        self.kitty_animation.is_some()
+    }
+
+    /// Get time until next GIF frame should be displayed.
+    /// Returns None if not animating, Some(Duration) otherwise.
+    /// Used by the event loop to optimize poll timeout for smooth animation.
+    pub fn time_until_next_frame(&self) -> Option<std::time::Duration> {
+        // Kitty handles animation timing internally - no client-side timing needed
+        if self.kitty_animation.is_some() {
+            return None;
+        }
+
+        // Must be in image modal with multiple frames and not paused
+        if !self.is_image_modal_open()
+            || self.modal_gif_frames.len() <= 1
+            || self.modal_animation_paused
+        {
+            return None;
+        }
+
+        let last_update = self.modal_last_frame_update?;
+        let current_frame = &self.modal_gif_frames[self.modal_frame_index];
+        let frame_delay = std::time::Duration::from_millis(current_frame.delay_ms as u64);
+        let elapsed = last_update.elapsed();
+
+        if elapsed >= frame_delay {
+            // Frame is due now - return minimal duration to trigger immediate redraw
+            Some(std::time::Duration::from_millis(1))
+        } else {
+            Some(frame_delay - elapsed)
+        }
     }
 
     /// Update the content viewport height (called by UI when terminal size is known)

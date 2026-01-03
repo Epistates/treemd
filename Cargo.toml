@@ -46,12 +46,12 @@ indexmap = { version = "2.7", features = ["serde"] }
 regex = "1.11"
 
 # TUI framework
-ratatui = "0.29"
+ratatui = { version = "0.30", features = ["crossterm_0_29"] }
 crossterm = "0.29"
 color-eyre = "0.6"
 
 # Image rendering in TUI
-ratatui-image = { version = "8", features = ["crossterm"] }
+ratatui-image = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }
 image = "0.25"
 gif = "0.13"
 

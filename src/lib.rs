@@ -75,11 +75,12 @@ pub mod tui;
 ///
 /// ## Example
 ///
-/// ```ignore
-/// use treemd::query;
+/// ```rust
+/// use treemd::{parse_markdown, query};
 ///
-/// let doc = treemd::parse_markdown("# Hello\n## World");
-/// let results = query::execute(&doc, ".h2 | text")?;
+/// let doc = parse_markdown("# Hello\n## World");
+/// let results = query::execute(&doc, ".h2 | .text").unwrap();
+/// assert_eq!(results.len(), 1);
 /// ```
 pub mod query;
 

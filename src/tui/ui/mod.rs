@@ -567,76 +567,150 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     use ratatui_image::{StatefulImage, Resize, FilterType};
     use std::time::Duration;
 
+    // Must have frames available
     if !app.is_image_modal_open() || app.modal_gif_frames.is_empty() {
         return;
     }
 
-    let theme = &app.theme;
+    // Clone theme colors we need before any mutable borrows
+    let theme_background = app.theme.background;
+    let theme_foreground = app.theme.foreground;
+    let theme_heading_1 = app.theme.heading_1;
 
-    // Handle GIF frame animation (only if multiple frames exist and not paused)
-    let frame_changed = if app.modal_gif_frames.len() > 1 && !app.modal_animation_paused {
+    let is_multi_frame = app.modal_gif_frames.len() > 1;
+
+    // Calculate modal area - centered on screen with padding
+    let modal_width = (area.width * 80) / 100;
+    let modal_height = (area.height * 80) / 100;
+    let modal_x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+    let modal_y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+
+    let modal_area = Rect {
+        x: modal_x,
+        y: modal_y,
+        width: modal_width,
+        height: modal_height,
+    };
+
+    // Get inner area (inside modal border)
+    let inner_area = Rect {
+        x: modal_area.x + 1,
+        y: modal_area.y + 1,
+        width: modal_area.width.saturating_sub(2),
+        height: modal_area.height.saturating_sub(2),
+    };
+
+    // Try to start Kitty native animation for multi-frame GIFs.
+    // Kitty handles frame timing internally - no flicker!
+    if is_multi_frame && !app.has_kitty_animation() && app.use_kitty_animation {
+        // Start animation at center of inner area
+        let image_col = inner_area.x + inner_area.width / 4;
+        let image_row = inner_area.y + inner_area.height / 4;
+        app.start_kitty_animation(image_col, image_row);
+    }
+
+    // Check if Kitty is handling animation
+    let kitty_animating = app.has_kitty_animation();
+
+    // For software animation (non-Kitty terminals), handle frame timing
+    let is_animating = is_multi_frame && !app.modal_animation_paused && !kitty_animating;
+    if is_animating {
         if let Some(last_update) = app.modal_last_frame_update {
             let current_frame = &app.modal_gif_frames[app.modal_frame_index];
             let frame_delay = Duration::from_millis(current_frame.delay_ms as u64);
 
             if last_update.elapsed() >= frame_delay {
-                // Advance to next frame (wraps around)
                 app.modal_frame_index = (app.modal_frame_index + 1) % app.modal_gif_frames.len();
                 app.modal_last_frame_update = Some(std::time::Instant::now());
-                true
-            } else {
-                false
             }
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    // Only update protocol when frame has changed
-    let needs_new_protocol = app.modal_last_rendered_frame != Some(app.modal_frame_index);
-    if needs_new_protocol {
-        if let Some(picker) = &mut app.picker {
-            let new_frame_img = app.modal_gif_frames[app.modal_frame_index].image.clone();
-            app.viewing_image_state = Some(picker.new_resize_protocol(new_frame_img));
-            app.modal_last_rendered_frame = Some(app.modal_frame_index);
         }
     }
 
-    // Render using the single protocol
-    if let Some(protocol_state) = &mut app.viewing_image_state {
-        // Create modal area - centered on screen with some padding
-        let modal_width = (area.width * 80) / 100;
-        let modal_height = (area.height * 80) / 100;
-        let modal_x = area.x + (area.width.saturating_sub(modal_width)) / 2;
-        let modal_y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+    // Only create a new protocol when frame actually changes (software animation only).
+    // Skip this entirely when Kitty handles animation.
+    if !kitty_animating {
+        let needs_new_protocol = app.modal_last_rendered_frame != Some(app.modal_frame_index);
+        if needs_new_protocol {
+            if let Some(picker) = &mut app.picker {
+                let current_img = app.modal_gif_frames[app.modal_frame_index].image.clone();
+                app.viewing_image_state = Some(picker.new_resize_protocol(current_img));
+                app.modal_last_rendered_frame = Some(app.modal_frame_index);
+            }
+        }
+    }
 
-        let modal_area = Rect {
-            x: modal_x,
-            y: modal_y,
-            width: modal_width,
-            height: modal_height,
+    // Get the active protocol for sizing (even Kitty needs this for layout)
+    if let Some(protocol_state) = &mut app.viewing_image_state {
+        // Calculate image area
+        let resize = Resize::Scale(Some(FilterType::Triangle));
+
+        let image_size = protocol_state.size_for(resize.clone(), inner_area);
+        let image_area = Rect {
+            x: inner_area.x + (inner_area.width.saturating_sub(image_size.width)) / 2,
+            y: inner_area.y + (inner_area.height.saturating_sub(image_size.height)) / 2,
+            width: image_size.width,
+            height: image_size.height,
         };
 
-        // Only render background/border when NOT in the middle of a frame change
-        // This reduces flicker during GIF animation
-        if !frame_changed {
-            // Render semi-dark background (using theme colors instead of pure black)
-            let bg = ratatui::widgets::Block::default().style(
-                Style::default()
-                    .bg(theme.background)
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::DIM),
-            );
-            frame.render_widget(bg, area);
+        // Render background ONLY to areas outside the image to prevent flicker.
+        // During animation, we avoid overwriting the image area entirely.
+        let bg_style = Style::default()
+            .bg(theme_background)
+            .fg(theme_foreground)
+            .add_modifier(Modifier::DIM);
+
+        // Render background in 4 regions around the modal (L-shaped areas)
+        // Top strip (above modal)
+        if modal_area.y > area.y {
+            let top_bg = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: modal_area.y - area.y,
+            };
+            frame.render_widget(ratatui::widgets::Block::default().style(bg_style), top_bg);
+        }
+        // Bottom strip (below modal)
+        let modal_bottom = modal_area.y + modal_area.height;
+        if modal_bottom < area.y + area.height {
+            let bottom_bg = Rect {
+                x: area.x,
+                y: modal_bottom,
+                width: area.width,
+                height: (area.y + area.height) - modal_bottom,
+            };
+            frame.render_widget(ratatui::widgets::Block::default().style(bg_style), bottom_bg);
+        }
+        // Left strip (left of modal, between top and bottom)
+        if modal_area.x > area.x {
+            let left_bg = Rect {
+                x: area.x,
+                y: modal_area.y,
+                width: modal_area.x - area.x,
+                height: modal_area.height,
+            };
+            frame.render_widget(ratatui::widgets::Block::default().style(bg_style), left_bg);
+        }
+        // Right strip (right of modal, between top and bottom)
+        let modal_right = modal_area.x + modal_area.width;
+        if modal_right < area.x + area.width {
+            let right_bg = Rect {
+                x: modal_right,
+                y: modal_area.y,
+                width: (area.x + area.width) - modal_right,
+                height: modal_area.height,
+            };
+            frame.render_widget(ratatui::widgets::Block::default().style(bg_style), right_bg);
         }
 
         // Build title with frame info and controls for GIFs
-        let title = if app.modal_gif_frames.len() > 1 {
+        let title = if is_multi_frame {
             let state = if app.modal_animation_paused { "⏸" } else { "▶" };
+            // Show Kitty indicator when using native animation
+            let mode = if kitty_animating { "Kitty" } else { "GIF" };
             format!(
-                " GIF {}/{} {} | ←/→:step Space:play/pause q:close ",
+                " {} {}/{} {} | ←/→:step Space:play/pause q:close ",
+                mode,
                 app.modal_frame_index + 1,
                 app.modal_gif_frames.len(),
                 state
@@ -645,29 +719,115 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
             " Image | q/Esc: Close ".to_string()
         };
 
-        // Render modal border with theme colors
+        // Render modal border (but NOT over image area during animation)
         let modal_border = ratatui::widgets::Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.heading_1).add_modifier(Modifier::BOLD))
+            .border_style(Style::default().fg(theme_heading_1).add_modifier(Modifier::BOLD))
             .title(title)
             .title_alignment(ratatui::layout::Alignment::Center)
-            .style(Style::default().bg(theme.background).fg(theme.foreground));
-        let inner_area = modal_border.inner(modal_area);
-        frame.render_widget(modal_border, modal_area);
+            .style(Style::default().bg(theme_background).fg(theme_foreground));
 
-        // Render image centered in modal
-        let resize = Resize::Scale(Some(FilterType::Triangle));
-        let image_size = protocol_state.size_for(resize.clone(), inner_area);
+        // When Kitty handles animation, avoid overwriting the image area.
+        // The terminal manages the animation layer directly.
+        let avoid_image_area = is_animating || kitty_animating;
 
-        let centered_area = Rect {
-            x: inner_area.x + (inner_area.width.saturating_sub(image_size.width)) / 2,
-            y: inner_area.y + (inner_area.height.saturating_sub(image_size.height)) / 2,
-            width: image_size.width,
-            height: image_size.height,
+        // Only render the border frame (not the interior) during animation
+        // to avoid overwriting the previous image before new one is drawn
+        if avoid_image_area {
+            // Render border edges only, preserving image area
+            render_border_only(frame, &modal_border, modal_area, image_area);
+        } else {
+            // Static image or paused - safe to render full modal
+            frame.render_widget(modal_border, modal_area);
+        }
+
+        // Render image via ratatui-image ONLY when Kitty is NOT handling animation.
+        // For Kitty animation, the terminal renders the image directly via graphics protocol.
+        if !kitty_animating {
+            let img_widget = StatefulImage::new().resize(resize);
+            frame.render_stateful_widget(img_widget, image_area, protocol_state);
+        }
+    }
+}
+
+/// Render only the border portions of a block, avoiding the image area.
+/// This prevents flickering during GIF animation by not overwriting
+/// the previous frame before the new one is drawn.
+fn render_border_only(frame: &mut Frame, block: &ratatui::widgets::Block, modal_area: Rect, image_area: Rect) {
+    use ratatui::widgets::Widget;
+
+    // Top border row (full width of modal)
+    let top_row = Rect {
+        x: modal_area.x,
+        y: modal_area.y,
+        width: modal_area.width,
+        height: 1,
+    };
+    block.clone().render(top_row, frame.buffer_mut());
+
+    // Bottom border row (full width of modal)
+    if modal_area.height > 1 {
+        let bottom_row = Rect {
+            x: modal_area.x,
+            y: modal_area.y + modal_area.height - 1,
+            width: modal_area.width,
+            height: 1,
         };
+        block.clone().render(bottom_row, frame.buffer_mut());
+    }
 
-        let img_widget = StatefulImage::new().resize(resize);
-        frame.render_stateful_widget(img_widget, centered_area, protocol_state);
+    // Left border column (between top and bottom, avoiding image)
+    if modal_area.height > 2 {
+        let middle_height = modal_area.height - 2;
+        // Left side - from border to image start
+        let left_strip_width = image_area.x.saturating_sub(modal_area.x);
+        if left_strip_width > 0 {
+            let left_strip = Rect {
+                x: modal_area.x,
+                y: modal_area.y + 1,
+                width: left_strip_width,
+                height: middle_height,
+            };
+            block.clone().render(left_strip, frame.buffer_mut());
+        }
+
+        // Right side - from image end to border
+        let image_right = image_area.x + image_area.width;
+        let modal_right = modal_area.x + modal_area.width;
+        if image_right < modal_right {
+            let right_strip = Rect {
+                x: image_right,
+                y: modal_area.y + 1,
+                width: modal_right - image_right,
+                height: middle_height,
+            };
+            block.clone().render(right_strip, frame.buffer_mut());
+        }
+
+        // Top padding (above image, inside border)
+        let padding_top_height = image_area.y.saturating_sub(modal_area.y + 1);
+        if padding_top_height > 0 && image_area.width > 0 {
+            let top_pad = Rect {
+                x: image_area.x,
+                y: modal_area.y + 1,
+                width: image_area.width,
+                height: padding_top_height,
+            };
+            block.clone().render(top_pad, frame.buffer_mut());
+        }
+
+        // Bottom padding (below image, inside border)
+        let image_bottom = image_area.y + image_area.height;
+        let modal_inner_bottom = modal_area.y + modal_area.height - 1;
+        if image_bottom < modal_inner_bottom {
+            let bottom_pad = Rect {
+                x: image_area.x,
+                y: image_bottom,
+                width: image_area.width,
+                height: modal_inner_bottom - image_bottom,
+            };
+            block.clone().render(bottom_pad, frame.buffer_mut());
+        }
     }
 }
 

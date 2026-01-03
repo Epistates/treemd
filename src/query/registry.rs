@@ -7,15 +7,15 @@
 //!
 //! # Example: Registering a Custom Function
 //!
-//! ```ignore
-//! use treemd::query::{Registry, Function, Value};
+//! ```rust
+//! use treemd::query::{Registry, Function, Value, EvalContext, QueryError};
 //!
 //! fn my_uppercase(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-//!     let input = args.get(0).map(|v| v.to_text()).unwrap_or_default();
+//!     let input = args.first().map(|v| v.to_text()).unwrap_or_default();
 //!     Ok(vec![Value::String(input.to_uppercase())])
 //! }
 //!
-//! let mut registry = Registry::default();
+//! let mut registry = Registry::with_builtins();
 //! registry.register_function("my_upper", Function::new(my_uppercase, 0..=1));
 //! ```
 

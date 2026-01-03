@@ -6,18 +6,19 @@
 //!
 //! # Example: Custom Extractor
 //!
-//! ```ignore
+//! ```rust
 //! use treemd::query::{Registry, Value, ExtractorFn};
 //! use std::sync::Arc;
 //!
 //! // Extract custom admonition blocks (e.g., :::note, :::warning)
 //! let admonition_extractor: ExtractorFn = Arc::new(|doc, _ctx| {
 //!     let mut results = Vec::new();
-//!     // Parse custom syntax and extract values
+//!     // Parse custom syntax from doc.content and extract values
+//!     // For now, return empty (placeholder for custom parsing logic)
 //!     Ok(results)
 //! });
 //!
-//! let mut registry = Registry::default();
+//! let mut registry = Registry::with_builtins();
 //! registry.register_extractor("admonition", admonition_extractor);
 //! ```
 

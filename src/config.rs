@@ -196,13 +196,37 @@ fn default_color_mode() -> String {
 }
 
 impl Config {
-    /// Get the config file path (platform-specific)
+    /// Get the XDG-style config file path (~/.config/treemd/config.toml)
+    /// This is preferred on macOS for CLI tools and cross-platform dotfiles
+    #[cfg(target_os = "macos")]
+    fn xdg_config_path() -> Option<PathBuf> {
+        dirs::home_dir().map(|p| p.join(".config").join("treemd").join("config.toml"))
+    }
+
+    /// Get the platform-specific config file path
+    /// - macOS: ~/Library/Application Support/treemd/config.toml
+    /// - Linux: ~/.config/treemd/config.toml
+    /// - Windows: %APPDATA%/treemd/config.toml
     pub fn config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|p| p.join("treemd").join("config.toml"))
     }
 
     /// Load config from file, or return default if file doesn't exist
+    /// On macOS, checks ~/.config/treemd first, then falls back to ~/Library/Application Support
     pub fn load() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            // Prefer XDG-style path on macOS for CLI tools
+            if let Some(xdg_path) = Self::xdg_config_path() {
+                if let Ok(contents) = fs::read_to_string(&xdg_path) {
+                    if let Ok(config) = toml::from_str(&contents) {
+                        return config;
+                    }
+                }
+            }
+        }
+
+        // Fall back to platform-specific path
         Self::config_path()
             .and_then(|path| {
                 fs::read_to_string(&path)

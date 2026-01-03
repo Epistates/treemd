@@ -2,6 +2,7 @@ mod app;
 mod help_text;
 mod image_cache;
 mod interactive;
+mod kitty_animation;
 mod syntax;
 pub mod terminal_compat;
 pub mod theme;
@@ -19,7 +20,8 @@ use color_eyre::Result;
 use crossterm::ExecutableCommand;
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode,
 };
 use opensesame::{Editor, EditorConfig};
 use ratatui::DefaultTerminal;
@@ -95,7 +97,21 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     }
 
     loop {
+        // Use synchronized output when animating GIFs (reduces flicker on iTerm2, etc.)
+        // This makes the entire frame update atomic from the terminal's perspective.
+        let use_sync = app.is_image_modal_open()
+            && app.modal_gif_frames.len() > 1
+            && !app.has_kitty_animation(); // Kitty uses native animation, no sync needed
+
+        if use_sync {
+            let _ = stdout().execute(BeginSynchronizedUpdate);
+        }
+
         terminal.draw(|frame| ui::render(frame, &mut app))?;
+
+        if use_sync {
+            let _ = stdout().execute(EndSynchronizedUpdate);
+        }
 
         // Update file watcher if the current file changed (e.g., via navigation)
         if app.file_path_changed {
@@ -123,9 +139,13 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
             continue; // Redraw after returning from editor
         }
 
-        // Poll for events with timeout to allow status message expiration
-        // Use 100ms timeout for responsive UI updates
-        if !tty::poll_event(Duration::from_millis(100))? {
+        // Poll for events with dynamic timeout:
+        // - When GIF is animating: use time until next frame (for smooth playback)
+        // - Otherwise: 100ms for responsive UI updates
+        let poll_timeout = app
+            .time_until_next_frame()
+            .unwrap_or(Duration::from_millis(100));
+        if !tty::poll_event(poll_timeout)? {
             // No keyboard event - check for file changes (unless suppressed after internal save)
             if app.suppress_file_watch {
                 // Clear suppression and drain any pending file events
