@@ -14,12 +14,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
+          # Linux x86_64 (glibc)
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             use_cross: false
-          # Linux ARM64
+          # Linux x86_64 (musl - for Alpine/static linking)
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            use_cross: true
+          # Linux ARM64 (glibc)
           - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            use_cross: true
+          # Linux ARM64 (musl - for Alpine/static linking)
+          - target: aarch64-unknown-linux-musl
             runner: ubuntu-latest
             use_cross: true
           # macOS x86_64
