@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "treemd"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "arboard",
  "clap",

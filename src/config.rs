@@ -27,6 +27,10 @@ pub struct Config {
     /// Image display configuration
     #[serde(default)]
     pub images: ImageConfig,
+
+    /// Content filtering options
+    #[serde(default)]
+    pub content: ContentConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +40,10 @@ pub struct UiConfig {
 
     #[serde(default = "default_outline_width")]
     pub outline_width: u16,
+
+    /// Tree rendering style: "spaced" (default) or "compact" (gapless)
+    #[serde(default = "default_tree_style")]
+    pub tree_style: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +73,35 @@ impl Default for ImageConfig {
 }
 
 fn default_images_enabled() -> bool {
+    true
+}
+
+/// Content filtering configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentConfig {
+    /// Hide YAML frontmatter (---\n...\n---) at document start (default: true)
+    #[serde(default = "default_hide_frontmatter")]
+    pub hide_frontmatter: bool,
+
+    /// Hide LaTeX math expressions ($...$, $$...$$, \begin{...}) (default: true)
+    #[serde(default = "default_hide_latex")]
+    pub hide_latex: bool,
+}
+
+impl Default for ContentConfig {
+    fn default() -> Self {
+        Self {
+            hide_frontmatter: default_hide_frontmatter(),
+            hide_latex: default_hide_latex(),
+        }
+    }
+}
+
+fn default_hide_frontmatter() -> bool {
+    true
+}
+
+fn default_hide_latex() -> bool {
     true
 }
 
@@ -195,8 +232,13 @@ impl Default for UiConfig {
         Self {
             theme: default_theme(),
             outline_width: default_outline_width(),
+            tree_style: default_tree_style(),
         }
     }
+}
+
+fn default_tree_style() -> String {
+    "spaced".to_string()
 }
 
 impl Default for TerminalConfig {
@@ -323,5 +365,10 @@ impl Config {
     /// Get keybindings with user customizations applied
     pub fn keybindings(&self) -> Keybindings {
         self.keybindings.to_keybindings()
+    }
+
+    /// Check if compact (gapless) tree style is enabled
+    pub fn is_compact_tree(&self) -> bool {
+        self.ui.tree_style == "compact"
     }
 }

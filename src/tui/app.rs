@@ -339,12 +339,13 @@ pub struct App {
     pub link_search_active: bool,   // Whether search input is active
 
     // File picker state
-    pub files_in_directory: Vec<PathBuf>, // All .md files in cwd
+    pub files_in_directory: Vec<PathBuf>, // All .md files in directory
     pub filtered_file_indices: Vec<usize>, // Indices after filtering
     pub selected_file_idx: Option<usize>, // Selected index in filtered list
     pub file_search_query: String,        // Search query for filtering files
     pub file_search_active: bool,         // Whether search input is active
     pub startup_needs_file_picker: bool,  // True if started without file arg
+    pub file_picker_dir: Option<PathBuf>, // Custom directory for file picker
 
     pub file_history: Vec<FileState>,   // Back navigation stack
     pub file_future: Vec<FileState>,    // Forward navigation stack (for undo back)
@@ -550,6 +551,7 @@ impl App {
             file_search_query: String::new(),
             file_search_active: false,
             startup_needs_file_picker: false,
+            file_picker_dir: None,
 
             file_history: Vec::new(),
             file_future: Vec::new(),
@@ -1664,8 +1666,12 @@ impl App {
 
     /// Scroll content down by one line
     fn scroll_content_down(&mut self) {
+        // Calculate max scroll: stop when last line is visible at bottom of viewport
+        let max_scroll = self
+            .content_height
+            .saturating_sub(self.content_viewport_height);
         let new_scroll = self.content_scroll.saturating_add(1);
-        if new_scroll < self.content_height {
+        if new_scroll <= max_scroll {
             self.content_scroll = new_scroll;
             self.content_scroll_state = self.content_scroll_state.position(new_scroll as usize);
         }
@@ -1938,9 +1944,12 @@ impl App {
             let last = self.outline_items.len() - 1;
             self.select_outline_index(last);
         } else {
-            let last = self.content_height.saturating_sub(1);
-            self.content_scroll = last;
-            self.content_scroll_state = self.content_scroll_state.position(last as usize);
+            // Scroll to show the last line at the bottom of the viewport
+            let max_scroll = self
+                .content_height
+                .saturating_sub(self.content_viewport_height);
+            self.content_scroll = max_scroll;
+            self.content_scroll_state = self.content_scroll_state.position(max_scroll as usize);
         }
     }
 
@@ -2429,8 +2438,12 @@ impl App {
 
     pub fn scroll_page_down(&mut self) {
         if self.focus == Focus::Content {
+            // Calculate max scroll: stop when last line is visible at bottom of viewport
+            let max_scroll = self
+                .content_height
+                .saturating_sub(self.content_viewport_height);
             let new_scroll = self.content_scroll.saturating_add(10);
-            self.content_scroll = new_scroll.min(self.content_height.saturating_sub(1));
+            self.content_scroll = new_scroll.min(max_scroll);
             self.content_scroll_state = self
                 .content_scroll_state
                 .position(self.content_scroll as usize);
@@ -2448,8 +2461,12 @@ impl App {
 
     /// Scroll page down in interactive mode (bypasses focus check)
     pub fn scroll_page_down_interactive(&mut self) {
+        // Calculate max scroll: stop when last line is visible at bottom of viewport
+        let max_scroll = self
+            .content_height
+            .saturating_sub(self.content_viewport_height);
         let new_scroll = self.content_scroll.saturating_add(10);
-        self.content_scroll = new_scroll.min(self.content_height.saturating_sub(1));
+        self.content_scroll = new_scroll.min(max_scroll);
         self.content_scroll_state = self
             .content_scroll_state
             .position(self.content_scroll as usize);
@@ -3472,8 +3489,13 @@ impl App {
     pub fn scan_markdown_files(&mut self) {
         use std::fs;
 
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let mut files: Vec<PathBuf> = fs::read_dir(&cwd)
+        // Use custom directory if set, otherwise use current working directory
+        let dir = self
+            .file_picker_dir
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+        let mut files: Vec<PathBuf> = fs::read_dir(&dir)
             .ok()
             .into_iter()
             .flatten()
@@ -3644,6 +3666,16 @@ impl App {
         self.selected_link_idx
             .and_then(|idx| self.filtered_link_indices.get(idx))
             .and_then(|&real_idx| self.links_in_view.get(real_idx))
+    }
+
+    /// Check if frontmatter should be hidden (from config)
+    pub fn should_hide_frontmatter(&self) -> bool {
+        self.config.content.hide_frontmatter
+    }
+
+    /// Check if LaTeX should be hidden (from config)
+    pub fn should_hide_latex(&self) -> bool {
+        self.config.content.hide_latex
     }
 
     /// Follow the currently selected link

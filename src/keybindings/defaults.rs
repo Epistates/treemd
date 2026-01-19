@@ -72,7 +72,11 @@ fn add_normal_mode(kb: &mut Keybindings) {
     bind(kb, Normal, "g", First);
     bind(kb, Normal, "G", Last);
     bind(kb, Normal, "d", PageDown);
+    bind(kb, Normal, "PageDown", PageDown);
     bind(kb, Normal, "u", PageUp);
+    bind(kb, Normal, "PageUp", PageUp);
+    bind(kb, Normal, "Home", First);
+    bind(kb, Normal, "End", Last);
     bind(kb, Normal, "p", JumpToParent);
 
     // Outline
@@ -149,6 +153,10 @@ fn add_help_mode(kb: &mut Keybindings) {
     bind(kb, Help, "PageDown", PageDown);
     bind(kb, Help, "u", PageUp);
     bind(kb, Help, "PageUp", PageUp);
+    bind(kb, Help, "g", First);
+    bind(kb, Help, "G", Last);
+    bind(kb, Help, "Home", First);
+    bind(kb, Help, "End", Last);
 
     // Close help
     bind(kb, Help, "?", ToggleHelp);
@@ -211,6 +219,10 @@ fn add_interactive_mode(kb: &mut Keybindings) {
     bind(kb, Interactive, "PageDown", PageDown);
     bind(kb, Interactive, "u", PageUp);
     bind(kb, Interactive, "PageUp", PageUp);
+    bind(kb, Interactive, "g", First);
+    bind(kb, Interactive, "G", Last);
+    bind(kb, Interactive, "Home", First);
+    bind(kb, Interactive, "End", Last);
 
     // Document search from interactive mode
     bind(kb, Interactive, "/", EnterDocSearch);
@@ -433,6 +445,10 @@ fn add_file_picker_mode(kb: &mut Keybindings) {
     bind(kb, FilePicker, "Up", Previous);
     bind(kb, FilePicker, "Tab", Next);
     bind(kb, FilePicker, "Shift+Tab", Previous);
+    bind(kb, FilePicker, "g", First);
+    bind(kb, FilePicker, "G", Last);
+    bind(kb, FilePicker, "Home", First);
+    bind(kb, FilePicker, "End", Last);
 
     // Selection
     bind(kb, FilePicker, "Enter", FollowLink);

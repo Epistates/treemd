@@ -250,19 +250,43 @@ fn format_markdown_value(value: &Value) -> String {
 }
 
 fn format_tree(values: &[Value]) -> String {
+    use crate::Config;
+    let config = Config::load();
+    let compact = config.is_compact_tree();
+
     let mut output = String::new();
 
     for (i, value) in values.iter().enumerate() {
         let is_last = i == values.len() - 1;
-        format_tree_value(value, "", is_last, &mut output);
+        format_tree_value(value, "", is_last, compact, &mut output);
     }
 
     output
 }
 
-fn format_tree_value(value: &Value, prefix: &str, is_last: bool, output: &mut String) {
-    let connector = if is_last { "└─ " } else { "├─ " };
-    let child_prefix = format!("{}{}  ", prefix, if is_last { " " } else { "│" });
+fn format_tree_value(
+    value: &Value,
+    prefix: &str,
+    is_last: bool,
+    compact: bool,
+    output: &mut String,
+) {
+    let (connector, continuation) = if compact {
+        // Compact/gapless style
+        if is_last {
+            ("└──", "   ")
+        } else {
+            ("├──", "│  ")
+        }
+    } else {
+        // Spaced style (default)
+        if is_last {
+            ("└─ ", "    ")
+        } else {
+            ("├─ ", "│   ")
+        }
+    };
+    let child_prefix = format!("{}{}", prefix, continuation);
 
     match value {
         Value::Heading(h) => {
@@ -277,7 +301,7 @@ fn format_tree_value(value: &Value, prefix: &str, is_last: bool, output: &mut St
         Value::Array(arr) => {
             output.push_str(&format!("{}{}[\n", prefix, connector));
             for (i, item) in arr.iter().enumerate() {
-                format_tree_value(item, &child_prefix, i == arr.len() - 1, output);
+                format_tree_value(item, &child_prefix, i == arr.len() - 1, compact, output);
             }
             output.push_str(&format!("{}]\n", child_prefix));
         }
@@ -288,7 +312,13 @@ fn format_tree_value(value: &Value, prefix: &str, is_last: bool, output: &mut St
                 output.push_str(&format!("{}{}: ", child_prefix, k));
                 if matches!(v, Value::Object(_) | Value::Array(_)) {
                     output.push('\n');
-                    format_tree_value(v, &format!("{}  ", child_prefix), i == len - 1, output);
+                    format_tree_value(
+                        v,
+                        &format!("{}  ", child_prefix),
+                        i == len - 1,
+                        compact,
+                        output,
+                    );
                 } else {
                     output.push_str(&format!("{}\n", v.to_text()));
                 }

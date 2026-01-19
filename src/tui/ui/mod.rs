@@ -20,7 +20,7 @@ use ratatui::widgets::{
     Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, Wrap,
 };
 use table::render_table;
-use util::detect_checkbox_in_text;
+use util::{detect_checkbox_in_text, filter_content};
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     // Update content metrics before rendering to ensure content height and scroll are correct
@@ -370,6 +370,18 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
             format!(" {}Content ", raw_indicator)
         };
         (app.document.content.clone(), title)
+    };
+
+    // Apply content filtering (frontmatter, LaTeX) based on config
+    // Only filter when not showing raw source - raw view shows everything
+    let content_text = if !app.show_raw_source {
+        filter_content(
+            &content_text,
+            app.should_hide_frontmatter(),
+            app.should_hide_latex(),
+        )
+    } else {
+        content_text
     };
 
     // Check if we should render raw source or enhanced markdown
@@ -1657,6 +1669,8 @@ fn render_markdown_enhanced(
                     (false, None)
                 };
 
+                // Note: available_width is None here; width constraint would require
+                // threading viewport width through render_markdown_enhanced
                 let table_lines = render_table(
                     headers,
                     alignments,
@@ -1665,6 +1679,7 @@ fn render_markdown_enhanced(
                     is_block_selected,
                     in_table_mode,
                     selected_cell,
+                    None, // available_width - for future enhancement
                 );
                 lines.extend(table_lines);
             }
@@ -1812,6 +1827,7 @@ fn render_markdown_enhanced(
                                 is_this_table_selected,
                                 in_table_mode,
                                 selected_cell,
+                                None, // available_width
                             );
 
                             for nested_line in table_lines {
@@ -2099,7 +2115,8 @@ fn render_block_to_lines(
             rows,
         } => {
             // Render table (non-interactive, no selection)
-            let table_lines = render_table(headers, alignments, rows, theme, false, false, None);
+            let table_lines =
+                render_table(headers, alignments, rows, theme, false, false, None, None);
             lines.extend(table_lines);
         }
         ContentBlock::List { ordered, items } => {

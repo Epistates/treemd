@@ -118,7 +118,10 @@ pkgin install treemd
 Launch the interactive interface by running treemd with a file:
 
 ```bash
-treemd README.md
+treemd README.md        # Open specific file
+treemd .                # Open file picker in current directory
+treemd docs/            # Open file picker in specified directory
+treemd *.md             # Open file picker with matched files
 ```
 
 #### Keyboard Shortcuts
@@ -129,9 +132,9 @@ treemd README.md
 | Key | Action |
 |-----|--------|
 | `j` / `k` or `↓` / `↑` | Move down/up |
-| `g` / `G` | Jump to top/bottom |
+| `g` / `G` or `Home` / `End` | Jump to top/bottom |
 | `p` | Jump to parent heading |
-| `d` / `u` | Page down/up |
+| `d` / `u` or `PageDown` / `PageUp` | Page down/up |
 | `Tab` | Switch focus between outline and content |
 | `1`-`9` | Jump to heading by number |
 
@@ -369,9 +372,14 @@ The file is created automatically when you change settings (theme with `t`, outl
 [ui]
 theme = "Nord"         # OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
 outline_width = 30     # 20, 30, or 40
+tree_style = "spaced"  # "spaced" (default) or "compact" (gapless box characters)
 
 [terminal]
 color_mode = "auto"    # "auto", "rgb", or "256"
+
+[content]
+hide_frontmatter = true  # Hide YAML frontmatter (---\n...\n---) in content view
+hide_latex = true        # Hide LaTeX math expressions ($...$, $$...$$, \begin{...})
 ```
 
 ### Custom Keybindings

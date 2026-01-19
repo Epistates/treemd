@@ -235,9 +235,176 @@ pub fn build_highlighted_line(
     Line::from(spans)
 }
 
+/// Strip YAML frontmatter from the beginning of a document.
+///
+/// Frontmatter must:
+/// - Start at the very beginning of the document (possibly after leading newlines)
+/// - Begin with `---` on its own line
+/// - End with `---` on its own line
+///
+/// # Arguments
+/// * `content` - The document content
+///
+/// # Returns
+/// Content with frontmatter removed, or original content if no frontmatter found
+pub fn strip_frontmatter(content: &str) -> String {
+    // Frontmatter must start at the beginning (after optional whitespace/newlines)
+    let trimmed = content.trim_start();
+
+    if !trimmed.starts_with("---") {
+        return content.to_string();
+    }
+
+    // Find the closing ---
+    // The pattern is: ---\n...\n---\n (or end of content)
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        // Find the closing marker (must be on its own line)
+        if let Some(end_pos) = rest.find("\n---") {
+            // Skip past the closing ---
+            let after_close = &rest[end_pos + 4..];
+            // Also skip the newline after the closing --- if present
+            let result = after_close.strip_prefix('\n').unwrap_or(after_close);
+            return result.to_string();
+        }
+    }
+
+    content.to_string()
+}
+
+/// Strip LaTeX math expressions from content.
+///
+/// Removes:
+/// - Inline math: `$...$`
+/// - Display math: `$$...$$`
+/// - LaTeX environments: `\begin{...}...\end{...}`
+///
+/// # Arguments
+/// * `content` - The document content
+///
+/// # Returns
+/// Content with LaTeX expressions removed
+pub fn strip_latex(content: &str) -> String {
+    use regex::Regex;
+
+    // Match display math ($$...$$) first - must be removed before inline math
+    let display_math = Regex::new(r"\$\$[\s\S]*?\$\$").unwrap();
+    let result = display_math.replace_all(content, "");
+
+    // Match inline math ($...$) - simple pattern that requires content between dollars
+    // Match: $ followed by non-empty content (no newlines, no unescaped $) ending with $
+    // This avoids matching lone $ signs like currency
+    let inline_math = Regex::new(r"\$([^\$\n]+)\$").unwrap();
+    let result = inline_math.replace_all(&result, "");
+
+    // Match \begin{...}...\end{...} environments
+    let latex_env = Regex::new(r"\\begin\{[^}]+\}[\s\S]*?\\end\{[^}]+\}").unwrap();
+    let result = latex_env.replace_all(&result, "");
+
+    result.to_string()
+}
+
+/// Apply content filters based on configuration.
+///
+/// Strips frontmatter and/or LaTeX based on the provided flags.
+///
+/// # Arguments
+/// * `content` - The document content
+/// * `hide_frontmatter` - Whether to strip YAML frontmatter
+/// * `hide_latex` - Whether to strip LaTeX expressions
+///
+/// # Returns
+/// Filtered content
+pub fn filter_content(content: &str, hide_frontmatter: bool, hide_latex: bool) -> String {
+    let mut result = content.to_string();
+
+    if hide_frontmatter {
+        result = strip_frontmatter(&result);
+    }
+
+    if hide_latex {
+        result = strip_latex(&result);
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod strip_frontmatter_tests {
+        use super::*;
+
+        #[test]
+        fn test_simple_frontmatter() {
+            let content = "---\ntitle: Test\n---\n\n# Heading\n\nContent";
+            let result = strip_frontmatter(content);
+            assert_eq!(result, "\n# Heading\n\nContent");
+        }
+
+        #[test]
+        fn test_no_frontmatter() {
+            let content = "# Heading\n\nContent";
+            let result = strip_frontmatter(content);
+            assert_eq!(result, content);
+        }
+
+        #[test]
+        fn test_frontmatter_with_yaml() {
+            let content = "---\ntitle: My Doc\ntags:\n  - rust\n  - markdown\n---\n# Start";
+            let result = strip_frontmatter(content);
+            assert_eq!(result, "# Start");
+        }
+
+        #[test]
+        fn test_frontmatter_not_at_start() {
+            let content = "Some text\n---\ntitle: Test\n---\nMore text";
+            let result = strip_frontmatter(content);
+            assert_eq!(result, content); // Should not strip
+        }
+    }
+
+    mod strip_latex_tests {
+        use super::*;
+
+        #[test]
+        fn test_inline_math() {
+            let content = "The formula $x^2$ is quadratic";
+            let result = strip_latex(content);
+            assert_eq!(result, "The formula  is quadratic");
+        }
+
+        #[test]
+        fn test_display_math() {
+            let content = "The equation:\n$$\nE = mc^2\n$$\nis famous.";
+            let result = strip_latex(content);
+            assert_eq!(result, "The equation:\n\nis famous.");
+        }
+
+        #[test]
+        fn test_latex_environment() {
+            let content = "An equation:\n\\begin{equation}\ny = mx + b\n\\end{equation}\ndone.";
+            let result = strip_latex(content);
+            assert_eq!(result, "An equation:\n\ndone.");
+        }
+
+        #[test]
+        fn test_no_latex() {
+            let content = "Regular text without math";
+            let result = strip_latex(content);
+            assert_eq!(result, content);
+        }
+
+        #[test]
+        fn test_money_not_stripped() {
+            // Currency like "$5" shouldn't match inline math pattern
+            // because it would need content between the dollars
+            let content = "It costs $5";
+            let result = strip_latex(content);
+            // This won't match because there's no closing $
+            assert_eq!(result, content);
+        }
+    }
 
     mod detect_checkbox_tests {
         use super::*;

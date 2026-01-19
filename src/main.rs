@@ -81,8 +81,8 @@ fn main() -> Result<()> {
     // This is the standard pattern used by: less, fzf, bat, etc.
 
     // Determine input source - check for file picker case first
-    let (input_source, needs_file_picker) = match args.file.as_deref() {
-        None => {
+    let (input_source, needs_file_picker, file_picker_dir) = match args.file.len() {
+        0 => {
             // No file provided - check for .md files in cwd
             use std::fs;
             let cwd = std::env::current_dir().unwrap_or_default();
@@ -106,6 +106,7 @@ fn main() -> Result<()> {
                 eprintln!("No markdown files found in current directory.");
                 eprintln!("\nUsage: treemd [OPTIONS] <FILE>");
                 eprintln!("       treemd [OPTIONS] -");
+                eprintln!("       treemd [OPTIONS] .           # Open file picker");
                 eprintln!("       tree | treemd [OPTIONS]\n");
                 eprintln!("Tip: Navigate to a directory with .md files, or specify a file path.");
                 eprintln!("\nFor shell completion setup, use:");
@@ -119,27 +120,69 @@ fn main() -> Result<()> {
                     "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
                 ),
                 true,
+                None,
             )
         }
-        Some(file_path) => {
-            // File path was provided - use existing logic
-            match treemd::input::determine_input_source(Some(file_path)) {
-                Ok(source) => (source, false),
-                Err(treemd::input::InputError::NoTty) => {
-                    eprintln!("Error: markdown file argument is required");
-                    eprintln!("\nUsage: treemd [OPTIONS] <FILE>");
-                    eprintln!("       treemd [OPTIONS] -");
-                    eprintln!("       tree | treemd [OPTIONS]\n");
-                    eprintln!(
-                        "Use '-' to explicitly read from stdin, or pipe input with CLI flags."
-                    );
-                    eprintln!("\nFor shell completion setup, use:");
-                    eprintln!("  treemd --setup-completions");
-                    std::process::exit(1);
+        1 => {
+            let file_path = &args.file[0];
+            // Check if it's a directory
+            if file_path.is_dir() {
+                // Directory provided - open file picker in that directory
+                (
+                    treemd::input::InputSource::Stdin(
+                        "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
+                    ),
+                    true,
+                    Some(file_path.clone()),
+                )
+            } else {
+                // Single file path was provided - use existing logic
+                match treemd::input::determine_input_source(Some(file_path.as_path())) {
+                    Ok(source) => (source, false, None),
+                    Err(treemd::input::InputError::NoTty) => {
+                        eprintln!("Error: markdown file argument is required");
+                        eprintln!("\nUsage: treemd [OPTIONS] <FILE>");
+                        eprintln!("       treemd [OPTIONS] -");
+                        eprintln!("       treemd [OPTIONS] .           # Open file picker");
+                        eprintln!("       tree | treemd [OPTIONS]\n");
+                        eprintln!(
+                            "Use '-' to explicitly read from stdin, or pipe input with CLI flags."
+                        );
+                        eprintln!("\nFor shell completion setup, use:");
+                        eprintln!("  treemd --setup-completions");
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading input: {}", e);
+                        process::exit(1);
+                    }
                 }
-                Err(e) => {
-                    eprintln!("Error reading input: {}", e);
-                    process::exit(1);
+            }
+        }
+        _ => {
+            // Multiple files provided - open first file, others available in file picker
+            // For now, just open the first file (file picker will show all files in same dir)
+            let file_path = &args.file[0];
+            if file_path.is_dir() {
+                // If first arg is a directory, use it for file picker
+                (
+                    treemd::input::InputSource::Stdin(
+                        "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
+                    ),
+                    true,
+                    Some(file_path.clone()),
+                )
+            } else {
+                match treemd::input::determine_input_source(Some(file_path.as_path())) {
+                    Ok(source) => (source, false, None),
+                    Err(treemd::input::InputError::NoTty) => {
+                        eprintln!("Error: markdown file argument is required");
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading input: {}", e);
+                        process::exit(1);
+                    }
                 }
             }
         }
@@ -244,7 +287,8 @@ fn main() -> Result<()> {
         })?;
 
         // Get filename and path (use placeholders for stdin)
-        let (filename, file_path) = if let Some(ref file) = args.file {
+        let (filename, file_path) = if !args.file.is_empty() && !args.file[0].is_dir() {
+            let file = &args.file[0];
             let name = file
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -253,7 +297,7 @@ fn main() -> Result<()> {
             let path = file.canonicalize().unwrap_or_else(|_| file.clone());
             (name, path)
         } else {
-            // Stdin input
+            // Stdin input or directory
             ("stdin".to_string(), std::path::PathBuf::from("<stdin>"))
         };
 
@@ -271,6 +315,9 @@ fn main() -> Result<()> {
             treemd::App::new(doc, filename, file_path, config, color_mode, images_enabled);
         if needs_file_picker {
             app.startup_needs_file_picker = true;
+        }
+        if let Some(dir) = file_picker_dir {
+            app.file_picker_dir = Some(dir.canonicalize().unwrap_or(dir));
         }
         let result = treemd::tui::run(&mut terminal, app);
 
@@ -332,12 +379,14 @@ fn print_headings(headings: &[&parser::Heading], format: &OutputFormat, doc: &Do
 
 fn print_tree(doc: &Document, format: &OutputFormat) {
     let tree = doc.build_tree();
+    let config = treemd::Config::load();
+    let compact = config.is_compact_tree();
 
     match format {
         OutputFormat::Tree | OutputFormat::Plain => {
             for (i, node) in tree.iter().enumerate() {
                 let is_last = i == tree.len() - 1;
-                print!("{}", node.render_box_tree("", is_last));
+                print!("{}", node.render_box_tree_styled("", is_last, compact));
             }
         }
         OutputFormat::Json => {

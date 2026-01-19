@@ -21,17 +21,22 @@ use clap_complete::engine::{ArgValueCompleter, CompletionCandidate, ValueComplet
     treemd --setup-completions    # Set up shell completions"
 )]
 pub struct Cli {
-    /// Markdown file to view (.md or .markdown), or '-' for stdin
+    /// Markdown file(s) to view (.md or .markdown), directory, or '-' for stdin
     ///
-    /// Path to the markdown file to open. Use '-' to read from stdin.
+    /// Path to the markdown file(s) to open. Use '-' to read from stdin.
+    /// If a directory is specified, opens file picker in that directory.
+    /// Multiple files can be specified for the file picker.
     /// If no file is specified and stdin is piped, input is read from stdin.
     ///
     /// Examples:
     ///   treemd README.md         # Open file
+    ///   treemd .                 # Open file picker in current directory
+    ///   treemd docs/             # Open file picker in docs directory
+    ///   treemd *.md              # Open file picker with matched files
     ///   treemd -                 # Read from stdin
     ///   cat doc.md | treemd -l   # Pipe markdown
     #[arg(add = markdown_file_completer())]
-    pub file: Option<PathBuf>,
+    pub file: Vec<PathBuf>,
 
     #[command(subcommand)]
     pub command: Option<Command>,

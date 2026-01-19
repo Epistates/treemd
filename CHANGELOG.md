@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-01-19
+
+### Added
+
+- **Home/End key bindings** - Navigate to first/last with Home/End keys ([#43](https://github.com/Epistates/treemd/issues/43))
+  - Works in Normal, Interactive, Help, and FilePicker modes
+  - Also added PageUp/PageDown bindings in Normal mode for consistency
+
+- **Directory and multi-file support** - Open file picker with directory argument ([#43](https://github.com/Epistates/treemd/issues/43))
+  - `treemd .` opens file picker in current directory
+  - `treemd docs/` opens file picker in specified directory
+  - Multiple file arguments supported (e.g., `treemd *.md`)
+
+- **Compact tree style** - Gapless box-drawing characters for tree visualization ([#43](https://github.com/Epistates/treemd/issues/43))
+  - New `tree_style` config option: "spaced" (default) or "compact"
+  - Compact mode uses `├──` instead of `├─ ` for tighter trees
+  - Works in both `--tree` CLI output and query tree output
+
+- **Content filtering** - Hide YAML frontmatter and LaTeX in content view ([#43](https://github.com/Epistates/treemd/issues/43))
+  - `hide_frontmatter` option strips `---\n...\n---` blocks at document start
+  - `hide_latex` option strips `$...$`, `$$...$$`, and `\begin{...}\end{...}` expressions
+  - Both enabled by default, configurable via `[content]` section
+  - Raw source view (`r`) shows unfiltered content
+
+- **Smart table collapsing** - Tables shrink proportionally on narrow terminals ([#43](https://github.com/Epistates/treemd/issues/43))
+  - `render_table()` now accepts optional `available_width` parameter
+  - Columns shrink proportionally when table exceeds available width
+  - Minimum column width of 5 characters ensures readability
+
+### Fixed
+
+- **EOF scroll behavior** - Content no longer scrolls past the last line ([#43](https://github.com/Epistates/treemd/issues/43))
+  - Scroll stops when last line is visible at bottom of viewport
+  - Affects `scroll_content_down()`, `scroll_page_down()`, `scroll_page_down_interactive()`, and `last()`
+
+### Technical
+
+- **Config additions** (`src/config.rs`)
+  - Added `ContentConfig` struct with `hide_frontmatter` and `hide_latex` fields
+  - Added `tree_style` field to `UiConfig` (defaults to "spaced")
+  - Added `is_compact_tree()` helper method to Config
+
+- **Content filtering utilities** (`src/tui/ui/util.rs`)
+  - Added `strip_frontmatter()` for YAML frontmatter removal
+  - Added `strip_latex()` for LaTeX expression removal
+  - Added `filter_content()` combining both filters
+  - Comprehensive test coverage for edge cases
+
+- **Tree rendering** (`src/parser/document.rs`, `src/query/output.rs`)
+  - Added `render_box_tree_styled()` method with compact parameter
+  - Updated `format_tree_value()` to support compact mode
+
+- **App state** (`src/tui/app.rs`)
+  - Added `file_picker_dir` field for custom directory support
+  - Added `should_hide_frontmatter()` and `should_hide_latex()` getters
+  - Updated `scan_markdown_files()` to use custom directory
+
+- **Table rendering** (`src/tui/ui/table.rs`)
+  - Added `available_width` parameter to `render_table()`
+  - Added proportional column shrinking algorithm
+  - Added `MIN_COL_WIDTH` constant (5)
+
 ## [0.5.6] - 2026-01-09
 
 ### Added

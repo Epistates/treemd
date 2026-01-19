@@ -147,21 +147,42 @@ fn build_heading_node(node_id: NodeId, arena: &Arena<Heading>) -> HeadingNode {
 
 impl HeadingNode {
     /// Render as tree with box-drawing characters
+    /// If compact is true, uses gapless box characters without trailing spaces
     pub fn render_box_tree(&self, prefix: &str, is_last: bool) -> String {
+        self.render_box_tree_styled(prefix, is_last, false)
+    }
+
+    /// Render as tree with box-drawing characters, with optional compact style
+    pub fn render_box_tree_styled(&self, prefix: &str, is_last: bool, compact: bool) -> String {
         let mut result = String::new();
 
-        let connector = if is_last { "└─ " } else { "├─ " };
+        let (connector, space, continuation) = if compact {
+            // Compact/gapless style: no trailing space after connector
+            if is_last {
+                ("└──", "", "   ")
+            } else {
+                ("├──", "", "│  ")
+            }
+        } else {
+            // Spaced style (default): space after connector for readability
+            if is_last {
+                ("└─ ", "", "    ")
+            } else {
+                ("├─ ", "", "│   ")
+            }
+        };
+
         let marker = "#".repeat(self.heading.level);
         result.push_str(&format!(
-            "{}{}{} {}\n",
-            prefix, connector, marker, self.heading.text
+            "{}{}{}{} {}\n",
+            prefix, connector, space, marker, self.heading.text
         ));
 
-        let child_prefix = format!("{}{}   ", prefix, if is_last { " " } else { "│" });
+        let child_prefix = format!("{}{}", prefix, continuation);
 
         for (i, child) in self.children.iter().enumerate() {
             let is_last_child = i == self.children.len() - 1;
-            result.push_str(&child.render_box_tree(&child_prefix, is_last_child));
+            result.push_str(&child.render_box_tree_styled(&child_prefix, is_last_child, compact));
         }
 
         result
