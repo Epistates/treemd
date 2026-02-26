@@ -37,7 +37,7 @@ impl FileWatcher {
     }
 
     /// Start watching a file. Stops watching any previously watched file.
-    pub fn watch(&mut self, path: &PathBuf) -> Result<(), notify::Error> {
+    pub fn watch(&mut self, path: &std::path::Path) -> Result<(), notify::Error> {
         // Unwatch previous file if any
         if let Some(ref old_path) = self.current_path {
             let _ = self.watcher.unwatch(old_path);
@@ -45,7 +45,7 @@ impl FileWatcher {
 
         // Watch the new file (non-recursive since it's a single file)
         self.watcher.watch(path, RecursiveMode::NonRecursive)?;
-        self.current_path = Some(path.clone());
+        self.current_path = Some(path.to_path_buf());
 
         // Reset debounce timer
         self.last_reload = Instant::now();
@@ -110,35 +110,35 @@ impl FileWatcher {
 
         // Check if event path matches our watched file
         // Use multiple strategies to handle platform differences
-        let matches_path = event.paths.iter().any(|event_path| {
-            // Strategy 1: Exact path match
-            if event_path == watched_path {
-                return true;
-            }
-
-            // Strategy 2: Canonicalized path match (handles symlinks, case differences)
-            if let (Ok(event_canonical), Ok(watched_canonical)) =
-                (event_path.canonicalize(), watched_path.canonicalize())
-            {
-                if event_canonical == watched_canonical {
+        let matches_path =
+            event.paths.iter().any(|event_path| {
+                // Strategy 1: Exact path match
+                if event_path == watched_path {
                     return true;
                 }
-            }
 
-            // Strategy 3: File name match (fallback for FSEvents quirks)
-            // Only match if event is in same directory
-            if let (
-                Some(event_name),
-                Some(watched_name),
-                Some(event_parent),
-                Some(watched_parent),
-            ) = (
-                event_path.file_name(),
-                watched_path.file_name(),
-                event_path.parent(),
-                watched_path.parent(),
-            ) {
-                if event_name == watched_name {
+                // Strategy 2: Canonicalized path match (handles symlinks, case differences)
+                if let (Ok(event_canonical), Ok(watched_canonical)) =
+                    (event_path.canonicalize(), watched_path.canonicalize())
+                    && event_canonical == watched_canonical
+                {
+                    return true;
+                }
+
+                // Strategy 3: File name match (fallback for FSEvents quirks)
+                // Only match if event is in same directory
+                if let (
+                    Some(event_name),
+                    Some(watched_name),
+                    Some(event_parent),
+                    Some(watched_parent),
+                ) = (
+                    event_path.file_name(),
+                    watched_path.file_name(),
+                    event_path.parent(),
+                    watched_path.parent(),
+                ) && event_name == watched_name
+                {
                     // Verify same directory (canonicalize to handle . and ..)
                     if let (Ok(ep), Ok(wp)) =
                         (event_parent.canonicalize(), watched_parent.canonicalize())
@@ -146,10 +146,9 @@ impl FileWatcher {
                         return ep == wp;
                     }
                 }
-            }
 
-            false
-        });
+                false
+            });
 
         if !matches_path {
             return false;

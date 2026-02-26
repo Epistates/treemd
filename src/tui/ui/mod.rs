@@ -122,10 +122,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     // Render file creation confirmation dialog
-    if matches!(app.mode, AppMode::ConfirmFileCreate) {
-        if let Some(message) = &app.pending_file_create_message {
-            render_file_create_confirm(frame, message, &app.theme);
-        }
+    if matches!(app.mode, AppMode::ConfirmFileCreate)
+        && let Some(message) = &app.pending_file_create_message
+    {
+        render_file_create_confirm(frame, message, &app.theme);
     }
 
     // Render save width confirmation dialog
@@ -547,48 +547,47 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
                 // Load and render the image
                 if let Ok(img_data) =
                     crate::tui::image_cache::ImageCache::extract_first_frame(&image_path)
+                    && let Some(picker) = &mut app.picker
                 {
-                    if let Some(picker) = &mut app.picker {
-                        let protocol = picker.new_resize_protocol(img_data);
-                        let resize = Resize::Scale(Some(FilterType::Triangle));
+                    let protocol = picker.new_resize_protocol(img_data);
+                    let resize = Resize::Scale(Some(FilterType::Triangle));
 
-                        // Check if this image is selected
-                        let is_selected = selected_image_id == Some(elem.id);
+                    // Check if this image is selected
+                    let is_selected = selected_image_id == Some(elem.id);
 
-                        // Calculate image area - add border space when selected
-                        let image_area = Rect {
-                            x: inner.x,
-                            y: image_y,
-                            width: max_image_width.min(inner.width),
-                            height: image_height,
-                        };
+                    // Calculate image area - add border space when selected
+                    let image_area = Rect {
+                        x: inner.x,
+                        y: image_y,
+                        width: max_image_width.min(inner.width),
+                        height: image_height,
+                    };
 
-                        // If selected, render a selection border around the image
-                        let render_area = if is_selected {
-                            let border_style = Style::default()
-                                .fg(theme.selection_indicator_fg)
-                                .bg(theme.selection_indicator_bg)
-                                .add_modifier(Modifier::BOLD);
+                    // If selected, render a selection border around the image
+                    let render_area = if is_selected {
+                        let border_style = Style::default()
+                            .fg(theme.selection_indicator_fg)
+                            .bg(theme.selection_indicator_bg)
+                            .add_modifier(Modifier::BOLD);
 
-                            let border = Block::default()
-                                .borders(Borders::ALL)
-                                .border_style(border_style)
-                                .title(" ▶ Selected ")
-                                .title_alignment(ratatui::layout::Alignment::Left);
+                        let border = Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(border_style)
+                            .title(" ▶ Selected ")
+                            .title_alignment(ratatui::layout::Alignment::Left);
 
-                            // Render border first
-                            frame.render_widget(border.clone(), image_area);
+                        // Render border first
+                        frame.render_widget(border.clone(), image_area);
 
-                            // Return inner area for image (inside border)
-                            border.inner(image_area)
-                        } else {
-                            image_area
-                        };
+                        // Return inner area for image (inside border)
+                        border.inner(image_area)
+                    } else {
+                        image_area
+                    };
 
-                        let img_widget = StatefulImage::new().resize(resize);
-                        let mut protocol_state = protocol;
-                        frame.render_stateful_widget(img_widget, render_area, &mut protocol_state);
-                    }
+                    let img_widget = StatefulImage::new().resize(resize);
+                    let mut protocol_state = protocol;
+                    frame.render_stateful_widget(img_widget, render_area, &mut protocol_state);
                 }
             }
         }
@@ -657,15 +656,13 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     // When animating (software or Kitty), avoid overwriting the image area
     let avoid_image_area = is_animating || kitty_animating;
 
-    if is_animating {
-        if let Some(last_update) = app.modal_last_frame_update {
-            let current_frame = &app.modal_gif_frames[app.modal_frame_index];
-            let frame_delay = Duration::from_millis(current_frame.delay_ms as u64);
+    if is_animating && let Some(last_update) = app.modal_last_frame_update {
+        let current_frame = &app.modal_gif_frames[app.modal_frame_index];
+        let frame_delay = Duration::from_millis(current_frame.delay_ms as u64);
 
-            if last_update.elapsed() >= frame_delay {
-                app.modal_frame_index = (app.modal_frame_index + 1) % app.modal_gif_frames.len();
-                app.modal_last_frame_update = Some(std::time::Instant::now());
-            }
+        if last_update.elapsed() >= frame_delay {
+            app.modal_frame_index = (app.modal_frame_index + 1) % app.modal_gif_frames.len();
+            app.modal_last_frame_update = Some(std::time::Instant::now());
         }
     }
 
@@ -673,12 +670,10 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     // Skip this entirely when Kitty handles animation.
     if !kitty_animating {
         let needs_new_protocol = app.modal_last_rendered_frame != Some(app.modal_frame_index);
-        if needs_new_protocol {
-            if let Some(picker) = &mut app.picker {
-                let current_img = app.modal_gif_frames[app.modal_frame_index].image.clone();
-                app.viewing_image_state = Some(picker.new_resize_protocol(current_img));
-                app.modal_last_rendered_frame = Some(app.modal_frame_index);
-            }
+        if needs_new_protocol && let Some(picker) = &mut app.picker {
+            let current_img = app.modal_gif_frames[app.modal_frame_index].image.clone();
+            app.viewing_image_state = Some(picker.new_resize_protocol(current_img));
+            app.modal_last_rendered_frame = Some(app.modal_frame_index);
         }
     }
 
@@ -1130,7 +1125,8 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 // Get current element type for context-specific hints
                 use crate::tui::interactive::ElementType;
-                let element_hint = match app.interactive_state.current_element() {
+
+                match app.interactive_state.current_element() {
                     Some(elem) => match &elem.element_type {
                         ElementType::Checkbox { .. } => {
                             vec![("j/k", "Navigate"), ("Space", "Toggle"), ("Esc", "Exit")]
@@ -1162,8 +1158,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                         }
                     },
                     None => vec![("j/k", "Navigate"), ("Enter", "Action"), ("Esc", "Exit")],
-                };
-                element_hint
+                }
             }
         }
         AppMode::LinkFollow => {
@@ -1796,7 +1791,7 @@ fn render_markdown_enhanced(
                         let is_nested_selected = selected_element_id
                             .map(|sel_id| {
                                 sel_id.block_idx == block_idx
-                                    && sel_id.sub_idx.map_or(false, |sub| {
+                                    && sel_id.sub_idx.is_some_and(|sub| {
                                         sub == table_id
                                             || sub == code_id
                                             || sub == image_id
@@ -1990,15 +1985,12 @@ fn apply_search_highlighting(
                     let rel_match_end = (*match_end).min(*span_end) - *span_start;
 
                     // Add text before the match (with original style)
-                    if current_pos < rel_match_start {
-                        if let Some(before_text) =
+                    if current_pos < rel_match_start
+                        && let Some(before_text) =
                             safe_slice(span_text, current_pos, rel_match_start)
-                        {
-                            if !before_text.is_empty() {
-                                new_spans
-                                    .push(Span::styled(before_text.to_string(), original_style));
-                            }
-                        }
+                        && !before_text.is_empty()
+                    {
+                        new_spans.push(Span::styled(before_text.to_string(), original_style));
                     }
 
                     // Add the matched portion (with search highlight style)
@@ -2009,10 +2001,10 @@ fn apply_search_highlighting(
                     };
 
                     let actual_start = rel_match_start.max(current_pos);
-                    if let Some(match_text) = safe_slice(span_text, actual_start, rel_match_end) {
-                        if !match_text.is_empty() {
-                            new_spans.push(Span::styled(match_text.to_string(), highlight_style));
-                        }
+                    if let Some(match_text) = safe_slice(span_text, actual_start, rel_match_end)
+                        && !match_text.is_empty()
+                    {
+                        new_spans.push(Span::styled(match_text.to_string(), highlight_style));
                     }
 
                     current_pos = rel_match_end;
@@ -2024,12 +2016,11 @@ fn apply_search_highlighting(
                 }
 
                 // Add remaining text after all matches in this span (with original style)
-                if current_pos < span_text.len() {
-                    if let Some(after_text) = safe_slice(span_text, current_pos, span_text.len()) {
-                        if !after_text.is_empty() {
-                            new_spans.push(Span::styled(after_text.to_string(), original_style));
-                        }
-                    }
+                if current_pos < span_text.len()
+                    && let Some(after_text) = safe_slice(span_text, current_pos, span_text.len())
+                    && !after_text.is_empty()
+                {
+                    new_spans.push(Span::styled(after_text.to_string(), original_style));
                 }
             }
 

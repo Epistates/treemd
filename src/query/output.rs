@@ -18,7 +18,7 @@ pub fn format(values: &[Value], format: OutputFormat) -> String {
 fn format_plain(values: &[Value]) -> String {
     values
         .iter()
-        .map(|v| format_plain_value(v))
+        .map(format_plain_value)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -37,7 +37,7 @@ fn format_plain_value(value: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Array(a) => a
             .iter()
-            .map(|v| format_plain_value(v))
+            .map(format_plain_value)
             .collect::<Vec<_>>()
             .join("\n"),
         Value::Object(o) => o
@@ -112,7 +112,7 @@ fn format_plain_value(value: &Value) -> String {
 
 fn format_json(values: &[Value], pretty: bool) -> String {
     // Convert to JSON-compatible structure
-    let json_values: Vec<serde_json::Value> = values.iter().map(|v| value_to_json(v)).collect();
+    let json_values: Vec<serde_json::Value> = values.iter().map(value_to_json).collect();
 
     let output = if json_values.len() == 1 {
         json_values.into_iter().next().unwrap()
@@ -233,7 +233,7 @@ fn value_to_json(value: &Value) -> serde_json::Value {
 fn format_markdown(values: &[Value]) -> String {
     values
         .iter()
-        .map(|v| format_markdown_value(v))
+        .map(format_markdown_value)
         .collect::<Vec<_>>()
         .join("\n\n")
 }

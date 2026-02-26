@@ -152,10 +152,10 @@ Also [[Another Valid]]
             if let Block::Paragraph { inline, .. } = block {
                 use turbovault_parser::InlineElement;
                 for elem in inline {
-                    if let InlineElement::Link { url, .. } = elem {
-                        if url.starts_with("wikilink:") {
-                            wikilink_count += 1;
-                        }
+                    if let InlineElement::Link { url, .. } = elem
+                        && url.starts_with("wikilink:")
+                    {
+                        wikilink_count += 1;
                     }
                 }
             }

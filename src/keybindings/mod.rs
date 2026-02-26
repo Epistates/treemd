@@ -369,7 +369,7 @@ mod tests {
         let kb = Keybindings::default();
 
         let keys = kb.keys_for_action(KeybindingMode::Normal, Action::Next);
-        assert!(keys.len() >= 1); // j and/or Down should be bound
+        assert!(!keys.is_empty()); // j and/or Down should be bound
     }
 
     #[test]

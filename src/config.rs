@@ -294,12 +294,11 @@ impl Config {
         #[cfg(target_os = "macos")]
         {
             // Prefer XDG-style path on macOS for CLI tools
-            if let Some(xdg_path) = Self::xdg_config_path() {
-                if let Ok(contents) = fs::read_to_string(&xdg_path) {
-                    if let Ok(config) = toml::from_str(&contents) {
-                        return config;
-                    }
-                }
+            if let Some(xdg_path) = Self::xdg_config_path()
+                && let Ok(contents) = fs::read_to_string(&xdg_path)
+                && let Ok(config) = toml::from_str(&contents)
+            {
+                return config;
             }
         }
 

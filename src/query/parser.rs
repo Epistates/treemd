@@ -705,16 +705,16 @@ fn parse_filter_or_index(p: &mut Parser) -> Result<(FilterOrIndex, Span), QueryE
     }
 
     // Negative number
-    if p.matches(&[TokenKind::Minus]) {
-        if let TokenKind::Number(n) = p.current_kind().clone() {
-            p.advance();
-            let end_span = p.current_span();
-            p.expect(&TokenKind::RBracket)?;
-            return Ok((
-                FilterOrIndex::Index(IndexOp::Single(-(n as i64))),
-                start_span.merge(end_span),
-            ));
-        }
+    if p.matches(&[TokenKind::Minus])
+        && let TokenKind::Number(n) = p.current_kind().clone()
+    {
+        p.advance();
+        let end_span = p.current_span();
+        p.expect(&TokenKind::RBracket)?;
+        return Ok((
+            FilterOrIndex::Index(IndexOp::Single(-(n as i64))),
+            start_span.merge(end_span),
+        ));
     }
 
     // String filter (exact match)

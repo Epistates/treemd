@@ -42,8 +42,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Query language support
-indexmap = { version = "2.7", features = ["serde"] }
-regex = "1.11"
+indexmap = { version = "2.13", features = ["serde"] }
+regex = "1.12"
 
 # TUI framework
 ratatui = { version = "0.30", features = ["crossterm_0_29"] }
@@ -56,23 +56,23 @@ image = "0.25"
 gif = "0.13"
 
 # Syntax highlighting
-syntect = "5.2"
+syntect = "5.3"
 
 # Fuzzy search
 nucleo-matcher = "0.3"
 
 # Clipboard support
-arboard = { version = "3.4", features = ["wayland-data-control"] }
+arboard = { version = "3.6", features = ["wayland-data-control"] }
 
 # Open URLs in default browser
 open = "5.3"
 
 # Atomic file operations
-tempfile = "3.15"
+tempfile = "3.26"
 
 # Configuration persistence
 dirs = "6.0"
-toml = "0.9"
+toml = "1.0"
 
 # Keybindings system
 keybinds = { version = "0.2", features = ["crossterm", "serde"] }

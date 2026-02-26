@@ -37,7 +37,7 @@ impl DynamicLayout {
         self.areas
             .get(&id)
             .copied()
-            .expect(&format!("Required layout section {:?} not found", id))
+            .unwrap_or_else(|| panic!("Required layout section {:?} not found", id))
     }
 }
 

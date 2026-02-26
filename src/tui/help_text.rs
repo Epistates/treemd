@@ -20,7 +20,7 @@ pub enum HelpLine {
 
 impl HelpLine {
     /// Convert this help line to a styled ratatui Line
-    pub fn to_line(&self, theme: &Theme) -> Line<'static> {
+    pub fn to_line(self, theme: &Theme) -> Line<'static> {
         match self {
             HelpLine::Title(text) => Line::from(vec![Span::styled(
                 text.to_string(),

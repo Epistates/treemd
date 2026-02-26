@@ -435,15 +435,15 @@ impl<'a> Engine<'a> {
                                 }
 
                                 // Check level filter
-                                if let Some(target_level) = level_filter {
+                                if let Some(target_level) = level_filter
+                                    && h.level != target_level
+                                {
+                                    if direct && h.level > target_level {
+                                        // Skip deeper headings in direct mode
+                                        continue;
+                                    }
                                     if h.level != target_level {
-                                        if direct && h.level > target_level {
-                                            // Skip deeper headings in direct mode
-                                            continue;
-                                        }
-                                        if h.level != target_level {
-                                            continue;
-                                        }
+                                        continue;
                                     }
                                 }
 
@@ -645,6 +645,7 @@ fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
         .collect()
 }
 
+#[allow(clippy::type_complexity)]
 fn extract_blocks(
     doc: &Document,
 ) -> (
@@ -840,7 +841,7 @@ fn apply_index(mut values: Vec<Value>, index: &IndexOp) -> Result<Vec<Value>, Qu
                 .unwrap_or(0) as usize;
             let end_idx = end
                 .map(|e| if e < 0 { (len + e).max(0) } else { e })
-                .unwrap_or(len as i64) as usize;
+                .unwrap_or(len) as usize;
 
             let start_idx = start_idx.min(values.len());
             let end_idx = end_idx.min(values.len());

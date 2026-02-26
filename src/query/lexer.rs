@@ -317,10 +317,10 @@ impl<'a> Lexer<'a> {
 
             '-' => {
                 // Could be minus or negative number
-                if let Some(c) = self.peek() {
-                    if c.is_ascii_digit() {
-                        return Ok(self.read_number(start, '-'));
-                    }
+                if let Some(c) = self.peek()
+                    && c.is_ascii_digit()
+                {
+                    return Ok(self.read_number(start, '-'));
                 }
                 Token::new(TokenKind::Minus, Span::new(start, self.pos))
             }

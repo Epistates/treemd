@@ -684,22 +684,22 @@ impl App {
 
         for block in blocks {
             // Check for block-level images
-            if let ContentBlock::Image { src, .. } = &block {
-                if self.try_load_image_from_src(src) {
-                    eprintln!("✓ Image loaded: {}", src);
-                    return;
-                }
+            if let ContentBlock::Image { src, .. } = &block
+                && self.try_load_image_from_src(src)
+            {
+                eprintln!("✓ Image loaded: {}", src);
+                return;
             }
 
             // Check for inline images within paragraphs
             // (Most markdown images appear as inline elements, not block-level)
             if let ContentBlock::Paragraph { inline, .. } = &block {
                 for inline_elem in inline {
-                    if let crate::parser::output::InlineElement::Image { src, .. } = inline_elem {
-                        if self.try_load_image_from_src(src) {
-                            eprintln!("✓ Image loaded: {}", src);
-                            return;
-                        }
+                    if let crate::parser::output::InlineElement::Image { src, .. } = inline_elem
+                        && self.try_load_image_from_src(src)
+                    {
+                        eprintln!("✓ Image loaded: {}", src);
+                        return;
                     }
                 }
             }
@@ -743,11 +743,11 @@ impl App {
         if let Some(path) = self.image_path.clone() {
             // Reload the image and recreate the protocol
             // Silently fail on errors - just don't render the image
-            if let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
-                if let Some(picker) = &mut self.picker {
-                    let protocol = picker.new_resize_protocol(img_data);
-                    self.image_state = Some(protocol);
-                }
+            if let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(&path)
+                && let Some(picker) = &mut self.picker
+            {
+                let protocol = picker.new_resize_protocol(img_data);
+                self.image_state = Some(protocol);
             }
         }
     }
@@ -762,23 +762,22 @@ impl App {
         // Try to resolve and load the image
         if let Ok(path) = self.resolve_image_path(image_src) {
             // Load all frames (for GIF animation)
-            if let Ok(frames) = crate::tui::image_cache::ImageCache::extract_all_frames(&path) {
-                if !frames.is_empty() {
-                    if let Some(picker) = &mut self.picker {
-                        // Create initial protocol for first frame only.
-                        // Subsequent frames will be created on-demand during animation
-                        // to avoid memory overhead of pre-computing all protocols.
-                        let initial_protocol = picker.new_resize_protocol(frames[0].image.clone());
+            if let Ok(frames) = crate::tui::image_cache::ImageCache::extract_all_frames(&path)
+                && !frames.is_empty()
+                && let Some(picker) = &mut self.picker
+            {
+                // Create initial protocol for first frame only.
+                // Subsequent frames will be created on-demand during animation
+                // to avoid memory overhead of pre-computing all protocols.
+                let initial_protocol = picker.new_resize_protocol(frames[0].image.clone());
 
-                        self.viewing_image_path = Some(path);
-                        self.viewing_image_state = Some(initial_protocol);
-                        self.modal_gif_frames = frames;
-                        self.modal_frame_protocols.clear(); // Not used anymore
-                        self.modal_frame_index = 0;
-                        self.modal_last_rendered_frame = Some(0); // Mark first frame as rendered
-                        self.modal_last_frame_update = Some(Instant::now());
-                    }
-                }
+                self.viewing_image_path = Some(path);
+                self.viewing_image_state = Some(initial_protocol);
+                self.modal_gif_frames = frames;
+                self.modal_frame_protocols.clear(); // Not used anymore
+                self.modal_frame_index = 0;
+                self.modal_last_rendered_frame = Some(0); // Mark first frame as rendered
+                self.modal_last_frame_update = Some(Instant::now());
             }
         }
     }
@@ -1657,12 +1656,11 @@ impl App {
 
     /// Get table dimensions for current interactive element
     fn get_table_dimensions(&self) -> (usize, usize) {
-        if let Some(element) = self.interactive_state.current_element() {
-            if let crate::tui::interactive::ElementType::Table { rows, cols, .. } =
+        if let Some(element) = self.interactive_state.current_element()
+            && let crate::tui::interactive::ElementType::Table { rows, cols, .. } =
                 &element.element_type
-            {
-                return (*rows, *cols);
-            }
+        {
+            return (*rows, *cols);
         }
         (0, 0)
     }
@@ -1715,11 +1713,11 @@ impl App {
     pub fn clear_expired_status_message(&mut self) {
         const STATUS_MESSAGE_TIMEOUT: Duration = Duration::from_secs(1);
 
-        if let Some(time) = self.status_message_time {
-            if time.elapsed() >= STATUS_MESSAGE_TIMEOUT {
-                self.status_message = None;
-                self.status_message_time = None;
-            }
+        if let Some(time) = self.status_message_time
+            && time.elapsed() >= STATUS_MESSAGE_TIMEOUT
+        {
+            self.status_message = None;
+            self.status_message_time = None;
         }
     }
 
@@ -1839,21 +1837,15 @@ impl App {
                 .document
                 .content
                 .split_once("\n#")
-                .map_or(false, |(preamble, _)| {
+                .is_some_and(|(preamble, _)| {
                     preamble.contains("- [ ]") || preamble.contains("* [ ]")
                 });
 
-        if !self.filter_by_todos && (has_preamble || self.document.headings.is_empty()) {
-            self.outline_items.insert(
-                0,
-                OutlineItem {
-                    level: 0,
-                    text: DOCUMENT_OVERVIEW.to_string(),
-                    expanded: true,
-                    has_children: !self.outline_items.is_empty(),
-                },
-            );
-        } else if self.filter_by_todos && preamble_has_todos {
+        let show_preamble = (!self.filter_by_todos
+            && (has_preamble || self.document.headings.is_empty()))
+            || (self.filter_by_todos && preamble_has_todos);
+
+        if show_preamble {
             self.outline_items.insert(
                 0,
                 OutlineItem {
@@ -2032,21 +2024,21 @@ impl App {
 
     pub fn jump_to_parent(&mut self) {
         // Works in both Outline and Content focus
-        if let Some(current_idx) = self.outline_state.selected() {
-            if current_idx < self.outline_items.len() {
-                let current_level = self.outline_items[current_idx].level;
+        if let Some(current_idx) = self.outline_state.selected()
+            && current_idx < self.outline_items.len()
+        {
+            let current_level = self.outline_items[current_idx].level;
 
-                // Search backwards for a heading with lower level (parent)
-                for i in (0..current_idx).rev() {
-                    if self.outline_items[i].level < current_level {
-                        self.select_outline_index(i);
-                        return;
-                    }
+            // Search backwards for a heading with lower level (parent)
+            for i in (0..current_idx).rev() {
+                if self.outline_items[i].level < current_level {
+                    self.select_outline_index(i);
+                    return;
                 }
-
-                // If no parent found, stay at current position
-                // (we're already at a top-level heading or first item)
             }
+
+            // If no parent found, stay at current position
+            // (we're already at a top-level heading or first item)
         }
     }
 
@@ -2321,23 +2313,23 @@ impl App {
         // Reset link selection
         self.doc_search_selected_link_idx = None;
 
-        if let Some(idx) = self.doc_search_current_idx {
-            if let Some(m) = self.doc_search_matches.get(idx) {
-                let match_line = m.line as u16;
+        if let Some(idx) = self.doc_search_current_idx
+            && let Some(m) = self.doc_search_matches.get(idx)
+        {
+            let match_line = m.line as u16;
 
-                // Scroll to bring match line into view (center it if possible)
-                let half_viewport = self.content_viewport_height / 2;
-                self.content_scroll = match_line.saturating_sub(half_viewport);
-                self.content_scroll = self
-                    .content_scroll
-                    .min(self.content_height.saturating_sub(1));
-                self.content_scroll_state = self
-                    .content_scroll_state
-                    .position(self.content_scroll as usize);
+            // Scroll to bring match line into view (center it if possible)
+            let half_viewport = self.content_viewport_height / 2;
+            self.content_scroll = match_line.saturating_sub(half_viewport);
+            self.content_scroll = self
+                .content_scroll
+                .min(self.content_height.saturating_sub(1));
+            self.content_scroll_state = self
+                .content_scroll_state
+                .position(self.content_scroll as usize);
 
-                // Check if this match is inside a link
-                self.detect_link_at_search_match(m.line, m.col_start, m.len);
-            }
+            // Check if this match is inside a link
+            self.detect_link_at_search_match(m.line, m.col_start, m.len);
         }
     }
 
@@ -2591,112 +2583,111 @@ impl App {
     }
 
     pub fn toggle_expand(&mut self) {
-        if self.focus == Focus::Outline {
-            if let Some(i) = self.outline_state.selected() {
-                if i < self.outline_items.len() && self.outline_items[i].has_children {
-                    let heading_text = self.outline_items[i].text.clone();
+        if self.focus == Focus::Outline
+            && let Some(i) = self.outline_state.selected()
+            && i < self.outline_items.len()
+            && self.outline_items[i].has_children
+        {
+            let heading_text = self.outline_items[i].text.clone();
 
-                    // Toggle the collapsed state
-                    if self.collapsed_headings.contains(&heading_text) {
-                        self.collapsed_headings.remove(&heading_text);
-                    } else {
-                        self.collapsed_headings.insert(heading_text.clone());
-                    }
+            // Toggle the collapsed state
+            if self.collapsed_headings.contains(&heading_text) {
+                self.collapsed_headings.remove(&heading_text);
+            } else {
+                self.collapsed_headings.insert(heading_text.clone());
+            }
 
-                    // Rebuild the flattened list with overview entry
-                    self.rebuild_outline_items();
+            // Rebuild the flattened list with overview entry
+            self.rebuild_outline_items();
 
-                    // Restore selection by text (not by index)
-                    if !self.select_by_text(&heading_text) {
-                        // If heading not found (shouldn't happen), clamp to valid index
-                        let safe_idx = i.min(self.outline_items.len().saturating_sub(1));
-                        self.outline_state.select(Some(safe_idx));
-                        self.outline_scroll_state =
-                            ScrollbarState::new(self.outline_items.len()).position(safe_idx);
-                    }
-                }
+            // Restore selection by text (not by index)
+            if !self.select_by_text(&heading_text) {
+                // If heading not found (shouldn't happen), clamp to valid index
+                let safe_idx = i.min(self.outline_items.len().saturating_sub(1));
+                self.outline_state.select(Some(safe_idx));
+                self.outline_scroll_state =
+                    ScrollbarState::new(self.outline_items.len()).position(safe_idx);
             }
         }
     }
 
     pub fn expand(&mut self) {
-        if self.focus == Focus::Outline {
-            if let Some(i) = self.outline_state.selected() {
-                if i < self.outline_items.len() && self.outline_items[i].has_children {
-                    let heading_text = self.outline_items[i].text.clone();
+        if self.focus == Focus::Outline
+            && let Some(i) = self.outline_state.selected()
+            && i < self.outline_items.len()
+            && self.outline_items[i].has_children
+        {
+            let heading_text = self.outline_items[i].text.clone();
 
-                    // Remove from collapsed set to expand
-                    self.collapsed_headings.remove(&heading_text);
+            // Remove from collapsed set to expand
+            self.collapsed_headings.remove(&heading_text);
 
-                    // Rebuild the flattened list with overview entry
-                    self.rebuild_outline_items();
+            // Rebuild the flattened list with overview entry
+            self.rebuild_outline_items();
 
-                    // Restore selection by text (not by index)
-                    if !self.select_by_text(&heading_text) {
-                        // If heading not found (shouldn't happen), clamp to valid index
-                        let safe_idx = i.min(self.outline_items.len().saturating_sub(1));
-                        self.outline_state.select(Some(safe_idx));
-                        self.outline_scroll_state =
-                            ScrollbarState::new(self.outline_items.len()).position(safe_idx);
-                    }
-                }
+            // Restore selection by text (not by index)
+            if !self.select_by_text(&heading_text) {
+                // If heading not found (shouldn't happen), clamp to valid index
+                let safe_idx = i.min(self.outline_items.len().saturating_sub(1));
+                self.outline_state.select(Some(safe_idx));
+                self.outline_scroll_state =
+                    ScrollbarState::new(self.outline_items.len()).position(safe_idx);
             }
         }
     }
 
     pub fn collapse(&mut self) {
-        if self.focus == Focus::Outline {
-            if let Some(i) = self.outline_state.selected() {
-                if i < self.outline_items.len() {
-                    let current_level = self.outline_items[i].level;
-                    let current_text = self.outline_items[i].text.clone();
+        if self.focus == Focus::Outline
+            && let Some(i) = self.outline_state.selected()
+            && i < self.outline_items.len()
+        {
+            let current_level = self.outline_items[i].level;
+            let current_text = self.outline_items[i].text.clone();
 
-                    // If current heading has children, collapse it
-                    if self.outline_items[i].has_children {
-                        self.collapsed_headings.insert(current_text.clone());
+            // If current heading has children, collapse it
+            if self.outline_items[i].has_children {
+                self.collapsed_headings.insert(current_text.clone());
 
-                        // Rebuild the flattened list with overview entry
-                        self.rebuild_outline_items();
+                // Rebuild the flattened list with overview entry
+                self.rebuild_outline_items();
 
-                        // Restore selection by text
-                        if !self.select_by_text(&current_text) {
-                            let safe_idx = i.min(self.outline_items.len().saturating_sub(1));
-                            self.outline_state.select(Some(safe_idx));
-                            self.outline_scroll_state =
-                                ScrollbarState::new(self.outline_items.len()).position(safe_idx);
-                        }
-                    } else {
-                        // If no children, find parent and collapse it
-                        // Look backwards for first heading with lower level
-                        let mut parent_text: Option<String> = None;
-                        for idx in (0..i).rev() {
-                            if self.outline_items[idx].level < current_level {
-                                // Found parent
-                                parent_text = Some(self.outline_items[idx].text.clone());
-                                break;
-                            }
-                        }
-
-                        if let Some(parent) = parent_text {
-                            // Collapse the parent
-                            self.collapsed_headings.insert(parent.clone());
-
-                            // Rebuild and move selection to parent
-                            self.rebuild_outline_items();
-
-                            // Select the parent by text
-                            if !self.select_by_text(&parent) {
-                                // Fallback: select first item if parent not found
-                                if !self.outline_items.is_empty() {
-                                    self.outline_state.select(Some(0));
-                                    self.outline_scroll_state =
-                                        ScrollbarState::new(self.outline_items.len()).position(0);
-                                }
-                            }
-                        }
-                        // No parent found, do nothing
+                // Restore selection by text
+                if !self.select_by_text(&current_text) {
+                    let safe_idx = i.min(self.outline_items.len().saturating_sub(1));
+                    self.outline_state.select(Some(safe_idx));
+                    self.outline_scroll_state =
+                        ScrollbarState::new(self.outline_items.len()).position(safe_idx);
+                }
+            } else {
+                // If no children, find parent and collapse it
+                // Look backwards for first heading with lower level
+                let mut parent_text: Option<String> = None;
+                for idx in (0..i).rev() {
+                    if self.outline_items[idx].level < current_level {
+                        // Found parent
+                        parent_text = Some(self.outline_items[idx].text.clone());
+                        break;
                     }
                 }
+
+                if let Some(parent) = parent_text {
+                    // Collapse the parent
+                    self.collapsed_headings.insert(parent.clone());
+
+                    // Rebuild and move selection to parent
+                    self.rebuild_outline_items();
+
+                    // Select the parent by text
+                    if !self.select_by_text(&parent) {
+                        // Fallback: select first item if parent not found
+                        if !self.outline_items.is_empty() {
+                            self.outline_state.select(Some(0));
+                            self.outline_scroll_state =
+                                ScrollbarState::new(self.outline_items.len()).position(0);
+                        }
+                    }
+                }
+                // No parent found, do nothing
             }
         }
     }
@@ -2707,7 +2698,7 @@ impl App {
         let headings_to_collapse: Vec<String> = self
             .tree
             .iter()
-            .flat_map(|node| Self::collect_collapsible_headings(node))
+            .flat_map(Self::collect_collapsible_headings)
             .collect();
 
         for text in headings_to_collapse {
@@ -2719,14 +2710,14 @@ impl App {
         self.rebuild_outline_items();
 
         // Try to restore selection, or select first item
-        if let Some(text) = selected_text {
-            if !self.select_by_text(&text) {
-                // Selection collapsed away, select first item
-                if !self.outline_items.is_empty() {
-                    self.outline_state.select(Some(0));
-                    self.outline_scroll_state =
-                        ScrollbarState::new(self.outline_items.len()).position(0);
-                }
+        if let Some(text) = selected_text
+            && !self.select_by_text(&text)
+        {
+            // Selection collapsed away, select first item
+            if !self.outline_items.is_empty() {
+                self.outline_state.select(Some(0));
+                self.outline_scroll_state =
+                    ScrollbarState::new(self.outline_items.len()).position(0);
             }
         }
 
@@ -2780,14 +2771,14 @@ impl App {
         let selected_text = self.selected_heading_text().map(|s| s.to_string());
         self.rebuild_outline_items();
 
-        if let Some(text) = selected_text {
-            if !self.select_by_text(&text) {
-                // Selection collapsed away, select first item
-                if !self.outline_items.is_empty() {
-                    self.outline_state.select(Some(0));
-                    self.outline_scroll_state =
-                        ScrollbarState::new(self.outline_items.len()).position(0);
-                }
+        if let Some(text) = selected_text
+            && !self.select_by_text(&text)
+        {
+            // Selection collapsed away, select first item
+            if !self.outline_items.is_empty() {
+                self.outline_state.select(Some(0));
+                self.outline_scroll_state =
+                    ScrollbarState::new(self.outline_items.len()).position(0);
             }
         }
 
@@ -3103,7 +3094,7 @@ impl App {
 
     /// Execute selected command and return whether to quit
     pub fn execute_selected_command(&mut self) -> bool {
-        let should_quit = if let Some(&cmd_idx) = self.command_filtered.get(self.command_selected) {
+        if let Some(&cmd_idx) = self.command_filtered.get(self.command_selected) {
             let action = PALETTE_COMMANDS[cmd_idx].action;
             let query = self.command_query.clone(); // Capture query for argument parsing
             self.mode = AppMode::Normal;
@@ -3112,8 +3103,7 @@ impl App {
         } else {
             self.mode = AppMode::Normal;
             false
-        };
-        should_quit
+        }
     }
 
     /// Execute a command action, returns true if should quit
@@ -3213,7 +3203,7 @@ impl App {
             .split_whitespace()
             .last()
             .and_then(|s| s.parse::<usize>().ok())
-            .filter(|&n| n >= 1 && n <= 6)
+            .filter(|&n| (1..=6).contains(&n))
     }
 
     /// Get selected command for display
@@ -3553,45 +3543,45 @@ impl App {
     pub fn jump_to_parent_links(&mut self) {
         if self.mode == AppMode::LinkFollow {
             // First, jump to parent in outline
-            if let Some(current_idx) = self.outline_state.selected() {
-                if current_idx < self.outline_items.len() {
-                    let current_level = self.outline_items[current_idx].level;
+            if let Some(current_idx) = self.outline_state.selected()
+                && current_idx < self.outline_items.len()
+            {
+                let current_level = self.outline_items[current_idx].level;
 
-                    // Search backwards for a heading with lower level (parent)
-                    for i in (0..current_idx).rev() {
-                        if self.outline_items[i].level < current_level {
-                            // Jump to parent in outline
-                            self.select_outline_index(i);
+                // Search backwards for a heading with lower level (parent)
+                for i in (0..current_idx).rev() {
+                    if self.outline_items[i].level < current_level {
+                        // Jump to parent in outline
+                        self.select_outline_index(i);
 
-                            // Now extract links from parent's content
-                            let content = if let Some(heading_text) = self.selected_heading_text() {
-                                self.document
-                                    .extract_section(heading_text)
-                                    .unwrap_or_else(|| self.document.content.clone())
-                            } else {
-                                self.document.content.clone()
-                            };
-                            self.links_in_view = extract_links(&content);
+                        // Now extract links from parent's content
+                        let content = if let Some(heading_text) = self.selected_heading_text() {
+                            self.document
+                                .extract_section(heading_text)
+                                .unwrap_or_else(|| self.document.content.clone())
+                        } else {
+                            self.document.content.clone()
+                        };
+                        self.links_in_view = extract_links(&content);
 
-                            // Reset link selection
-                            if !self.links_in_view.is_empty() {
-                                self.selected_link_idx = Some(0);
-                                self.status_message = Some(format!(
-                                    "✓ Jumped to parent ({} links found)",
-                                    self.links_in_view.len()
-                                ));
-                            } else {
-                                self.selected_link_idx = None;
-                                self.status_message = Some("⚠ Parent has no links".to_string());
-                            }
-
-                            return;
+                        // Reset link selection
+                        if !self.links_in_view.is_empty() {
+                            self.selected_link_idx = Some(0);
+                            self.status_message = Some(format!(
+                                "✓ Jumped to parent ({} links found)",
+                                self.links_in_view.len()
+                            ));
+                        } else {
+                            self.selected_link_idx = None;
+                            self.status_message = Some("⚠ Parent has no links".to_string());
                         }
-                    }
 
-                    // If no parent found (already at top-level)
-                    self.status_message = Some("⚠ Already at top-level heading".to_string());
+                        return;
+                    }
                 }
+
+                // If no parent found (already at top-level)
+                self.status_message = Some("⚠ Already at top-level heading".to_string());
             }
         }
     }
@@ -3999,10 +3989,9 @@ impl App {
         // (defense in depth - even though we rejected .., canonicalize to be sure)
         if let (Ok(canonical_path), Ok(canonical_base)) =
             (absolute_path.canonicalize(), current_dir.canonicalize())
+            && !canonical_path.starts_with(&canonical_base)
         {
-            if !canonical_path.starts_with(&canonical_base) {
-                return Err("Path escapes document directory boundary".to_string());
-            }
+            return Err("Path escapes document directory boundary".to_string());
         }
 
         // Check for symlink (prevent symlink attacks)
@@ -4251,10 +4240,10 @@ impl App {
         self.load_document(state.document, state.filename, state.path);
 
         // Restore selection and scroll position
-        if let Some(selected_idx) = state.outline_state_selected {
-            if selected_idx < self.outline_items.len() {
-                self.select_outline_index(selected_idx);
-            }
+        if let Some(selected_idx) = state.outline_state_selected
+            && selected_idx < self.outline_items.len()
+        {
+            self.select_outline_index(selected_idx);
         }
 
         self.content_scroll = state.content_scroll;
@@ -4350,11 +4339,11 @@ impl App {
     pub fn confirm_file_create(&mut self) -> Result<(), String> {
         if let Some(path) = self.pending_file_create.take() {
             // Create parent directories if needed
-            if let Some(parent) = path.parent() {
-                if !parent.exists() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("Failed to create directory: {}", e))?;
-                }
+            if let Some(parent) = path.parent()
+                && !parent.exists()
+            {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create directory: {}", e))?;
             }
 
             // Create the file with default content
@@ -4554,10 +4543,10 @@ impl App {
             .position(self.content_scroll as usize);
 
         // Restore interactive element selection if still valid
-        if let Some(idx) = saved_element_idx {
-            if idx < self.interactive_state.elements.len() {
-                self.interactive_state.current_index = Some(idx);
-            }
+        if let Some(idx) = saved_element_idx
+            && idx < self.interactive_state.elements.len()
+        {
+            self.interactive_state.current_index = Some(idx);
         }
 
         // IMPORTANT: Sync previous_selection to prevent update_content_metrics() from resetting scroll
@@ -4752,27 +4741,26 @@ impl App {
 
     /// Get table data for current interactive element
     fn get_current_table_data(&self) -> Option<(Vec<String>, Vec<Vec<String>>)> {
-        if let Some(element) = self.interactive_state.current_element() {
-            if let crate::tui::interactive::ElementType::Table { block_idx, .. } =
+        if let Some(element) = self.interactive_state.current_element()
+            && let crate::tui::interactive::ElementType::Table { block_idx, .. } =
                 &element.element_type
+        {
+            // Parse current section to get table data
+            let content = if let Some(selected) = self.selected_heading_text() {
+                self.document
+                    .extract_section(selected)
+                    .unwrap_or_else(|| self.document.content.clone())
+            } else {
+                self.document.content.clone()
+            };
+
+            use crate::parser::content::parse_content;
+            let blocks = parse_content(&content, 0);
+
+            if let Some(crate::parser::output::Block::Table { headers, rows, .. }) =
+                blocks.get(*block_idx)
             {
-                // Parse current section to get table data
-                let content = if let Some(selected) = self.selected_heading_text() {
-                    self.document
-                        .extract_section(selected)
-                        .unwrap_or_else(|| self.document.content.clone())
-                } else {
-                    self.document.content.clone()
-                };
-
-                use crate::parser::content::parse_content;
-                let blocks = parse_content(&content, 0);
-
-                if let Some(crate::parser::output::Block::Table { headers, rows, .. }) =
-                    blocks.get(*block_idx)
-                {
-                    return Some((headers.clone(), rows.clone()));
-                }
+                return Some((headers.clone(), rows.clone()));
             }
         }
         None
@@ -4780,25 +4768,25 @@ impl App {
 
     /// Copy table cell to clipboard
     pub fn copy_table_cell(&mut self) -> Result<(), String> {
-        if let Some((headers, rows)) = self.get_current_table_data() {
-            if let Some(cell) = self.interactive_state.get_table_cell(&headers, &rows) {
-                self.copy_to_clipboard(&cell)?;
-                self.status_message = Some(format!("✓ Cell copied: {}", cell));
-                return Ok(());
-            }
+        if let Some((headers, rows)) = self.get_current_table_data()
+            && let Some(cell) = self.interactive_state.get_table_cell(&headers, &rows)
+        {
+            self.copy_to_clipboard(&cell)?;
+            self.status_message = Some(format!("✓ Cell copied: {}", cell));
+            return Ok(());
         }
         Err("No cell selected".to_string())
     }
 
     /// Copy table row to clipboard (tab-separated)
     pub fn copy_table_row(&mut self) -> Result<(), String> {
-        if let Some((headers, rows)) = self.get_current_table_data() {
-            if let Some(row) = self.interactive_state.get_table_row(&headers, &rows) {
-                let row_text = row.join("\t");
-                self.copy_to_clipboard(&row_text)?;
-                self.status_message = Some("✓ Row copied (tab-separated)".to_string());
-                return Ok(());
-            }
+        if let Some((headers, rows)) = self.get_current_table_data()
+            && let Some(row) = self.interactive_state.get_table_row(&headers, &rows)
+        {
+            let row_text = row.join("\t");
+            self.copy_to_clipboard(&row_text)?;
+            self.status_message = Some("✓ Row copied (tab-separated)".to_string());
+            return Ok(());
         }
         Err("No row selected".to_string())
     }
@@ -4835,27 +4823,27 @@ impl App {
 
     /// Enter cell edit mode for the currently selected table cell
     pub fn enter_cell_edit_mode(&mut self) -> Result<(), String> {
-        if let Some((headers, rows)) = self.get_current_table_data() {
-            if let Some((row, col)) = self.interactive_state.get_table_position() {
-                // Get current cell value
-                let cell_value = if row == 0 {
-                    // Header row
-                    headers.get(col).cloned().unwrap_or_default()
-                } else {
-                    // Data row
-                    rows.get(row - 1)
-                        .and_then(|r| r.get(col))
-                        .cloned()
-                        .unwrap_or_default()
-                };
+        if let Some((headers, rows)) = self.get_current_table_data()
+            && let Some((row, col)) = self.interactive_state.get_table_position()
+        {
+            // Get current cell value
+            let cell_value = if row == 0 {
+                // Header row
+                headers.get(col).cloned().unwrap_or_default()
+            } else {
+                // Data row
+                rows.get(row - 1)
+                    .and_then(|r| r.get(col))
+                    .cloned()
+                    .unwrap_or_default()
+            };
 
-                self.cell_edit_value = cell_value.clone();
-                self.cell_edit_original_value = cell_value; // Store original for undo
-                self.cell_edit_row = row;
-                self.cell_edit_col = col;
-                self.mode = AppMode::CellEdit;
-                return Ok(());
-            }
+            self.cell_edit_value = cell_value.clone();
+            self.cell_edit_original_value = cell_value; // Store original for undo
+            self.cell_edit_row = row;
+            self.cell_edit_col = col;
+            self.mode = AppMode::CellEdit;
+            return Ok(());
         }
         Err("No cell selected for editing".to_string())
     }

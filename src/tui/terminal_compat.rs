@@ -88,10 +88,10 @@ impl TerminalCapabilities {
     fn detect_truecolor_support() -> bool {
         // Method 1: Check COLORTERM environment variable (primary standard)
         // VTE, Konsole, iTerm2, Kitty, Alacritty all set this
-        if let Ok(colorterm) = std::env::var("COLORTERM") {
-            if colorterm == "truecolor" || colorterm == "24bit" {
-                return true;
-            }
+        if let Ok(colorterm) = std::env::var("COLORTERM")
+            && (colorterm == "truecolor" || colorterm == "24bit")
+        {
+            return true;
         }
 
         // Method 2: Check TERM for known truecolor-capable terminals or suffixes

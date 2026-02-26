@@ -153,131 +153,131 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                 if let Some(ref mut watcher) = file_watcher {
                     watcher.check_for_changes(); // Drain events, ignore result
                 }
-            } else if let Some(ref mut watcher) = file_watcher {
-                if watcher.check_for_changes() {
-                    // Save state before reload
-                    let was_interactive = app.mode == app::AppMode::Interactive;
-                    let saved_scroll = app.content_scroll;
-                    let saved_element_idx = app.interactive_state.current_index;
+            } else if let Some(ref mut watcher) = file_watcher
+                && watcher.check_for_changes()
+            {
+                // Save state before reload
+                let was_interactive = app.mode == app::AppMode::Interactive;
+                let saved_scroll = app.content_scroll;
+                let saved_element_idx = app.interactive_state.current_index;
 
-                    // File changed externally - reload with state preservation
-                    if let Err(e) = app.reload_current_file() {
-                        app.status_message = Some(format!("✗ Reload failed: {}", e));
-                    } else {
-                        // Re-index interactive elements if in interactive mode
-                        if was_interactive {
-                            app.reindex_interactive_elements();
-                            // Restore element selection if still valid
-                            if let Some(idx) = saved_element_idx {
-                                if idx < app.interactive_state.elements.len() {
-                                    app.interactive_state.current_index = Some(idx);
-                                }
-                            }
+                // File changed externally - reload with state preservation
+                if let Err(e) = app.reload_current_file() {
+                    app.status_message = Some(format!("✗ Reload failed: {}", e));
+                } else {
+                    // Re-index interactive elements if in interactive mode
+                    if was_interactive {
+                        app.reindex_interactive_elements();
+                        // Restore element selection if still valid
+                        if let Some(idx) = saved_element_idx
+                            && idx < app.interactive_state.elements.len()
+                        {
+                            app.interactive_state.current_index = Some(idx);
                         }
-                        // Restore scroll position
-                        app.content_scroll = saved_scroll.min(app.content_height.saturating_sub(1));
-                        app.content_scroll_state = app
-                            .content_scroll_state
-                            .position(app.content_scroll as usize);
-                        // Sync previous_selection to prevent update_content_metrics() from resetting scroll
-                        app.sync_previous_selection();
-
-                        app.status_message = Some("↻ File reloaded (external change)".to_string());
                     }
+                    // Restore scroll position
+                    app.content_scroll = saved_scroll.min(app.content_height.saturating_sub(1));
+                    app.content_scroll_state = app
+                        .content_scroll_state
+                        .position(app.content_scroll as usize);
+                    // Sync previous_selection to prevent update_content_metrics() from resetting scroll
+                    app.sync_previous_selection();
+
+                    app.status_message = Some("↻ File reloaded (external change)".to_string());
                 }
             }
             continue;
         }
 
-        if let Event::Key(key) = tty::read_event()? {
-            if key.kind == KeyEventKind::Press {
-                // When image modal is open, handle modal-specific keys
-                if app.is_image_modal_open() {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') => {
-                            app.close_image_modal();
-                        }
-                        // Manual frame stepping for GIFs
-                        KeyCode::Left | KeyCode::Char('h') => {
-                            app.modal_prev_frame();
-                        }
-                        KeyCode::Right | KeyCode::Char('l') => {
-                            app.modal_next_frame();
-                        }
-                        // Toggle play/pause for GIF animation
-                        KeyCode::Char(' ') => {
-                            app.modal_toggle_animation();
-                        }
-                        _ => {}
+        if let Event::Key(key) = tty::read_event()?
+            && key.kind == KeyEventKind::Press
+        {
+            // When image modal is open, handle modal-specific keys
+            if app.is_image_modal_open() {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        app.close_image_modal();
                     }
-                    continue;
+                    // Manual frame stepping for GIFs
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        app.modal_prev_frame();
+                    }
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        app.modal_next_frame();
+                    }
+                    // Toggle play/pause for GIF animation
+                    KeyCode::Char(' ') => {
+                        app.modal_toggle_animation();
+                    }
+                    _ => {}
                 }
+                continue;
+            }
 
-                // Handle text input modes separately - these need raw character input
-                let handled = handle_text_input(&mut app, key.code, key.modifiers);
+            // Handle text input modes separately - these need raw character input
+            let handled = handle_text_input(&mut app, key.code, key.modifiers);
 
-                if !handled {
-                    // Handle vim-style count prefix (digits before motion commands)
-                    // Only in modes where count makes sense (Normal, Interactive)
-                    // Skip in LinkFollow mode where 1-9 jump to links
-                    let digit_handled = if let KeyCode::Char(c) = key.code {
-                        if c.is_ascii_digit()
-                            && key.modifiers.is_empty()
-                            && matches!(app.mode, app::AppMode::Normal | app::AppMode::Interactive)
-                        {
-                            // Special case: '0' without existing count goes to start (like vim)
-                            if c == '0' && !app.has_count() {
-                                false // Let '0' be handled as a motion (go to first)
-                            } else {
-                                app.accumulate_count_digit(c)
-                            }
+            if !handled {
+                // Handle vim-style count prefix (digits before motion commands)
+                // Only in modes where count makes sense (Normal, Interactive)
+                // Skip in LinkFollow mode where 1-9 jump to links
+                let digit_handled = if let KeyCode::Char(c) = key.code {
+                    if c.is_ascii_digit()
+                        && key.modifiers.is_empty()
+                        && matches!(app.mode, app::AppMode::Normal | app::AppMode::Interactive)
+                    {
+                        // Special case: '0' without existing count goes to start (like vim)
+                        if c == '0' && !app.has_count() {
+                            false // Let '0' be handled as a motion (go to first)
                         } else {
-                            false
+                            app.accumulate_count_digit(c)
                         }
                     } else {
                         false
-                    };
+                    }
+                } else {
+                    false
+                };
 
-                    if !digit_handled {
-                        // Try to get an action from the keybinding system
-                        if let Some(action) = app.get_action_for_key(key.code, key.modifiers) {
-                            // Special handling for CommandPalette confirm - it may return Quit
-                            if action == Action::ConfirmAction
-                                && app.mode == app::AppMode::CommandPalette
-                            {
-                                if app.execute_selected_command() {
-                                    return Ok(()); // Quit command executed
-                                }
-                            } else {
-                                match app.execute_action(action) {
-                                    ActionResult::Quit => return Ok(()),
-                                    ActionResult::RunEditor(path, line) => {
-                                        let editor_config = app.editor_config();
-                                        match run_editor(terminal, &path, line, &editor_config) {
-                                            Ok(_) => {
-                                                if let Err(e) = app.reload_current_file() {
-                                                    app.status_message =
-                                                        Some(format!("✗ Failed to reload: {}", e));
-                                                } else {
-                                                    app.status_message = Some(
-                                                        "✓ File reloaded after editing".to_string(),
-                                                    );
-                                                }
-                                                app.update_content_metrics();
-                                            }
-                                            Err(e) => {
-                                                app.status_message =
-                                                    Some(format!("✗ Editor failed: {}", e));
-                                            }
-                                        }
-                                    }
-                                    ActionResult::Continue => {}
-                                }
+                if !digit_handled {
+                    // Try to get an action from the keybinding system
+                    if let Some(action) = app.get_action_for_key(key.code, key.modifiers) {
+                        // Special handling for CommandPalette confirm - it may return Quit
+                        if action == Action::ConfirmAction
+                            && app.mode == app::AppMode::CommandPalette
+                        {
+                            if app.execute_selected_command() {
+                                return Ok(()); // Quit command executed
                             }
                         } else {
-                            // No action found - clear count prefix (invalid key cancels count)
-                            app.clear_count();
+                            match app.execute_action(action) {
+                                ActionResult::Quit => return Ok(()),
+                                ActionResult::RunEditor(path, line) => {
+                                    let editor_config = app.editor_config();
+                                    match run_editor(terminal, &path, line, &editor_config) {
+                                        Ok(_) => {
+                                            if let Err(e) = app.reload_current_file() {
+                                                app.status_message =
+                                                    Some(format!("✗ Failed to reload: {}", e));
+                                            } else {
+                                                app.status_message = Some(
+                                                    "✓ File reloaded after editing".to_string(),
+                                                );
+                                            }
+                                            app.update_content_metrics();
+                                        }
+                                        Err(e) => {
+                                            app.status_message =
+                                                Some(format!("✗ Editor failed: {}", e));
+                                        }
+                                    }
+                                }
+                                ActionResult::Continue => {}
+                            }
                         }
+                    } else {
+                        // No action found - clear count prefix (invalid key cancels count)
+                        app.clear_count();
                     }
                 }
             }
@@ -327,37 +327,37 @@ fn handle_text_input(
     }
 
     // Link search input mode
-    if app.mode == app::AppMode::LinkFollow && app.link_search_active {
-        if let KeyCode::Char(c) = code {
-            app.link_search_push(c);
-            return true;
-        }
+    if app.mode == app::AppMode::LinkFollow
+        && app.link_search_active
+        && let KeyCode::Char(c) = code
+    {
+        app.link_search_push(c);
+        return true;
     }
 
     // File search input mode (FilePicker with file_search_active flag)
-    if (app.mode == app::AppMode::FilePicker && app.file_search_active)
-        || app.mode == app::AppMode::FileSearch
+    if ((app.mode == app::AppMode::FilePicker && app.file_search_active)
+        || app.mode == app::AppMode::FileSearch)
+        && let KeyCode::Char(c) = code
     {
-        if let KeyCode::Char(c) = code {
-            app.file_search_push(c);
-            return true;
-        }
+        app.file_search_push(c);
+        return true;
     }
 
     // Command palette input mode
-    if app.mode == app::AppMode::CommandPalette {
-        if let KeyCode::Char(c) = code {
-            app.command_palette_input(c);
-            return true;
-        }
+    if app.mode == app::AppMode::CommandPalette
+        && let KeyCode::Char(c) = code
+    {
+        app.command_palette_input(c);
+        return true;
     }
 
     // Cell edit mode
-    if app.mode == app::AppMode::CellEdit {
-        if let KeyCode::Char(c) = code {
-            app.cell_edit_value.push(c);
-            return true;
-        }
+    if app.mode == app::AppMode::CellEdit
+        && let KeyCode::Char(c) = code
+    {
+        app.cell_edit_value.push(c);
+        return true;
     }
 
     false

@@ -169,7 +169,7 @@ fn fn_sort(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
     match input {
         Value::Array(a) => {
             let mut sorted = a.clone();
-            sorted.sort_by(|a, b| a.to_text().cmp(&b.to_text()));
+            sorted.sort_by_key(|a| a.to_text());
             Ok(vec![Value::Array(sorted)])
         }
         _ => Ok(vec![input.clone()]),

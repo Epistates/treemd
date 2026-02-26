@@ -80,6 +80,7 @@ fn calculate_column_widths(headers: &[String], rows: &[Vec<String>]) -> Vec<usiz
 /// * `in_table_mode` - Whether we're in table cell navigation mode
 /// * `selected_cell` - Currently selected cell (row, col) if in table mode
 /// * `available_width` - Optional maximum width to constrain table to
+#[allow(clippy::too_many_arguments)]
 pub fn render_table(
     headers: &[String],
     alignments: &[Alignment],

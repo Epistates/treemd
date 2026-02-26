@@ -654,10 +654,10 @@ impl InteractiveState {
         if self.current_index.is_some() {
             if self.elements.is_empty() {
                 self.current_index = None;
-            } else if let Some(idx) = self.current_index {
-                if idx >= self.elements.len() {
-                    self.current_index = Some(0);
-                }
+            } else if let Some(idx) = self.current_index
+                && idx >= self.elements.len()
+            {
+                self.current_index = Some(0);
             }
         }
     }
@@ -934,13 +934,12 @@ impl InteractiveState {
 
     /// Enter table navigation mode
     pub fn enter_table_mode(&mut self) -> Result<(), String> {
-        if let Some(idx) = self.current_index {
-            if let Some(element) = self.elements.get(idx) {
-                if matches!(element.element_type, ElementType::Table { .. }) {
-                    self.detail_mode = Some(DetailMode::Table { element_idx: idx });
-                    return Ok(());
-                }
-            }
+        if let Some(idx) = self.current_index
+            && let Some(element) = self.elements.get(idx)
+            && matches!(element.element_type, ElementType::Table { .. })
+        {
+            self.detail_mode = Some(DetailMode::Table { element_idx: idx });
+            return Ok(());
         }
         Err("Not on a table element".to_string())
     }
@@ -957,20 +956,20 @@ impl InteractiveState {
 
     /// Get table navigation status text
     pub fn table_status_text(&self, _rows: usize, _cols: usize) -> String {
-        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode {
-            if let Some(element) = self.elements.get(*element_idx) {
-                let id = element.id;
-                if let Some(ElementState::Table {
-                    selected_row,
-                    selected_col,
-                }) = self.element_states.get(&id)
-                {
-                    return format!(
-                        "[TABLE] Cell({},{}) | hjkl:Move y:Copy Y:CopyRow r:CopyTable Esc:Exit",
-                        selected_row + 1,
-                        selected_col + 1
-                    );
-                }
+        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
+            && let Some(element) = self.elements.get(*element_idx)
+        {
+            let id = element.id;
+            if let Some(ElementState::Table {
+                selected_row,
+                selected_col,
+            }) = self.element_states.get(&id)
+            {
+                return format!(
+                    "[TABLE] Cell({},{}) | hjkl:Move y:Copy Y:CopyRow r:CopyTable Esc:Exit",
+                    selected_row + 1,
+                    selected_col + 1
+                );
             }
         }
         "[TABLE] hjkl:Move y:Copy Esc:Exit".to_string()
@@ -978,50 +977,46 @@ impl InteractiveState {
 
     /// Move to next cell (right)
     pub fn table_move_right(&mut self, cols: usize) {
-        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode {
-            if let Some(element) = self.elements.get(*element_idx) {
-                let id = element.id;
-                if let Some(ElementState::Table {
-                    selected_row: _,
-                    selected_col,
-                }) = self.element_states.get_mut(&id)
-                {
-                    if *selected_col < cols - 1 {
-                        *selected_col += 1;
-                    }
-                }
+        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
+            && let Some(element) = self.elements.get(*element_idx)
+        {
+            let id = element.id;
+            if let Some(ElementState::Table {
+                selected_row: _,
+                selected_col,
+            }) = self.element_states.get_mut(&id)
+                && *selected_col < cols - 1
+            {
+                *selected_col += 1;
             }
         }
     }
 
     /// Move to previous cell (left)
     pub fn table_move_left(&mut self) {
-        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode {
-            if let Some(element) = self.elements.get(*element_idx) {
-                let id = element.id;
-                if let Some(ElementState::Table { selected_col, .. }) =
-                    self.element_states.get_mut(&id)
-                {
-                    if *selected_col > 0 {
-                        *selected_col -= 1;
-                    }
-                }
+        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
+            && let Some(element) = self.elements.get(*element_idx)
+        {
+            let id = element.id;
+            if let Some(ElementState::Table { selected_col, .. }) = self.element_states.get_mut(&id)
+                && *selected_col > 0
+            {
+                *selected_col -= 1;
             }
         }
     }
 
     /// Move to next row (down)
     pub fn table_move_down(&mut self, rows: usize) {
-        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode {
-            if let Some(element) = self.elements.get(*element_idx) {
-                let id = element.id;
-                if let Some(ElementState::Table { selected_row, .. }) =
-                    self.element_states.get_mut(&id)
-                {
-                    // rows is data row count; row 0 is header, so valid rows are 0..=rows
-                    if *selected_row < rows {
-                        *selected_row += 1;
-                    }
+        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
+            && let Some(element) = self.elements.get(*element_idx)
+        {
+            let id = element.id;
+            if let Some(ElementState::Table { selected_row, .. }) = self.element_states.get_mut(&id)
+            {
+                // rows is data row count; row 0 is header, so valid rows are 0..=rows
+                if *selected_row < rows {
+                    *selected_row += 1;
                 }
             }
         }
@@ -1029,40 +1024,38 @@ impl InteractiveState {
 
     /// Move to previous row (up)
     pub fn table_move_up(&mut self) {
-        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode {
-            if let Some(element) = self.elements.get(*element_idx) {
-                let id = element.id;
-                if let Some(ElementState::Table { selected_row, .. }) =
-                    self.element_states.get_mut(&id)
-                {
-                    if *selected_row > 0 {
-                        *selected_row -= 1;
-                    }
-                }
+        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
+            && let Some(element) = self.elements.get(*element_idx)
+        {
+            let id = element.id;
+            if let Some(ElementState::Table { selected_row, .. }) = self.element_states.get_mut(&id)
+                && *selected_row > 0
+            {
+                *selected_row -= 1;
             }
         }
     }
 
     /// Get the currently selected table cell content
     pub fn get_table_cell(&self, headers: &[String], rows: &[Vec<String>]) -> Option<String> {
-        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode {
-            if let Some(element) = self.elements.get(*element_idx) {
-                let id = element.id;
-                if let Some(ElementState::Table {
-                    selected_row,
-                    selected_col,
-                }) = self.element_states.get(&id)
-                {
-                    if *selected_row == 0 {
-                        // Header row
-                        return headers.get(*selected_col).cloned();
-                    } else {
-                        // Data row
-                        let data_row = *selected_row - 1;
-                        return rows
-                            .get(data_row)
-                            .and_then(|row| row.get(*selected_col).cloned());
-                    }
+        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
+            && let Some(element) = self.elements.get(*element_idx)
+        {
+            let id = element.id;
+            if let Some(ElementState::Table {
+                selected_row,
+                selected_col,
+            }) = self.element_states.get(&id)
+            {
+                if *selected_row == 0 {
+                    // Header row
+                    return headers.get(*selected_col).cloned();
+                } else {
+                    // Data row
+                    let data_row = *selected_row - 1;
+                    return rows
+                        .get(data_row)
+                        .and_then(|row| row.get(*selected_col).cloned());
                 }
             }
         }
@@ -1071,19 +1064,18 @@ impl InteractiveState {
 
     /// Get the currently selected table row
     pub fn get_table_row(&self, headers: &[String], rows: &[Vec<String>]) -> Option<Vec<String>> {
-        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode {
-            if let Some(element) = self.elements.get(*element_idx) {
-                let id = element.id;
-                if let Some(ElementState::Table { selected_row, .. }) = self.element_states.get(&id)
-                {
-                    if *selected_row == 0 {
-                        // Header row
-                        return Some(headers.to_vec());
-                    } else {
-                        // Data row
-                        let data_row = *selected_row - 1;
-                        return rows.get(data_row).cloned();
-                    }
+        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
+            && let Some(element) = self.elements.get(*element_idx)
+        {
+            let id = element.id;
+            if let Some(ElementState::Table { selected_row, .. }) = self.element_states.get(&id) {
+                if *selected_row == 0 {
+                    // Header row
+                    return Some(headers.to_vec());
+                } else {
+                    // Data row
+                    let data_row = *selected_row - 1;
+                    return rows.get(data_row).cloned();
                 }
             }
         }
@@ -1092,16 +1084,16 @@ impl InteractiveState {
 
     /// Get the selected cell position (row, col)
     pub fn get_table_position(&self) -> Option<(usize, usize)> {
-        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode {
-            if let Some(element) = self.elements.get(*element_idx) {
-                let id = element.id;
-                if let Some(ElementState::Table {
-                    selected_row,
-                    selected_col,
-                }) = self.element_states.get(&id)
-                {
-                    return Some((*selected_row, *selected_col));
-                }
+        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
+            && let Some(element) = self.elements.get(*element_idx)
+        {
+            let id = element.id;
+            if let Some(ElementState::Table {
+                selected_row,
+                selected_col,
+            }) = self.element_states.get(&id)
+            {
+                return Some((*selected_row, *selected_col));
             }
         }
         None

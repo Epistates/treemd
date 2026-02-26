@@ -9,7 +9,10 @@ use std::fmt;
 
 /// Query error with source location and suggestions.
 #[derive(Debug)]
-pub struct QueryError {
+pub struct QueryError(pub Box<QueryErrorInner>);
+
+#[derive(Debug)]
+pub struct QueryErrorInner {
     pub kind: QueryErrorKind,
     pub span: Span,
     pub source: String,
@@ -20,66 +23,68 @@ pub struct QueryError {
 
 impl QueryError {
     pub fn new(kind: QueryErrorKind, span: Span, source: String) -> Self {
-        Self {
+        Self(Box::new(QueryErrorInner {
             kind,
             span,
             source,
             suggestions: Vec::new(),
             help: None,
             note: None,
-        }
+        }))
     }
 
     pub fn with_suggestions(mut self, suggestions: Vec<String>) -> Self {
-        self.suggestions = suggestions;
+        self.0.suggestions = suggestions;
         self
     }
 
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
-        self.help = Some(help.into());
+        self.0.help = Some(help.into());
         self
     }
 
     pub fn with_note(mut self, note: impl Into<String>) -> Self {
-        self.note = Some(note.into());
+        self.0.note = Some(note.into());
         self
     }
 
     /// Format the error for display.
     pub fn format(&self) -> String {
+        let inner = &self.0;
         let mut output = String::new();
 
         // Error header
-        output.push_str(&format!("error: {}\n", self.kind));
+        output.push_str(&format!("error: {}\n", inner.kind));
 
         // Source snippet with span indicator
-        if !self.source.is_empty() {
+        if !inner.source.is_empty() {
             output.push_str("  --> query\n");
             output.push_str("  |\n");
 
             // Show the line containing the error
-            let line = self.source.lines().next().unwrap_or(&self.source);
+            let line = inner.source.lines().next().unwrap_or(&inner.source);
             output.push_str(&format!("1 | {}\n", line));
 
             // Underline the error span
-            let start = self.span.start.min(line.len());
-            let end = self.span.end.min(line.len()).max(start + 1);
+            let start = inner.span.start.min(line.len());
+            let end = inner.span.end.min(line.len()).max(start + 1);
             let padding = " ".repeat(start + 4); // "1 | " = 4 chars
             let underline = "^".repeat(end - start);
             output.push_str(&format!(
                 "{}{}  {}\n",
                 padding,
                 underline,
-                self.kind.short_message()
+                inner.kind.short_message()
             ));
         }
 
         // Suggestions
-        if !self.suggestions.is_empty() {
+        if !inner.suggestions.is_empty() {
             output.push_str("  |\n");
             output.push_str(&format!(
                 "  = help: did you mean {}?\n",
-                self.suggestions
+                inner
+                    .suggestions
                     .iter()
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<_>>()
@@ -88,12 +93,12 @@ impl QueryError {
         }
 
         // Help message
-        if let Some(ref help) = self.help {
+        if let Some(ref help) = inner.help {
             output.push_str(&format!("  = help: {}\n", help));
         }
 
         // Note
-        if let Some(ref note) = self.note {
+        if let Some(ref note) = inner.note {
             output.push_str(&format!("  = note: {}\n", note));
         }
 
