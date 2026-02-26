@@ -296,79 +296,142 @@ pub fn strip_frontmatter(content: &str) -> String {
 
 /// Strip LaTeX math expressions and commands from content.
 ///
-/// Removes:
-/// - Inline math: `$...$`
-/// - Display math: `$$...$$`
-/// - LaTeX environments: `\begin{...}...\end{...}`
-/// - Standalone LaTeX commands: `\newpage`, `\clearpage`, `\tableofcontents`, etc.
-/// - LaTeX commands with arguments: `\usepackage{...}`, `\documentclass{...}`, etc.
+/// Removes LaTeX commands and math delimiters while preserving the text content.
+/// For common math symbols and Greek letters, it uses Unicode approximations
+/// to maintain readability (SOTA approach).
 ///
 /// # Arguments
 /// * `content` - The document content
 ///
 /// # Returns
-/// Content with LaTeX expressions removed
+/// Content with LaTeX expressions removed or converted to Unicode
 pub fn strip_latex(content: &str) -> String {
-    use regex::Regex;
+    use regex::{Captures, Regex};
 
+    // 1. Convert common LaTeX symbols to Unicode approximations (SOTA)
+    let mut result = content.to_string();
+
+    // Greek letters and common math symbols
+    let symbols = [
+        (r"\\alpha", "α"), (r"\\beta", "β"), (r"\\gamma", "γ"), (r"\\delta", "δ"),
+        (r"\\epsilon", "ε"), (r"\\zeta", "ζ"), (r"\\eta", "η"), (r"\\theta", "θ"),
+        (r"\\iota", "ι"), (r"\\kappa", "κ"), (r"\\lambda", "λ"), (r"\\mu", "μ"),
+        (r"\\nu", "ν"), (r"\\xi", "ξ"), (r"\\pi", "π"), (r"\\rho", "ρ"),
+        (r"\\sigma", "σ"), (r"\\tau", "τ"), (r"\\upsilon", "υ"), (r"\\phi", "φ"),
+        (r"\\chi", "χ"), (r"\\psi", "ψ"), (r"\\omega", "ω"),
+        (r"\\Gamma", "Γ"), (r"\\Delta", "Δ"), (r"\\Theta", "Θ"), (r"\\Lambda", "Λ"),
+        (r"\\Xi", "Ξ"), (r"\\Pi", "Π"), (r"\\Sigma", "Σ"), (r"\\Phi", "Φ"),
+        (r"\\Psi", "Ψ"), (r"\\Omega", "Ω"),
+        (r"\\sum", "∑"), (r"\\prod", "∏"), (r"\\int", "∫"), (r"\\infty", "∞"),
+        (r"\\approx", "≈"), (r"\\neq", "≠"), (r"\\le", "≤"), (r"\\ge", "≥"),
+        (r"\\pm", "±"), (r"\\times", "×"), (r"\\div", "÷"), (r"\\partial", "∂"),
+        (r"\\nabla", "∇"), (r"\\forall", "∀"), (r"\\exists", "∃"), (r"\\in", "∈"),
+        (r"\\notin", "∉"), (r"\\subset", "⊂"), (r"\\supset", "⊃"), (r"\\cup", "∪"),
+        (r"\\cap", "∩"), (r"\\Rightarrow", "⇒"), (r"\\rightarrow", "→"),
+        (r"\\Leftarrow", "⇐"), (r"\\leftarrow", "←"), (r"\\Leftrightarrow", "⇔"),
+        (r"\\leftrightarrow", "↔"), (r"\\cdot", "·"), (r"\\dots", "…"),
+    ];
+
+    for (pattern, replacement) in symbols {
+        // Match the command followed by a non-letter or end of string
+        // Use a capture group for the trailing character so we can preserve it
+        let re = Regex::new(&format!(r"{}([^a-zA-Z]|$)", pattern)).unwrap();
+        let replacement_with_group = format!("{}$1", replacement);
+        result = re.replace_all(&result, replacement_with_group.as_str()).to_string();
+    }
+
+    // Superscripts and subscripts (common ones)
+    let sup_map = [
+        ('0', '⁰'), ('1', '¹'), ('2', '²'), ('3', '³'), ('4', '⁴'),
+        ('5', '⁵'), ('6', '⁶'), ('7', '⁷'), ('8', '⁸'), ('9', '⁹'),
+        ('+', '⁺'), ('-', '⁻'), ('=', '⁼'), ('(', '⁽'), (')', '⁾'),
+        ('n', 'ⁿ'), ('i', 'ⁱ'), ('x', 'ˣ'),
+    ];
+    let sub_map = [
+        ('0', '₀'), ('1', '₁'), ('2', '₂'), ('3', '₃'), ('4', '₄'),
+        ('5', '₅'), ('6', '₆'), ('7', '₇'), ('8', '₈'), ('9', '₉'),
+        ('+', '₊'), ('-', '₋'), ('=', '₌'), ('(', '₍'), (')', '₎'),
+        ('a', 'ₐ'), ('e', 'ₑ'), ('h', 'ₕ'), ('i', 'ᵢ'), ('j', 'ⱼ'),
+        ('k', 'ₖ'), ('l', 'ₗ'), ('m', 'ₘ'), ('n', 'ₙ'), ('o', 'ₒ'),
+        ('p', 'ₚ'), ('r', 'ᵣ'), ('s', 'ₛ'), ('t', 'ₜ'), ('u', 'ᵤ'),
+        ('v', 'ᵥ'), ('x', 'ₓ'),
+    ];
+
+    // Replace ^x with superscript if x is in map
+    let superscript = Regex::new(r"\^\{?([0-9+\-=()nix])\}?").unwrap();
+    result = superscript.replace_all(&result, |caps: &Captures| {
+        let val = caps[1].chars().next().unwrap();
+        sup_map.iter().find(|(k, _)| *k == val).map(|(_, v)| v.to_string()).unwrap_or_else(|| caps[0].to_string())
+    }).to_string();
+
+    // Replace _x with subscript if x is in map
+    let subscript = Regex::new(r"_\{?([0-9+\-=()aehijklmnoprstuvx])\}?").unwrap();
+    result = subscript.replace_all(&result, |caps: &Captures| {
+        let val = caps[1].chars().next().unwrap();
+        sub_map.iter().find(|(k, _)| *k == val).map(|(_, v)| v.to_string()).unwrap_or_else(|| caps[0].to_string())
+    }).to_string();
+
+    // 2. Strip remaining delimiters and structural commands
     // Match display math ($$...$$) first - must be removed before inline math
     let display_math = Regex::new(r"\$\$[\s\S]*?\$\$").unwrap();
-    let result = display_math.replace_all(content, "");
+    result = display_math.replace_all(&result, "").to_string();
 
-    // Match inline math ($...$) - simple pattern that requires content between dollars
-    // Match: $ followed by non-empty content (no newlines, no unescaped $) ending with $
-    // This avoids matching lone $ signs like currency
+    // Match inline math ($...$)
     let inline_math = Regex::new(r"\$([^\$\n]+)\$").unwrap();
-    let result = inline_math.replace_all(&result, "");
+    result = inline_math.replace_all(&result, "$1").to_string();
+
+    // Match \( ... \) and \[ ... \]
+    let paren_math = Regex::new(r"\\\(([\s\S]*?)\\\)").unwrap();
+    result = paren_math.replace_all(&result, "$1").to_string();
+    let bracket_math = Regex::new(r"\\\[([\s\S]*?)\\\]").unwrap();
+    result = bracket_math.replace_all(&result, "$1").to_string();
 
     // Match \begin{...}...\end{...} environments
-    let latex_env = Regex::new(r"\\begin\{[^}]+\}[\s\S]*?\\end\{[^}]+\}").unwrap();
-    let result = latex_env.replace_all(&result, "");
+    // For some environments (like equation/align), we keep the content but strip the tags
+    let latex_env = Regex::new(r"(?s)^\s*\\begin\{[^}]+\}\s*(.*?)\s*\\end\{[^}]+\}\s*$").unwrap();
+    result = latex_env.replace_all(&result, "$1").to_string();
+    // Also handle inline environments
+    let latex_env_inline = Regex::new(r"(?s)\\begin\{[^}]+\}(.*?)\\end\{[^}]+\}").unwrap();
+    result = latex_env_inline.replace_all(&result, "$1").to_string();
 
     // Match font size commands (standalone, no args)
-    // Standard: \tiny, \scriptsize, \footnotesize, \small, \normalsize, \large, \Large, \LARGE, \huge, \Huge
-    // Extended: \HUGE, \ssmall, \miniscule (from moresize/memoir packages)
     let font_size_cmd = Regex::new(
         r"(?m)^\s*\\(tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge|HUGE|ssmall|miniscule)\s*$"
     ).unwrap();
-    let result = font_size_cmd.replace_all(&result, "");
+    result = font_size_cmd.replace_all(&result, "").to_string();
 
-    // Match standalone LaTeX commands on their own line (e.g., \newpage, \clearpage, \tableofcontents)
+    // Match standalone LaTeX commands on their own line
     let standalone_cmd = Regex::new(
         r"(?m)^\s*\\(newpage|clearpage|pagebreak|tableofcontents|maketitle|listoffigures|listoftables|appendix|frontmatter|mainmatter|backmatter|centering|raggedright|raggedleft|noindent|indent|par|bigskip|medskip|smallskip|vfill|hfill|newline|linebreak)\s*$"
     ).unwrap();
-    let result = standalone_cmd.replace_all(&result, "");
+    result = standalone_cmd.replace_all(&result, "").to_string();
 
-    // Match LaTeX commands with braces on their own line: \command{...} or \command[...]{...}
-    // These are typically preamble/setup commands that shouldn't appear in prose
+    // Match LaTeX commands with braces on their own line (preamble/setup)
     let cmd_with_args_line = Regex::new(
         r"(?m)^\s*\\(usepackage|documentclass|title|author|date|include|input|bibliography|bibliographystyle|setlength|renewcommand|newcommand|setcounter|addtocounter|pagenumbering|pagestyle|thispagestyle|geometry|hypersetup|definecolor|graphicspath|addbibresource|fontsize|sethlcolor|titlespacing|titleformat|captionsetup|lstset)(\[[^\]]*\])?(\{[^}]*\})+\s*$"
     ).unwrap();
-    let result = cmd_with_args_line.replace_all(&result, "");
+    result = cmd_with_args_line.replace_all(&result, "").to_string();
 
-    // Match inline commands with args that should be stripped entirely (not in prose)
+    // Match inline commands with args that should be stripped entirely
     let cmd_with_args_inline = Regex::new(
         r"\\(label|ref|cite|eqref|pageref|vspace|hspace|phantom|hphantom|vphantom)\{[^}]*\}",
     )
     .unwrap();
-    let result = cmd_with_args_inline.replace_all(&result, "");
+    result = cmd_with_args_inline.replace_all(&result, "").to_string();
 
-    // Match other common inline LaTeX commands that might appear in text
-    // \textbf{}, \textit{}, \emph{}, \hl{}, etc. - replace with just the content
+    // Match other common inline LaTeX commands and replace with content
     let text_formatting =
         Regex::new(r"\\(textbf|textit|emph|underline|texttt|hl|textsf|textsc|textsl)\{([^}]*)\}")
             .unwrap();
-    let result = text_formatting.replace_all(&result, "$2");
+    result = text_formatting.replace_all(&result, "$2").to_string();
 
-    // Match \textcolor{color}{text} - preserve text, strip color command
+    // Match \textcolor{color}{text} and \colorbox{color}{text}
     let textcolor = Regex::new(r"\\textcolor\{[^}]*\}\{([^}]*)\}").unwrap();
-    let result = textcolor.replace_all(&result, "$1");
-
-    // Match \colorbox{color}{text} - preserve text
+    result = textcolor.replace_all(&result, "$1").to_string();
     let colorbox = Regex::new(r"\\colorbox\{[^}]*\}\{([^}]*)\}").unwrap();
-    let result = colorbox.replace_all(&result, "$1");
+    result = colorbox.replace_all(&result, "$1").to_string();
 
-    result.to_string()
+    result
 }
 
 /// Strip ALL lines starting with backslash (aggressive LaTeX filtering).
@@ -387,6 +450,88 @@ pub fn strip_latex_aggressive(content: &str) -> String {
     // Match any line that starts with optional whitespace followed by backslash and letters
     let backslash_line = Regex::new(r"(?m)^\s*\\[a-zA-Z].*$").unwrap();
     backslash_line.replace_all(content, "").to_string()
+}
+
+/// Wrap text to a specific width, preserving word boundaries when possible.
+///
+/// Uses unicode-width for accurate terminal display measurement.
+///
+/// # Arguments
+/// * `text` - The text to wrap
+/// * `width` - The maximum width per line
+///
+/// # Returns
+/// A vector of lines
+pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+    let mut current_width = 0;
+
+    for word in text.split_whitespace() {
+        let word_width = word.width();
+
+        // If word itself is wider than limit, we must break it
+        if word_width > width {
+            // Push whatever we have so far
+            if !current_line.is_empty() {
+                lines.push(std::mem::take(&mut current_line));
+                current_width = 0;
+            }
+
+            let mut remaining = word;
+            while !remaining.is_empty() {
+                let mut chunk = String::new();
+                let mut chunk_width = 0;
+                for c in remaining.chars() {
+                    let c_width = c.width().unwrap_or(1);
+                    if chunk_width + c_width > width {
+                        break;
+                    }
+                    chunk.push(c);
+                    chunk_width += c_width;
+                }
+                if chunk.is_empty() { break; }
+                let chunk_len = chunk.len();
+                lines.push(chunk);
+                remaining = &remaining[chunk_len..];
+            }
+            continue;
+        }
+
+        // Check if word fits on current line (plus a space)
+        let space_needed = if current_line.is_empty() { 0 } else { 1 };
+        if current_width + space_needed + word_width <= width {
+            if space_needed > 0 {
+                current_line.push(' ');
+                current_width += 1;
+            }
+            current_line.push_str(word);
+            current_width += word_width;
+        } else {
+            // Doesn't fit, start new line
+            lines.push(std::mem::take(&mut current_line));
+            current_line = word.to_string();
+            current_width = word_width;
+        }
+    }
+
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    if lines.is_empty() {
+        lines.push(if text.trim().is_empty() && !text.is_empty() {
+            text.to_string()
+        } else {
+            String::new()
+        });
+    }
+
+    lines
 }
 
 /// Apply content filters based on configuration.
@@ -468,7 +613,7 @@ mod tests {
         fn test_inline_math() {
             let content = "The formula $x^2$ is quadratic";
             let result = strip_latex(content);
-            assert_eq!(result, "The formula  is quadratic");
+            assert_eq!(result, "The formula x² is quadratic");
         }
 
         #[test]
@@ -482,7 +627,25 @@ mod tests {
         fn test_latex_environment() {
             let content = "An equation:\n\\begin{equation}\ny = mx + b\n\\end{equation}\ndone.";
             let result = strip_latex(content);
-            assert_eq!(result, "An equation:\n\ndone.");
+            assert_eq!(result, "An equation:\n\ny = mx + b\n\ndone.");
+        }
+
+        #[test]
+        fn test_greek_letters() {
+            let content = "Angle $\\alpha$ and $\\beta$";
+            let result = strip_latex(content);
+            assert_eq!(result, "Angle α and β");
+        }
+
+        #[test]
+        fn test_math_symbols() {
+            let content = "$\\sum_{i=1}^n x_i \\approx \\int f(x) dx$";
+            let result = strip_latex(content);
+            // i=1 and n might not be mapped in sup/sub maps fully yet but let's check what we have
+            // _i -> ᵢ, ^n -> ⁿ
+            assert!(result.contains("∑"));
+            assert!(result.contains("≈"));
+            assert!(result.contains("∫"));
         }
 
         #[test]

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.7] - 2026-01-19
+## [0.5.7] - 2026-02-26
 
 ### Added
 
@@ -29,28 +29,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Preserves hierarchy: parent headings shown if any child has todos
   - Status message shows count of headings with open todos
 
-- **Content filtering** - Hide YAML frontmatter and LaTeX in content view ([#43](https://github.com/Epistates/treemd/issues/43))
-  - `hide_frontmatter` option strips `---\n...\n---` blocks at document start
-  - `hide_latex` option strips math and LaTeX commands:
-    - Inline math: `$...$`
-    - Display math: `$$...$$`
-    - Environments: `\begin{...}\end{...}`
-    - Font size commands: `\tiny`, `\small`, `\normalsize`, `\large`, `\Large`, `\LARGE`, `\huge`, `\Huge`
-    - Standalone commands: `\newpage`, `\clearpage`, `\centering`, `\noindent`, etc.
-    - Commands with args: `\usepackage{...}`, `\geometry{...}`, `\label{...}`, `\ref{...}`, `\cite{...}`, etc.
-    - Text formatting preserved: `\textbf{bold}` → `bold`
-  - `latex_aggressive` option: strip ALL lines starting with backslash (for edge cases)
-  - All enabled by default, configurable via `[content]` section
-  - Raw source view (`r`) shows unfiltered content
+- **SOTA Content filtering** - Robust YAML frontmatter and LaTeX handling ([#43](https://github.com/Epistates/treemd/issues/43))
+  - **Unicode Approximation**: LaTeX math symbols like `\alpha`, `\sum`, `\infty` are now rendered as readable Unicode (`α`, `∑`, `∞`) instead of being stripped.
+  - **Superscript/Subscript support**: Common exponents and indices (like `x^2`, `n_i`) are converted to Unicode (`x²`, `nᵢ`).
+  - **Environment Preservation**: Content inside LaTeX environments (like `equation` or `align`) is preserved while stripping the tags.
+  - `hide_frontmatter` option strips `---\n...\n---` blocks at document start.
+  - `hide_latex` option handles math and LaTeX commands robustly without "half measures".
+  - Aggressive filtering remains available but the standard mode is now preferred.
+
+- **Smart Responsive Tables** - Tables now wrap and collapse intelligently ([#43](https://github.com/Epistates/treemd/issues/43))
+  - **Cell Wrapping**: Long content now wraps into multiple lines within columns, ensuring data remains readable even on narrow terminals.
+  - **Content-weighted widths**: Uses 70% average + 30% max for fairer column distribution.
+  - **Adaptive padding**: Dynamically reduces cell padding (2 → 1 → 0) to save space.
+  - **Unicode ellipsis**: Optimized truncation using `…` for maximum information density.
 
 - **File picker quit** - Press `q` to exit file picker dialog ([#43](https://github.com/Epistates/treemd/issues/43))
-
-- **Smart table collapsing** - Tables shrink intelligently on narrow terminals ([#43](https://github.com/Epistates/treemd/issues/43))
-  - Content-weighted column widths: uses 70% average + 30% max (not just max)
-  - Adaptive padding: reduces cell padding (2 → 1 → 0) before shrinking content
-  - Unicode ellipsis: truncated cells use `…` instead of `...` (saves 2 chars)
-  - Accounts for nesting: list items, blockquotes, details blocks subtract indent
-  - Minimum column width of 3 characters ensures some visibility
 
 ### Fixed
 
@@ -68,16 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Content filtering utilities** (`src/tui/ui/util.rs`)
   - Added `strip_frontmatter()` for YAML frontmatter removal
-  - Added `strip_latex()` for comprehensive LaTeX removal:
-    - Math: `$...$`, `$$...$$`, `\begin{...}\end{...}`
-    - Font sizes: `\tiny` through `\Huge`
-    - Commands: `\newpage`, `\centering`, `\noindent`, etc.
-    - References: `\label{...}`, `\ref{...}`, `\cite{...}`
-    - Packages: `\usepackage{...}`, `\geometry{...}`, etc.
-    - Formatting preserved: `\textbf{text}` → `text`
-  - Added `strip_latex_aggressive()` for catch-all backslash line removal
+  - Added SOTA `strip_latex()` with Unicode symbol mapping and environment preservation
+  - Added `wrap_text()` utility for Unicode-aware word wrapping
   - Added `filter_content()` combining all filters
-  - Comprehensive test coverage for edge cases
 
 - **Tree rendering** (`src/parser/document.rs`, `src/query/output.rs`)
   - Added `render_box_tree_styled()` method with compact parameter
@@ -89,17 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated `scan_markdown_files()` to use custom directory
 
 - **Table rendering** (`src/tui/ui/table.rs`, `src/tui/ui/mod.rs`)
-  - Added `calculate_column_widths()` with content-weighted area approach
-  - Added `available_width` parameter to `render_table()`
-  - Adaptive padding algorithm: 2 → 1 → 0 before shrinking columns
-  - Changed `MIN_COL_WIDTH` from 5 to 3 for tighter tables
-  - `render_markdown_enhanced()` now accepts and propagates `available_width`
-  - `render_block_to_lines()` propagates width with indent adjustments
-  - Width correctly reduced for nested content (lists, blockquotes, details)
+  - Refactored `render_table_row` to return `Vec<Line>` for multi-line wrapping
+  - Implemented smart wrapping logic using `util::wrap_text`
+  - Propagated width adjustments through nested content structures
+  - Comprehensive test updates for new wrapping behavior
 
-- **Text utilities** (`src/tui/ui/util.rs`)
-  - `align_text()` now uses single ellipsis `…` instead of `...` for truncation
-  - Unicode-aware character-by-character truncation
 
 ## [0.5.6] - 2026-01-09
 
