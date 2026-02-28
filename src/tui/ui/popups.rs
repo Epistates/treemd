@@ -710,7 +710,7 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
         Line::from(vec![
             Span::styled(": ", Style::default().fg(theme.modal_key_fg())),
             Span::styled(&app.command_query, Style::default().fg(theme.modal_text())),
-            Span::styled("█", Style::default().fg(Color::White)), // Cursor
+            Span::styled(" ", Style::default().bg(Color::White)), // Cursor (reverse-video for gapless rendering)
         ]),
         Line::from(""),
     ];
@@ -797,12 +797,25 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     // Clear background
     frame.render_widget(Clear, popup_area);
 
+    let file_count = app.filtered_file_indices.len();
+    let dir_count = app.filtered_dir_indices.len();
+    let total_items = app.file_picker_item_count();
+
     // Build header with search info
+    let effective_dir = app.effective_picker_dir();
+    let dir_label = effective_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(".")
+        .to_string();
+
     let header_text = if app.file_search_active || !app.file_search_query.is_empty() {
         format!(
-            "Files ({}/{}) - /: search, Enter: open, Esc: {}",
-            app.filtered_file_indices.len(),
+            "{}: {}/{} files, {} dirs - Enter: open, Esc: {}",
+            dir_label,
+            file_count,
             app.files_in_directory.len(),
+            dir_count,
             if app.file_search_active {
                 "stop search"
             } else {
@@ -811,8 +824,10 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
         )
     } else {
         format!(
-            "Markdown Files in Current Directory ({} found) - /: search, j/k: navigate, Enter: open",
-            app.files_in_directory.len()
+            "{}: {} files, {} dirs",
+            dir_label,
+            app.files_in_directory.len(),
+            app.dirs_in_directory.len()
         )
     };
 
@@ -906,16 +921,72 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
                 ),
             ]));
         }
+    }
 
-        if display_idx < app.filtered_file_indices.len() - 1 {
-            lines.push(Line::from(""));
+    // Separator between files and directories
+    if !app.filtered_file_indices.is_empty() && !app.filtered_dir_indices.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "── Directories ──",
+            Style::default()
+                .fg(theme.modal_description())
+                .add_modifier(Modifier::ITALIC),
+        )]));
+    }
+
+    // Iterate over filtered directories
+    for (dir_display_idx, &real_dir_idx) in app.filtered_dir_indices.iter().enumerate() {
+        let combined_idx = file_count + dir_display_idx;
+        let dir_path = &app.dirs_in_directory[real_dir_idx];
+        let is_selected = app.selected_file_idx == Some(combined_idx);
+
+        if is_selected {
+            selected_line_start = lines.len() as u16;
+        }
+
+        let dirname = dir_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        let display_name = format!("[DIR] {}/", dirname);
+
+        if is_selected {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "▶ ",
+                    Style::default()
+                        .fg(theme.selection_indicator_fg)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    display_name,
+                    Style::default()
+                        .fg(theme.selection_indicator_fg)
+                        .bg(theme.modal_selected_fg())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(display_name, Style::default().fg(theme.modal_description())),
+            ]));
         }
     }
 
     // Show "no matches" message
-    if app.filtered_file_indices.is_empty() && !app.files_in_directory.is_empty() {
+    if total_items == 0
+        && (!app.files_in_directory.is_empty() || !app.dirs_in_directory.is_empty())
+    {
         lines.push(Line::from(vec![Span::styled(
-            "No files match your search",
+            "No items match your search",
+            Style::default()
+                .fg(theme.modal_description())
+                .add_modifier(Modifier::ITALIC),
+        )]));
+    } else if total_items == 0 {
+        lines.push(Line::from(vec![Span::styled(
+            "Empty directory",
             Style::default()
                 .fg(theme.modal_description())
                 .add_modifier(Modifier::ITALIC),
@@ -927,7 +998,7 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     let footer_text = if app.file_search_active {
         "Type to filter • Enter: select • Esc: stop search • Backspace: delete"
     } else {
-        "j/k: Navigate • /: Filter • 1-9: Jump • Enter: Open • Esc: Cancel"
+        "j/k: Navigate • /: Filter • Enter: Open • Backspace: Parent dir • Esc: Cancel"
     };
     lines.push(Line::from(vec![Span::styled(
         footer_text,

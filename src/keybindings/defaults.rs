@@ -454,6 +454,9 @@ fn add_file_picker_mode(kb: &mut Keybindings) {
     // Selection
     bind(kb, FilePicker, "Enter", FollowLink);
 
+    // Parent directory
+    bind(kb, FilePicker, "Backspace", ParentDirectory);
+
     // Search
     bind(kb, FilePicker, "/", LinkSearch);
 

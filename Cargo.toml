@@ -1,6 +1,6 @@
 [package]
 name = "treemd"
-version = "0.5.7"
+version = "0.5.8"
 edition = "2024"
 authors = ["epistates, inc. <nick@epistates.com>"]
 description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
@@ -46,14 +46,14 @@ indexmap = { version = "2.13", features = ["serde"] }
 regex = "1.12"
 
 # TUI framework
-ratatui = { version = "0.30", features = ["crossterm_0_29"] }
+ratatui = { version = "0.30", features = ["crossterm_0_29", "unstable-rendered-line-info"] }
 crossterm = "0.29"
 color-eyre = "0.6"
 
 # Image rendering in TUI
 ratatui-image = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }
 image = "0.25"
-gif = "0.13"
+gif = "0.14"
 
 # Syntax highlighting
 syntect = "5.3"
@@ -76,7 +76,7 @@ toml = "1.0"
 
 # Keybindings system
 keybinds = { version = "0.2", features = ["crossterm", "serde"] }
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 
 # Terminal color capability detection
 supports-color = "3.0"

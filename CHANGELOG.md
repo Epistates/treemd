@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.8] - 2026-02-28
+
+### Added
+
+- **Folder navigation in file picker** - Browse directories without leaving the TUI ([#43](https://github.com/Epistates/treemd/issues/43))
+  - Subdirectories shown at bottom of file picker with `[DIR]` prefix and separator
+  - Press Enter on a directory to navigate into it
+  - Press Backspace to go to parent directory (works in both browse and search modes)
+  - Search filter applies to both files and directories
+
+- **Auto-hide outline for single files** - Outline panel hides when directory contains 0-1 markdown files ([#43](https://github.com/Epistates/treemd/issues/43))
+  - Automatically detected at startup and when navigating directories
+  - Can still be toggled manually with keybinding
+
+### Fixed
+
+- **Table crash at wide terminals** - Fixed panic when rendering tables at terminal width >= 146 ([#43](https://github.com/Epistates/treemd/issues/43))
+  - `MIN_COL_WIDTH` clamping could push total column width over budget after proportional shrink
+  - Added iterative trim loop to guarantee convergence
+  - Fixed infinite loop in padding reduction when `needed_reduction < col_count`
+
+- **EOF scroll accuracy** - Scroll now stops precisely when last line reaches viewport bottom ([#43](https://github.com/Epistates/treemd/issues/43))
+  - Uses ratatui's `Paragraph::line_count()` for accurate visual line count after word-wrapping
+  - Previously used raw line count, causing ~22% premature stop on wrapped content
+  - Consistent behavior across Down, Page Down, End, and all scroll methods
+
+- **Inline LaTeX command filtering** - Commands now stripped when appearing inline, not just on their own line ([#43](https://github.com/Epistates/treemd/issues/43))
+  - Handles: `\begin{...}`, `\end{...}`, `\fontsize{...}{...}`, `\pagestyle{...}`, `\setlength{...}`, `\usepackage{...}`, `\renewcommand{...}`, `\newcommand{...}`, `\sethlcolor{...}`, `\titlespacing{...}`, `\pagenumbering{...}`, `\thispagestyle{...}`, and more
+  - Strips bare commands like `\Box$`, `\no`, `\yes` that produce no visible content
+  - Inline font size commands (`\small`, `\large`, etc.) now removed when not on their own line
+
+- **Gapless cursor** - Command palette cursor uses reverse-video space instead of `█` for gap-free rendering ([#43](https://github.com/Epistates/treemd/issues/43))
+
+### Changed
+
+- **Dependencies updated**
+  - `ratatui` 0.30: added `unstable-rendered-line-info` feature for accurate line counting
+  - `gif` 0.13 → 0.14
+  - `strum` 0.27 → 0.28
+
+### Technical
+
+- **Performance: LaTeX regex caching** - All ~80 regex patterns in `strip_latex()` now compiled once via `OnceLock` (previously compiled every render frame)
+- **Performance: Superscript/subscript lookup** - Replaced O(N) linear array scans with `match` jump tables
+- **Performance: Directory scanning** - Single-pass classification using `entry.file_type()` instead of separate `is_file()`/`is_dir()` stat syscalls
+- **Refactoring** - Extracted `max_content_scroll()`, `effective_picker_dir()`, `navigate_picker_to_dir()`, `is_markdown_extension()`, and `filter_by_name()` helpers to eliminate code duplication
+- **Bug fix** - `scan_markdown_files()` now recognizes `.mdown` extension (was missing from file picker scan)
+
 ## [0.5.7] - 2026-02-26
 
 ### Added

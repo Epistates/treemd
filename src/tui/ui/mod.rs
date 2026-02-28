@@ -426,26 +426,34 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
         );
     }
 
-    // Update content_height with actual rendered line count (not raw markdown lines)
-    // This fixes EOF scroll behavior - scroll stops when last line is at viewport bottom
-    let rendered_line_count = rendered_text.lines.len() as u16;
-    if app.content_height != rendered_line_count {
-        app.content_height = rendered_line_count;
-        app.content_scroll_state =
-            ScrollbarState::new(rendered_line_count as usize).position(app.content_scroll as usize);
+    // Build paragraph with wrapping to get accurate visual line count
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(block_style)
+        .title(title);
+    let paragraph = Paragraph::new(rendered_text)
+        .block(block)
+        .style(theme.content_style())
+        .wrap(Wrap { trim: false });
+
+    // Use line_count() for accurate visual line count after wrapping
+    // (requires ratatui "unstable-rendered-line-info" feature)
+    let inner_width = area.width.saturating_sub(2); // subtract block borders
+    let visual_line_count = paragraph.line_count(inner_width) as u16;
+    if app.content_height != visual_line_count {
+        app.content_height = visual_line_count;
     }
 
-    let paragraph = Paragraph::new(rendered_text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(block_style)
-                .title(title),
-        )
-        .style(theme.content_style())
-        .wrap(Wrap { trim: false })
-        .scroll((app.content_scroll, 0));
+    // Clamp scroll so we stop when last line reaches viewport bottom
+    let max_scroll = app.max_content_scroll();
+    if app.content_scroll > max_scroll {
+        app.content_scroll = max_scroll;
+    }
+    app.content_scroll_state =
+        ScrollbarState::new(app.content_height as usize).position(app.content_scroll as usize);
 
+    // Apply scroll and render
+    let paragraph = paragraph.scroll((app.content_scroll, 0));
     frame.render_widget(paragraph, area);
 
     // Render inline images (first image in content)

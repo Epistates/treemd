@@ -307,129 +307,161 @@ pub fn strip_frontmatter(content: &str) -> String {
 /// Content with LaTeX expressions removed or converted to Unicode
 pub fn strip_latex(content: &str) -> String {
     use regex::{Captures, Regex};
+    use std::sync::OnceLock;
+
+    // All regexes are compiled once and cached via OnceLock (following parser/utils.rs pattern)
+
+    // Symbol replacement patterns: (regex, unicode_replacement) compiled once
+    static SYMBOL_PATTERNS: OnceLock<Vec<(Regex, String)>> = OnceLock::new();
+    let symbol_patterns = SYMBOL_PATTERNS.get_or_init(|| {
+        let symbols: &[(&str, &str)] = &[
+            (r"\\alpha", "α"), (r"\\beta", "β"), (r"\\gamma", "γ"), (r"\\delta", "δ"),
+            (r"\\epsilon", "ε"), (r"\\zeta", "ζ"), (r"\\eta", "η"), (r"\\theta", "θ"),
+            (r"\\iota", "ι"), (r"\\kappa", "κ"), (r"\\lambda", "λ"), (r"\\mu", "μ"),
+            (r"\\nu", "ν"), (r"\\xi", "ξ"), (r"\\pi", "π"), (r"\\rho", "ρ"),
+            (r"\\sigma", "σ"), (r"\\tau", "τ"), (r"\\upsilon", "υ"), (r"\\phi", "φ"),
+            (r"\\chi", "χ"), (r"\\psi", "ψ"), (r"\\omega", "ω"),
+            (r"\\Gamma", "Γ"), (r"\\Delta", "Δ"), (r"\\Theta", "Θ"), (r"\\Lambda", "Λ"),
+            (r"\\Xi", "Ξ"), (r"\\Pi", "Π"), (r"\\Sigma", "Σ"), (r"\\Phi", "Φ"),
+            (r"\\Psi", "Ψ"), (r"\\Omega", "Ω"),
+            (r"\\sum", "∑"), (r"\\prod", "∏"), (r"\\int", "∫"), (r"\\infty", "∞"),
+            (r"\\approx", "≈"), (r"\\neq", "≠"), (r"\\le", "≤"), (r"\\ge", "≥"),
+            (r"\\pm", "±"), (r"\\times", "×"), (r"\\div", "÷"), (r"\\partial", "∂"),
+            (r"\\nabla", "∇"), (r"\\forall", "∀"), (r"\\exists", "∃"), (r"\\in", "∈"),
+            (r"\\notin", "∉"), (r"\\subset", "⊂"), (r"\\supset", "⊃"), (r"\\cup", "∪"),
+            (r"\\cap", "∩"), (r"\\Rightarrow", "⇒"), (r"\\rightarrow", "→"),
+            (r"\\Leftarrow", "⇐"), (r"\\leftarrow", "←"), (r"\\Leftrightarrow", "⇔"),
+            (r"\\leftrightarrow", "↔"), (r"\\cdot", "·"), (r"\\dots", "…"),
+        ];
+        symbols.iter().map(|(pattern, replacement)| {
+            let re = Regex::new(&format!(r"{}([^a-zA-Z]|$)", pattern)).unwrap();
+            let repl = format!("{}$1", replacement);
+            (re, repl)
+        }).collect()
+    });
+
+    static SUPERSCRIPT: OnceLock<Regex> = OnceLock::new();
+    static SUBSCRIPT: OnceLock<Regex> = OnceLock::new();
+    static DISPLAY_MATH: OnceLock<Regex> = OnceLock::new();
+    static INLINE_MATH: OnceLock<Regex> = OnceLock::new();
+    static PAREN_MATH: OnceLock<Regex> = OnceLock::new();
+    static BRACKET_MATH: OnceLock<Regex> = OnceLock::new();
+    static LATEX_ENV: OnceLock<Regex> = OnceLock::new();
+    static LATEX_ENV_INLINE: OnceLock<Regex> = OnceLock::new();
+    static BEGIN_END_STANDALONE: OnceLock<Regex> = OnceLock::new();
+    static FONT_SIZE_CMD: OnceLock<Regex> = OnceLock::new();
+    static STANDALONE_CMD: OnceLock<Regex> = OnceLock::new();
+    static CMD_WITH_ARGS_LINE: OnceLock<Regex> = OnceLock::new();
+    static CMD_WITH_ARGS_INLINE_STRIP: OnceLock<Regex> = OnceLock::new();
+    static FONTSIZE_INLINE: OnceLock<Regex> = OnceLock::new();
+    static CMD_WITH_ARGS_INLINE: OnceLock<Regex> = OnceLock::new();
+    static TEXT_FORMATTING: OnceLock<Regex> = OnceLock::new();
+    static TEXTCOLOR: OnceLock<Regex> = OnceLock::new();
+    static COLORBOX: OnceLock<Regex> = OnceLock::new();
+    static FONT_SIZE_INLINE: OnceLock<Regex> = OnceLock::new();
+    static BARE_CMD: OnceLock<Regex> = OnceLock::new();
+    static BARE_CMD_EOL: OnceLock<Regex> = OnceLock::new();
+
+    let superscript = SUPERSCRIPT.get_or_init(|| Regex::new(r"\^\{?([0-9+\-=()nix])\}?").unwrap());
+    let subscript = SUBSCRIPT.get_or_init(|| Regex::new(r"_\{?([0-9+\-=()aehijklmnoprstuvx])\}?").unwrap());
+    let display_math = DISPLAY_MATH.get_or_init(|| Regex::new(r"\$\$[\s\S]*?\$\$").unwrap());
+    let inline_math = INLINE_MATH.get_or_init(|| Regex::new(r"\$([^\$\n]+)\$").unwrap());
+    let paren_math = PAREN_MATH.get_or_init(|| Regex::new(r"\\\(([\s\S]*?)\\\)").unwrap());
+    let bracket_math = BRACKET_MATH.get_or_init(|| Regex::new(r"\\\[([\s\S]*?)\\\]").unwrap());
+    let latex_env = LATEX_ENV.get_or_init(|| Regex::new(r"(?s)^\s*\\begin\{[^}]+\}\s*(.*?)\s*\\end\{[^}]+\}\s*$").unwrap());
+    let latex_env_inline = LATEX_ENV_INLINE.get_or_init(|| Regex::new(r"(?s)\\begin\{[^}]+\}(.*?)\\end\{[^}]+\}").unwrap());
+    let begin_end_standalone = BEGIN_END_STANDALONE.get_or_init(|| Regex::new(r"\\(begin|end)\{[^}]*\}").unwrap());
+    let font_size_cmd = FONT_SIZE_CMD.get_or_init(|| Regex::new(
+        r"(?m)^\s*\\(tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge|HUGE|ssmall|miniscule)\s*$"
+    ).unwrap());
+    let standalone_cmd = STANDALONE_CMD.get_or_init(|| Regex::new(
+        r"(?m)^\s*\\(newpage|clearpage|pagebreak|tableofcontents|maketitle|listoffigures|listoftables|appendix|frontmatter|mainmatter|backmatter|centering|raggedright|raggedleft|noindent|indent|par|bigskip|medskip|smallskip|vfill|hfill|newline|linebreak)\s*$"
+    ).unwrap());
+    let cmd_with_args_line = CMD_WITH_ARGS_LINE.get_or_init(|| Regex::new(
+        r"(?m)^\s*\\(usepackage|documentclass|title|author|date|include|input|bibliography|bibliographystyle|setlength|renewcommand|newcommand|setcounter|addtocounter|pagenumbering|pagestyle|thispagestyle|geometry|hypersetup|definecolor|graphicspath|addbibresource|fontsize|sethlcolor|titlespacing|titleformat|captionsetup|lstset)(\[[^\]]*\])?(\{[^}]*\})+\s*$"
+    ).unwrap());
+    let cmd_with_args_inline_strip = CMD_WITH_ARGS_INLINE_STRIP.get_or_init(|| Regex::new(
+        r"\\(usepackage|documentclass|setlength|renewcommand|newcommand|setcounter|addtocounter|pagenumbering|pagestyle|thispagestyle|geometry|hypersetup|definecolor|graphicspath|addbibresource|sethlcolor|titlespacing|titleformat|captionsetup|lstset)(\[[^\]]*\])?(\{[^}]*\})+"
+    ).unwrap());
+    let fontsize_inline = FONTSIZE_INLINE.get_or_init(|| Regex::new(r"\\fontsize\{[^}]*\}\{[^}]*\}").unwrap());
+    let cmd_with_args_inline = CMD_WITH_ARGS_INLINE.get_or_init(|| Regex::new(
+        r"\\(label|ref|cite|eqref|pageref|vspace|hspace|phantom|hphantom|vphantom)\{[^}]*\}",
+    ).unwrap());
+    let text_formatting = TEXT_FORMATTING.get_or_init(|| Regex::new(
+        r"\\(textbf|textit|emph|underline|texttt|hl|textsf|textsc|textsl)\{([^}]*)\}"
+    ).unwrap());
+    let textcolor = TEXTCOLOR.get_or_init(|| Regex::new(r"\\textcolor\{[^}]*\}\{([^}]*)\}").unwrap());
+    let colorbox = COLORBOX.get_or_init(|| Regex::new(r"\\colorbox\{[^}]*\}\{([^}]*)\}").unwrap());
+    let font_size_inline = FONT_SIZE_INLINE.get_or_init(|| Regex::new(
+        r"\\(tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge|HUGE|ssmall|miniscule)([^a-zA-Z]|$)"
+    ).unwrap());
+    let bare_cmd = BARE_CMD.get_or_init(|| Regex::new(r"\\[a-zA-Z]+\$?([\s,;.!?\)\]\}])").unwrap());
+    let bare_cmd_eol = BARE_CMD_EOL.get_or_init(|| Regex::new(r"\\[a-zA-Z]+\$?$").unwrap());
+
+    // Superscript/subscript lookups as match expressions (compiler reduces to jump tables)
+    fn to_superscript(c: char) -> Option<char> {
+        match c {
+            '0' => Some('⁰'), '1' => Some('¹'), '2' => Some('²'), '3' => Some('³'),
+            '4' => Some('⁴'), '5' => Some('⁵'), '6' => Some('⁶'), '7' => Some('⁷'),
+            '8' => Some('⁸'), '9' => Some('⁹'), '+' => Some('⁺'), '-' => Some('⁻'),
+            '=' => Some('⁼'), '(' => Some('⁽'), ')' => Some('⁾'), 'n' => Some('ⁿ'),
+            'i' => Some('ⁱ'), 'x' => Some('ˣ'),
+            _ => None,
+        }
+    }
+    fn to_subscript(c: char) -> Option<char> {
+        match c {
+            '0' => Some('₀'), '1' => Some('₁'), '2' => Some('₂'), '3' => Some('₃'),
+            '4' => Some('₄'), '5' => Some('₅'), '6' => Some('₆'), '7' => Some('₇'),
+            '8' => Some('₈'), '9' => Some('₉'), '+' => Some('₊'), '-' => Some('₋'),
+            '=' => Some('₌'), '(' => Some('₍'), ')' => Some('₎'), 'a' => Some('ₐ'),
+            'e' => Some('ₑ'), 'h' => Some('ₕ'), 'i' => Some('ᵢ'), 'j' => Some('ⱼ'),
+            'k' => Some('ₖ'), 'l' => Some('ₗ'), 'm' => Some('ₘ'), 'n' => Some('ₙ'),
+            'o' => Some('ₒ'), 'p' => Some('ₚ'), 'r' => Some('ᵣ'), 's' => Some('ₛ'),
+            't' => Some('ₜ'), 'u' => Some('ᵤ'), 'v' => Some('ᵥ'), 'x' => Some('ₓ'),
+            _ => None,
+        }
+    }
 
     // 1. Convert common LaTeX symbols to Unicode approximations (SOTA)
     let mut result = content.to_string();
 
-    // Greek letters and common math symbols
-    let symbols = [
-        (r"\\alpha", "α"), (r"\\beta", "β"), (r"\\gamma", "γ"), (r"\\delta", "δ"),
-        (r"\\epsilon", "ε"), (r"\\zeta", "ζ"), (r"\\eta", "η"), (r"\\theta", "θ"),
-        (r"\\iota", "ι"), (r"\\kappa", "κ"), (r"\\lambda", "λ"), (r"\\mu", "μ"),
-        (r"\\nu", "ν"), (r"\\xi", "ξ"), (r"\\pi", "π"), (r"\\rho", "ρ"),
-        (r"\\sigma", "σ"), (r"\\tau", "τ"), (r"\\upsilon", "υ"), (r"\\phi", "φ"),
-        (r"\\chi", "χ"), (r"\\psi", "ψ"), (r"\\omega", "ω"),
-        (r"\\Gamma", "Γ"), (r"\\Delta", "Δ"), (r"\\Theta", "Θ"), (r"\\Lambda", "Λ"),
-        (r"\\Xi", "Ξ"), (r"\\Pi", "Π"), (r"\\Sigma", "Σ"), (r"\\Phi", "Φ"),
-        (r"\\Psi", "Ψ"), (r"\\Omega", "Ω"),
-        (r"\\sum", "∑"), (r"\\prod", "∏"), (r"\\int", "∫"), (r"\\infty", "∞"),
-        (r"\\approx", "≈"), (r"\\neq", "≠"), (r"\\le", "≤"), (r"\\ge", "≥"),
-        (r"\\pm", "±"), (r"\\times", "×"), (r"\\div", "÷"), (r"\\partial", "∂"),
-        (r"\\nabla", "∇"), (r"\\forall", "∀"), (r"\\exists", "∃"), (r"\\in", "∈"),
-        (r"\\notin", "∉"), (r"\\subset", "⊂"), (r"\\supset", "⊃"), (r"\\cup", "∪"),
-        (r"\\cap", "∩"), (r"\\Rightarrow", "⇒"), (r"\\rightarrow", "→"),
-        (r"\\Leftarrow", "⇐"), (r"\\leftarrow", "←"), (r"\\Leftrightarrow", "⇔"),
-        (r"\\leftrightarrow", "↔"), (r"\\cdot", "·"), (r"\\dots", "…"),
-    ];
-
-    for (pattern, replacement) in symbols {
-        // Match the command followed by a non-letter or end of string
-        // Use a capture group for the trailing character so we can preserve it
-        let re = Regex::new(&format!(r"{}([^a-zA-Z]|$)", pattern)).unwrap();
-        let replacement_with_group = format!("{}$1", replacement);
-        result = re.replace_all(&result, replacement_with_group.as_str()).to_string();
+    for (re, replacement) in symbol_patterns {
+        result = re.replace_all(&result, replacement.as_str()).to_string();
     }
 
-    // Superscripts and subscripts (common ones)
-    let sup_map = [
-        ('0', '⁰'), ('1', '¹'), ('2', '²'), ('3', '³'), ('4', '⁴'),
-        ('5', '⁵'), ('6', '⁶'), ('7', '⁷'), ('8', '⁸'), ('9', '⁹'),
-        ('+', '⁺'), ('-', '⁻'), ('=', '⁼'), ('(', '⁽'), (')', '⁾'),
-        ('n', 'ⁿ'), ('i', 'ⁱ'), ('x', 'ˣ'),
-    ];
-    let sub_map = [
-        ('0', '₀'), ('1', '₁'), ('2', '₂'), ('3', '₃'), ('4', '₄'),
-        ('5', '₅'), ('6', '₆'), ('7', '₇'), ('8', '₈'), ('9', '₉'),
-        ('+', '₊'), ('-', '₋'), ('=', '₌'), ('(', '₍'), (')', '₎'),
-        ('a', 'ₐ'), ('e', 'ₑ'), ('h', 'ₕ'), ('i', 'ᵢ'), ('j', 'ⱼ'),
-        ('k', 'ₖ'), ('l', 'ₗ'), ('m', 'ₘ'), ('n', 'ₙ'), ('o', 'ₒ'),
-        ('p', 'ₚ'), ('r', 'ᵣ'), ('s', 'ₛ'), ('t', 'ₜ'), ('u', 'ᵤ'),
-        ('v', 'ᵥ'), ('x', 'ₓ'),
-    ];
-
     // Replace ^x with superscript if x is in map
-    let superscript = Regex::new(r"\^\{?([0-9+\-=()nix])\}?").unwrap();
     result = superscript.replace_all(&result, |caps: &Captures| {
         let val = caps[1].chars().next().unwrap();
-        sup_map.iter().find(|(k, _)| *k == val).map(|(_, v)| v.to_string()).unwrap_or_else(|| caps[0].to_string())
+        to_superscript(val).map(|v| v.to_string()).unwrap_or_else(|| caps[0].to_string())
     }).to_string();
 
     // Replace _x with subscript if x is in map
-    let subscript = Regex::new(r"_\{?([0-9+\-=()aehijklmnoprstuvx])\}?").unwrap();
     result = subscript.replace_all(&result, |caps: &Captures| {
         let val = caps[1].chars().next().unwrap();
-        sub_map.iter().find(|(k, _)| *k == val).map(|(_, v)| v.to_string()).unwrap_or_else(|| caps[0].to_string())
+        to_subscript(val).map(|v| v.to_string()).unwrap_or_else(|| caps[0].to_string())
     }).to_string();
 
     // 2. Strip remaining delimiters and structural commands
-    // Match display math ($$...$$) first - must be removed before inline math
-    let display_math = Regex::new(r"\$\$[\s\S]*?\$\$").unwrap();
     result = display_math.replace_all(&result, "").to_string();
-
-    // Match inline math ($...$)
-    let inline_math = Regex::new(r"\$([^\$\n]+)\$").unwrap();
     result = inline_math.replace_all(&result, "$1").to_string();
-
-    // Match \( ... \) and \[ ... \]
-    let paren_math = Regex::new(r"\\\(([\s\S]*?)\\\)").unwrap();
     result = paren_math.replace_all(&result, "$1").to_string();
-    let bracket_math = Regex::new(r"\\\[([\s\S]*?)\\\]").unwrap();
     result = bracket_math.replace_all(&result, "$1").to_string();
-
-    // Match \begin{...}...\end{...} environments
-    // For some environments (like equation/align), we keep the content but strip the tags
-    let latex_env = Regex::new(r"(?s)^\s*\\begin\{[^}]+\}\s*(.*?)\s*\\end\{[^}]+\}\s*$").unwrap();
     result = latex_env.replace_all(&result, "$1").to_string();
-    // Also handle inline environments
-    let latex_env_inline = Regex::new(r"(?s)\\begin\{[^}]+\}(.*?)\\end\{[^}]+\}").unwrap();
     result = latex_env_inline.replace_all(&result, "$1").to_string();
-
-    // Match font size commands (standalone, no args)
-    let font_size_cmd = Regex::new(
-        r"(?m)^\s*\\(tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge|HUGE|ssmall|miniscule)\s*$"
-    ).unwrap();
+    result = begin_end_standalone.replace_all(&result, "").to_string();
     result = font_size_cmd.replace_all(&result, "").to_string();
-
-    // Match standalone LaTeX commands on their own line
-    let standalone_cmd = Regex::new(
-        r"(?m)^\s*\\(newpage|clearpage|pagebreak|tableofcontents|maketitle|listoffigures|listoftables|appendix|frontmatter|mainmatter|backmatter|centering|raggedright|raggedleft|noindent|indent|par|bigskip|medskip|smallskip|vfill|hfill|newline|linebreak)\s*$"
-    ).unwrap();
     result = standalone_cmd.replace_all(&result, "").to_string();
-
-    // Match LaTeX commands with braces on their own line (preamble/setup)
-    let cmd_with_args_line = Regex::new(
-        r"(?m)^\s*\\(usepackage|documentclass|title|author|date|include|input|bibliography|bibliographystyle|setlength|renewcommand|newcommand|setcounter|addtocounter|pagenumbering|pagestyle|thispagestyle|geometry|hypersetup|definecolor|graphicspath|addbibresource|fontsize|sethlcolor|titlespacing|titleformat|captionsetup|lstset)(\[[^\]]*\])?(\{[^}]*\})+\s*$"
-    ).unwrap();
     result = cmd_with_args_line.replace_all(&result, "").to_string();
-
-    // Match inline commands with args that should be stripped entirely
-    let cmd_with_args_inline = Regex::new(
-        r"\\(label|ref|cite|eqref|pageref|vspace|hspace|phantom|hphantom|vphantom)\{[^}]*\}",
-    )
-    .unwrap();
+    result = cmd_with_args_inline_strip.replace_all(&result, "").to_string();
+    result = fontsize_inline.replace_all(&result, "").to_string();
     result = cmd_with_args_inline.replace_all(&result, "").to_string();
-
-    // Match other common inline LaTeX commands and replace with content
-    let text_formatting =
-        Regex::new(r"\\(textbf|textit|emph|underline|texttt|hl|textsf|textsc|textsl)\{([^}]*)\}")
-            .unwrap();
     result = text_formatting.replace_all(&result, "$2").to_string();
-
-    // Match \textcolor{color}{text} and \colorbox{color}{text}
-    let textcolor = Regex::new(r"\\textcolor\{[^}]*\}\{([^}]*)\}").unwrap();
     result = textcolor.replace_all(&result, "$1").to_string();
-    let colorbox = Regex::new(r"\\colorbox\{[^}]*\}\{([^}]*)\}").unwrap();
     result = colorbox.replace_all(&result, "$1").to_string();
+    result = font_size_inline.replace_all(&result, "$2").to_string();
+    result = bare_cmd.replace_all(&result, "$1").to_string();
+    result = bare_cmd_eol.replace_all(&result, "").to_string();
 
     result
 }
@@ -446,9 +478,11 @@ pub fn strip_latex(content: &str) -> String {
 /// Content with all backslash-starting lines removed
 pub fn strip_latex_aggressive(content: &str) -> String {
     use regex::Regex;
+    use std::sync::OnceLock;
 
-    // Match any line that starts with optional whitespace followed by backslash and letters
-    let backslash_line = Regex::new(r"(?m)^\s*\\[a-zA-Z].*$").unwrap();
+    static BACKSLASH_LINE: OnceLock<Regex> = OnceLock::new();
+    let backslash_line =
+        BACKSLASH_LINE.get_or_init(|| Regex::new(r"(?m)^\s*\\[a-zA-Z].*$").unwrap());
     backslash_line.replace_all(content, "").to_string()
 }
 
@@ -748,6 +782,75 @@ mod tests {
             let content = "\\geometry{margin=1in}\nDocument content";
             let result = strip_latex(content);
             assert_eq!(result, "\nDocument content");
+        }
+
+        #[test]
+        fn test_standalone_begin_end_stripped() {
+            let content = "Text \\begin{center} centered \\end{center} more";
+            let result = strip_latex(content);
+            assert_eq!(result, "Text  centered  more");
+        }
+
+        #[test]
+        fn test_unpaired_begin_stripped() {
+            let content = "Before \\begin{itemize} items";
+            let result = strip_latex(content);
+            assert_eq!(result, "Before  items");
+        }
+
+        #[test]
+        fn test_inline_setlength_stripped() {
+            let content = "Text \\setlength{\\parindent}{0pt} more text";
+            let result = strip_latex(content);
+            assert!(result.contains("more text"));
+            assert!(!result.contains("setlength"));
+        }
+
+        #[test]
+        fn test_inline_fontsize_stripped() {
+            let content = "Normal \\fontsize{12}{14} text here";
+            let result = strip_latex(content);
+            assert!(!result.contains("fontsize"));
+            assert!(result.contains("text here"));
+        }
+
+        #[test]
+        fn test_bare_box_stripped() {
+            let content = "Check \\Box$ next";
+            let result = strip_latex(content);
+            assert!(!result.contains("\\Box"));
+        }
+
+        #[test]
+        fn test_bare_commands_stripped() {
+            // \no, \yes are bare commands with no content value
+            let content = "Item \\no text \\yes more";
+            let result = strip_latex(content);
+            assert!(!result.contains("\\no"));
+            assert!(!result.contains("\\yes"));
+        }
+
+        #[test]
+        fn test_inline_pagestyle_stripped() {
+            let content = "Text \\pagestyle{fancy} more";
+            let result = strip_latex(content);
+            assert!(!result.contains("pagestyle"));
+            assert!(result.contains("more"));
+        }
+
+        #[test]
+        fn test_inline_thispagestyle_stripped() {
+            let content = "\\thispagestyle{empty} Content here";
+            let result = strip_latex(content);
+            assert!(!result.contains("thispagestyle"));
+            assert!(result.contains("Content here"));
+        }
+
+        #[test]
+        fn test_inline_usepackage_stripped() {
+            let content = "Load \\usepackage[utf8]{inputenc} text";
+            let result = strip_latex(content);
+            assert!(!result.contains("usepackage"));
         }
     }
 

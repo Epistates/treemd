@@ -138,7 +138,8 @@ pub fn render_table(
                 if total_width - potential_savings <= max_width {
                     // Reducing padding is enough - recalculate with less padding
                     let needed_reduction = total_width - max_width;
-                    let padding_reduction = (needed_reduction / col_count).min(padding);
+                    // Ensure at least 1 reduction per iteration to avoid infinite loop
+                    let padding_reduction = (needed_reduction / col_count).max(1).min(padding);
                     for width in &mut col_widths {
                         *width = width.saturating_sub(padding_reduction);
                     }
@@ -158,6 +159,24 @@ pub fn render_table(
             for width in &mut col_widths {
                 let new_width = ((*width as f64) * shrink_ratio) as usize;
                 *width = new_width.max(MIN_COL_WIDTH);
+            }
+
+            // Iterative trim: MIN_COL_WIDTH clamping can push total back over budget.
+            // Repeatedly reduce the widest column by 1 until we fit.
+            let mut total_after: usize = col_widths.iter().sum();
+            while total_after > available_for_cols {
+                if let Some(max_idx) = col_widths
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, w)| **w > MIN_COL_WIDTH)
+                    .max_by_key(|(_, w)| **w)
+                    .map(|(i, _)| i)
+                {
+                    col_widths[max_idx] -= 1;
+                    total_after -= 1;
+                } else {
+                    break; // All columns at minimum, can't shrink further
+                }
             }
             break;
         }
@@ -525,6 +544,71 @@ mod tests {
 
             // Constrained version should have MORE lines due to wrapping
             assert!(lines_constrained.len() >= lines_unconstrained.len());
+        }
+
+        #[test]
+        fn test_seven_column_table_at_width_146_no_panic() {
+            // Regression test for crash when MIN_COL_WIDTH clamping pushes
+            // total column width over budget after proportional shrink
+            let theme = test_theme();
+            let headers = vec![
+                "Protocol".to_string(),
+                "Port(s)".to_string(),
+                "Transport".to_string(),
+                "Purpose".to_string(),
+                "Encryption".to_string(),
+                "Key Feature".to_string(),
+                "Common Usage".to_string(),
+            ];
+            let alignments = vec![Alignment::Left; 7];
+            let rows = vec![
+                vec![
+                    "HTTP".to_string(),
+                    "80".to_string(),
+                    "TCP".to_string(),
+                    "Web".to_string(),
+                    "No".to_string(),
+                    "Stateless".to_string(),
+                    "Websites".to_string(),
+                ],
+                vec![
+                    "HTTPS".to_string(),
+                    "443".to_string(),
+                    "TCP".to_string(),
+                    "Secure Web".to_string(),
+                    "TLS/SSL".to_string(),
+                    "Encrypted HTTP".to_string(),
+                    "Secure websites".to_string(),
+                ],
+                vec![
+                    "FTP".to_string(),
+                    "20/21".to_string(),
+                    "TCP".to_string(),
+                    "File Transfer".to_string(),
+                    "Optional".to_string(),
+                    "Active/Passive".to_string(),
+                    "File sharing".to_string(),
+                ],
+            ];
+
+            // Test specific widths around the previously crashing point
+            for width in [30, 50, 80, 100, 130, 140, 145, 146, 147, 150, 160, 180, 200] {
+                let lines = render_table(
+                    &headers,
+                    &alignments,
+                    &rows,
+                    &theme,
+                    false,
+                    false,
+                    None,
+                    Some(width),
+                );
+                assert!(
+                    !lines.is_empty(),
+                    "Table should render at width {}",
+                    width
+                );
+            }
         }
     }
 

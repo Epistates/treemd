@@ -340,13 +340,15 @@ pub struct App {
     pub link_search_active: bool,   // Whether search input is active
 
     // File picker state
-    pub files_in_directory: Vec<PathBuf>, // All .md files in directory
-    pub filtered_file_indices: Vec<usize>, // Indices after filtering
-    pub selected_file_idx: Option<usize>, // Selected index in filtered list
-    pub file_search_query: String,        // Search query for filtering files
-    pub file_search_active: bool,         // Whether search input is active
-    pub startup_needs_file_picker: bool,  // True if started without file arg
-    pub file_picker_dir: Option<PathBuf>, // Custom directory for file picker
+    pub files_in_directory: Vec<PathBuf>,  // All .md files in directory
+    pub dirs_in_directory: Vec<PathBuf>,   // Subdirectories in directory
+    pub filtered_file_indices: Vec<usize>, // Indices after filtering (files)
+    pub filtered_dir_indices: Vec<usize>,  // Indices after filtering (dirs)
+    pub selected_file_idx: Option<usize>,  // Selected index in combined list
+    pub file_search_query: String,         // Search query for filtering files
+    pub file_search_active: bool,          // Whether search input is active
+    pub startup_needs_file_picker: bool,   // True if started without file arg
+    pub file_picker_dir: Option<PathBuf>,  // Custom directory for file picker
 
     pub file_history: Vec<FileState>,   // Back navigation stack
     pub file_future: Vec<FileState>,    // Forward navigation stack (for undo back)
@@ -548,7 +550,9 @@ impl App {
 
             // File picker state
             files_in_directory: Vec::new(),
+            dirs_in_directory: Vec::new(),
             filtered_file_indices: Vec::new(),
+            filtered_dir_indices: Vec::new(),
             selected_file_idx: None,
             file_search_query: String::new(),
             file_search_active: false,
@@ -1275,6 +1279,9 @@ impl App {
             OpenFilePicker => {
                 self.enter_file_picker();
             }
+            ParentDirectory => {
+                self.file_picker_parent_dir();
+            }
 
             // === Dialog Actions ===
             ConfirmAction => {
@@ -1619,7 +1626,14 @@ impl App {
             AppMode::Search => self.search_backspace(),
             AppMode::DocSearch => self.doc_search_backspace(),
             AppMode::LinkFollow if self.link_search_active => self.link_search_pop(),
-            AppMode::FileSearch => self.file_search_pop(),
+            AppMode::FileSearch => {
+                if self.file_search_query.is_empty() {
+                    // Empty search query + Backspace => navigate to parent directory
+                    self.file_picker_parent_dir();
+                } else {
+                    self.file_search_pop();
+                }
+            }
             AppMode::CommandPalette => self.command_palette_backspace(),
             AppMode::CellEdit => {
                 self.cell_edit_value.pop();
@@ -1665,12 +1679,15 @@ impl App {
         (0, 0)
     }
 
+    /// Maximum scroll offset: stops when last line is at bottom of viewport
+    pub fn max_content_scroll(&self) -> u16 {
+        self.content_height
+            .saturating_sub(self.content_viewport_height)
+    }
+
     /// Scroll content down by one line
     fn scroll_content_down(&mut self) {
-        // Calculate max scroll: stop when last line is visible at bottom of viewport
-        let max_scroll = self
-            .content_height
-            .saturating_sub(self.content_viewport_height);
+        let max_scroll = self.max_content_scroll();
         let new_scroll = self.content_scroll.saturating_add(1);
         if new_scroll <= max_scroll {
             self.content_scroll = new_scroll;
@@ -1974,12 +1991,8 @@ impl App {
             };
             self.select_outline_index(i);
         } else {
-            // Scroll content
-            let new_scroll = self.content_scroll.saturating_add(1);
-            if new_scroll < self.content_height {
-                self.content_scroll = new_scroll;
-                self.content_scroll_state = self.content_scroll_state.position(new_scroll as usize);
-            }
+            // Scroll content - stop when last line is at viewport bottom
+            self.scroll_content_down();
         }
     }
 
@@ -1992,10 +2005,7 @@ impl App {
             self.select_outline_index(i);
         } else {
             // Scroll content
-            self.content_scroll = self.content_scroll.saturating_sub(1);
-            self.content_scroll_state = self
-                .content_scroll_state
-                .position(self.content_scroll as usize);
+            self.scroll_content_up();
         }
     }
 
@@ -2014,9 +2024,7 @@ impl App {
             self.select_outline_index(last);
         } else {
             // Scroll to show the last line at the bottom of the viewport
-            let max_scroll = self
-                .content_height
-                .saturating_sub(self.content_viewport_height);
+            let max_scroll = self.max_content_scroll();
             self.content_scroll = max_scroll;
             self.content_scroll_state = self.content_scroll_state.position(max_scroll as usize);
         }
@@ -2507,12 +2515,8 @@ impl App {
 
     pub fn scroll_page_down(&mut self) {
         if self.focus == Focus::Content {
-            // Calculate max scroll: stop when last line is visible at bottom of viewport
-            let max_scroll = self
-                .content_height
-                .saturating_sub(self.content_viewport_height);
             let new_scroll = self.content_scroll.saturating_add(10);
-            self.content_scroll = new_scroll.min(max_scroll);
+            self.content_scroll = new_scroll.min(self.max_content_scroll());
             self.content_scroll_state = self
                 .content_scroll_state
                 .position(self.content_scroll as usize);
@@ -2530,12 +2534,8 @@ impl App {
 
     /// Scroll page down in interactive mode (bypasses focus check)
     pub fn scroll_page_down_interactive(&mut self) {
-        // Calculate max scroll: stop when last line is visible at bottom of viewport
-        let max_scroll = self
-            .content_height
-            .saturating_sub(self.content_viewport_height);
         let new_scroll = self.content_scroll.saturating_add(10);
-        self.content_scroll = new_scroll.min(max_scroll);
+        self.content_scroll = new_scroll.min(self.max_content_scroll());
         self.content_scroll_state = self
             .content_scroll_state
             .position(self.content_scroll as usize);
@@ -2571,8 +2571,7 @@ impl App {
                 let new_scroll = end
                     .saturating_add(scroll_margin)
                     .saturating_sub(viewport_height);
-                self.content_scroll =
-                    new_scroll.min(self.content_height.saturating_sub(viewport_height));
+                self.content_scroll = new_scroll.min(self.max_content_scroll());
             }
 
             // Update scrollbar state
@@ -3588,69 +3587,113 @@ impl App {
 
     // ===== File Picker Methods =====
 
-    /// Scan current directory for .md files (non-recursive, alphabetically sorted)
+    /// Check if a path has a markdown file extension
+    fn is_markdown_extension(path: &std::path::Path) -> bool {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| {
+                let ext_lower = ext.to_lowercase();
+                ext_lower == "md" || ext_lower == "markdown" || ext_lower == "mdown"
+            })
+            .unwrap_or(false)
+    }
+
+    /// Get the effective file picker directory (custom or cwd)
+    pub fn effective_picker_dir(&self) -> PathBuf {
+        self.file_picker_dir
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+    }
+
+    /// Navigate file picker to the given directory, clearing search and resetting selection
+    fn navigate_picker_to_dir(&mut self, dir: PathBuf) {
+        self.file_picker_dir = Some(dir);
+        self.file_search_query.clear();
+        self.scan_markdown_files(); // update_file_filter() resets selected_file_idx
+    }
+
+    /// Scan current directory for .md files and subdirectories (non-recursive, alphabetically sorted)
     pub fn scan_markdown_files(&mut self) {
         use std::fs;
 
-        // Use custom directory if set, otherwise use current working directory
-        let dir = self
-            .file_picker_dir
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        let dir = self.effective_picker_dir();
 
-        let mut files: Vec<PathBuf> = fs::read_dir(&dir)
-            .ok()
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.is_file()
+        let mut files = Vec::new();
+        let mut dirs = Vec::new();
+
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let ft = entry.file_type().ok();
+                let path = entry.path();
+                if ft.map(|t| t.is_file()).unwrap_or(false)
+                    && Self::is_markdown_extension(&path)
+                {
+                    files.push(path);
+                } else if ft.map(|t| t.is_dir()).unwrap_or(false)
                     && path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .map(|ext| ext == "md" || ext == "markdown")
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|name| !name.starts_with('.'))
                         .unwrap_or(false)
-            })
-            .collect();
+                {
+                    dirs.push(path);
+                }
+            }
+        }
 
         files.sort();
+        dirs.sort();
         self.files_in_directory = files;
+        self.dirs_in_directory = dirs;
+
         self.update_file_filter();
     }
 
-    /// Update filtered file list based on search query
+    /// Update filtered file and directory lists based on search query
     pub fn update_file_filter(&mut self) {
-        if self.file_search_query.is_empty() {
-            self.filtered_file_indices = (0..self.files_in_directory.len()).collect();
-        } else {
-            let query_lower = self.file_search_query.to_lowercase();
-            self.filtered_file_indices = self
-                .files_in_directory
+        fn filter_by_name(paths: &[PathBuf], query: &str) -> Vec<usize> {
+            paths
                 .iter()
                 .enumerate()
                 .filter(|(_, path)| {
                     path.file_name()
                         .and_then(|n| n.to_str())
-                        .map(|name| name.to_lowercase().contains(&query_lower))
+                        .map(|name| name.to_lowercase().contains(query))
                         .unwrap_or(false)
                 })
                 .map(|(idx, _)| idx)
-                .collect();
+                .collect()
         }
+
+        if self.file_search_query.is_empty() {
+            self.filtered_file_indices = (0..self.files_in_directory.len()).collect();
+            self.filtered_dir_indices = (0..self.dirs_in_directory.len()).collect();
+        } else {
+            let query_lower = self.file_search_query.to_lowercase();
+            self.filtered_file_indices = filter_by_name(&self.files_in_directory, &query_lower);
+            self.filtered_dir_indices = filter_by_name(&self.dirs_in_directory, &query_lower);
+        }
+
+        // Combined count: files + directories
+        let combined_count = self.filtered_file_indices.len() + self.filtered_dir_indices.len();
 
         // Reset selection if current is out of bounds
         if let Some(sel) = self.selected_file_idx {
-            if sel >= self.filtered_file_indices.len() {
-                self.selected_file_idx = if self.filtered_file_indices.is_empty() {
+            if sel >= combined_count {
+                self.selected_file_idx = if combined_count == 0 {
                     None
                 } else {
                     Some(0)
                 };
             }
-        } else if !self.filtered_file_indices.is_empty() {
+        } else if combined_count > 0 {
             self.selected_file_idx = Some(0);
         }
+    }
+
+    /// Get the total number of items in the file picker (files + dirs)
+    pub fn file_picker_item_count(&self) -> usize {
+        self.filtered_file_indices.len() + self.filtered_dir_indices.len()
     }
 
     /// Push character to file search query
@@ -3663,6 +3706,26 @@ impl App {
     pub fn file_search_pop(&mut self) {
         self.file_search_query.pop();
         self.update_file_filter();
+    }
+
+    /// Auto-hide outline when only 0-1 markdown files in directory.
+    /// User can still toggle outline visibility with keybinding.
+    pub fn auto_hide_outline_if_single_file(&mut self) {
+        // Only scan if no data yet (avoids redundant scan after enter_file_picker)
+        if self.files_in_directory.is_empty() && self.dirs_in_directory.is_empty() {
+            self.scan_markdown_files();
+        }
+        if self.files_in_directory.len() <= 1 {
+            self.show_outline = false;
+        }
+    }
+
+    /// Navigate to parent directory in file picker
+    pub fn file_picker_parent_dir(&mut self) {
+        let current_dir = self.effective_picker_dir();
+        if let Some(parent) = current_dir.parent() {
+            self.navigate_picker_to_dir(parent.to_path_buf());
+        }
     }
 
     /// Enter file picker mode
@@ -3683,9 +3746,23 @@ impl App {
         self.mode = AppMode::FilePicker;
     }
 
-    /// Select file from picker and load it
+    /// Select file from picker and load it (or navigate into directory)
     pub fn select_file_from_picker(&mut self) -> Result<(), String> {
         let selected_display_idx = self.selected_file_idx.ok_or("No file selected")?;
+        let file_count = self.filtered_file_indices.len();
+
+        // Check if selection is in the directory range
+        if selected_display_idx >= file_count {
+            let dir_display_idx = selected_display_idx - file_count;
+            let real_dir_idx = self
+                .filtered_dir_indices
+                .get(dir_display_idx)
+                .ok_or("Invalid directory selection")?;
+            let dir_path = self.dirs_in_directory[*real_dir_idx].clone();
+            self.navigate_picker_to_dir(dir_path);
+            return Ok(());
+        }
+
         let real_idx = self
             .filtered_file_indices
             .get(selected_display_idx)
@@ -3732,12 +3809,13 @@ impl App {
         Ok(())
     }
 
-    /// Cycle to the next file (in FilePicker mode)
+    /// Cycle to the next item in file picker (files + dirs)
     pub fn next_file(&mut self) {
-        if self.mode == AppMode::FilePicker && !self.filtered_file_indices.is_empty() {
+        let total = self.file_picker_item_count();
+        if self.mode == AppMode::FilePicker && total > 0 {
             self.selected_file_idx = Some(match self.selected_file_idx {
                 Some(idx) => {
-                    if idx >= self.filtered_file_indices.len() - 1 {
+                    if idx >= total - 1 {
                         0 // Wrap to first
                     } else {
                         idx + 1
@@ -3748,13 +3826,14 @@ impl App {
         }
     }
 
-    /// Cycle to the previous file (in FilePicker mode)
+    /// Cycle to the previous item in file picker (files + dirs)
     pub fn previous_file(&mut self) {
-        if self.mode == AppMode::FilePicker && !self.filtered_file_indices.is_empty() {
+        let total = self.file_picker_item_count();
+        if self.mode == AppMode::FilePicker && total > 0 {
             self.selected_file_idx = Some(match self.selected_file_idx {
                 Some(idx) => {
                     if idx == 0 {
-                        self.filtered_file_indices.len() - 1 // Wrap to last
+                        total - 1 // Wrap to last
                     } else {
                         idx - 1
                     }
@@ -3803,14 +3882,7 @@ impl App {
             }
             crate::parser::LinkTarget::RelativeFile { path, anchor } => {
                 // Check if the file has a markdown extension
-                let has_md_extension = path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| {
-                        let ext_lower = ext.to_lowercase();
-                        ext_lower == "md" || ext_lower == "markdown" || ext_lower == "mdown"
-                    })
-                    .unwrap_or(false);
+                let has_md_extension = Self::is_markdown_extension(&path);
 
                 let current_dir = self
                     .current_file_path
@@ -4641,14 +4713,7 @@ impl App {
             }
             LinkTarget::RelativeFile { path, anchor } => {
                 // Check if the file has a markdown extension
-                let has_md_extension = path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| {
-                        let ext_lower = ext.to_lowercase();
-                        ext_lower == "md" || ext_lower == "markdown" || ext_lower == "mdown"
-                    })
-                    .unwrap_or(false);
+                let has_md_extension = Self::is_markdown_extension(&path);
 
                 let current_dir = self
                     .current_file_path

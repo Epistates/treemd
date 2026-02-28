@@ -123,6 +123,8 @@ pub enum Action {
     UndoEdit,
     /// Open file picker to switch between markdown files
     OpenFilePicker,
+    /// Navigate to parent directory in file picker
+    ParentDirectory,
 
     // === Dialog Actions ===
     /// Confirm action in dialog
@@ -267,6 +269,7 @@ impl Action {
             Action::OpenInEditor => "Open in editor",
             Action::UndoEdit => "Undo last edit",
             Action::OpenFilePicker => "Open file picker",
+            Action::ParentDirectory => "Go to parent directory",
 
             // Dialog
             Action::ConfirmAction => "Confirm",
@@ -380,7 +383,8 @@ impl Action {
             | Action::GoForward
             | Action::OpenInEditor
             | Action::UndoEdit
-            | Action::OpenFilePicker => "Files",
+            | Action::OpenFilePicker
+            | Action::ParentDirectory => "Files",
 
             Action::ConfirmAction
             | Action::CancelAction

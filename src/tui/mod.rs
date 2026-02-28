@@ -78,10 +78,14 @@ fn run_editor(
 pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     let mut app = app;
 
-    // Handle startup file picker if needed
+    // Handle startup file picker if needed (scans directory)
     if app.startup_needs_file_picker {
         app.enter_file_picker();
     }
+
+    // Auto-hide outline when only 0-1 markdown files in directory
+    // (reuses scan data from enter_file_picker if it ran; otherwise scans itself)
+    app.auto_hide_outline_if_single_file();
 
     // Create file watcher for live reload
     let mut file_watcher = watcher::FileWatcher::new().ok();
