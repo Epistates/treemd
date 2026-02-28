@@ -450,7 +450,7 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
         app.content_scroll = max_scroll;
     }
     app.content_scroll_state =
-        ScrollbarState::new(app.content_height as usize).position(app.content_scroll as usize);
+        ScrollbarState::new(max_scroll as usize).position(app.content_scroll as usize);
 
     // Apply scroll and render
     let paragraph = paragraph.scroll((app.content_scroll, 0));
