@@ -361,6 +361,7 @@ pub fn strip_latex(content: &str) -> String {
     static FONT_SIZE_INLINE: OnceLock<Regex> = OnceLock::new();
     static BARE_CMD: OnceLock<Regex> = OnceLock::new();
     static BARE_CMD_EOL: OnceLock<Regex> = OnceLock::new();
+    static MULTI_SPACE: OnceLock<Regex> = OnceLock::new();
 
     let superscript = SUPERSCRIPT.get_or_init(|| Regex::new(r"\^\{?([0-9+\-=()nix])\}?").unwrap());
     let subscript = SUBSCRIPT.get_or_init(|| Regex::new(r"_\{?([0-9+\-=()aehijklmnoprstuvx])\}?").unwrap());
@@ -462,6 +463,10 @@ pub fn strip_latex(content: &str) -> String {
     result = font_size_inline.replace_all(&result, "$2").to_string();
     result = bare_cmd.replace_all(&result, "$1").to_string();
     result = bare_cmd_eol.replace_all(&result, "").to_string();
+
+    // Collapse multiple spaces left by stripped inline commands
+    let multi_space = MULTI_SPACE.get_or_init(|| Regex::new(r"  +").unwrap());
+    result = multi_space.replace_all(&result, " ").to_string();
 
     result
 }
@@ -760,14 +765,14 @@ mod tests {
         fn test_label_ref_stripped() {
             let content = "See Figure \\ref{fig:example} for details.";
             let result = strip_latex(content);
-            assert_eq!(result, "See Figure  for details.");
+            assert_eq!(result, "See Figure for details.");
         }
 
         #[test]
         fn test_cite_stripped() {
             let content = "As shown by \\cite{smith2020} in their work.";
             let result = strip_latex(content);
-            assert_eq!(result, "As shown by  in their work.");
+            assert_eq!(result, "As shown by in their work.");
         }
 
         #[test]
@@ -788,14 +793,14 @@ mod tests {
         fn test_standalone_begin_end_stripped() {
             let content = "Text \\begin{center} centered \\end{center} more";
             let result = strip_latex(content);
-            assert_eq!(result, "Text  centered  more");
+            assert_eq!(result, "Text centered more");
         }
 
         #[test]
         fn test_unpaired_begin_stripped() {
             let content = "Before \\begin{itemize} items";
             let result = strip_latex(content);
-            assert_eq!(result, "Before  items");
+            assert_eq!(result, "Before items");
         }
 
         #[test]
@@ -851,6 +856,15 @@ mod tests {
             let content = "Load \\usepackage[utf8]{inputenc} text";
             let result = strip_latex(content);
             assert!(!result.contains("usepackage"));
+        }
+
+        #[test]
+        fn test_no_double_spaces_after_stripping() {
+            let content = "Text with \\fontsize{12}{14} commands and \\setlength{\\parskip}{1em} more text here.";
+            let result = strip_latex(content);
+            assert!(!result.contains("  "), "Double spaces found in: {:?}", result);
+            assert!(result.contains("Text with"));
+            assert!(result.contains("more text here."));
         }
     }
 
