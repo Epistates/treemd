@@ -26,6 +26,8 @@ pub enum ActionResult {
     Quit,
     /// Run an editor on a file, optionally at a specific line
     RunEditor(PathBuf, Option<u32>),
+    /// Redraw the screen (terminal.clear())
+    Redraw,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -433,6 +435,10 @@ pub struct App {
 
     // Image rendering control (can be disabled via config or CLI)
     pub images_enabled: bool,
+
+    // LaTeX detection state
+    pub latex_detected: bool,
+    pub latex_hint_shown: bool,
 }
 
 /// Saved state for file navigation history
@@ -647,6 +653,10 @@ impl App {
 
             // Image rendering control
             images_enabled,
+
+            // LaTeX detection
+            latex_detected: false,
+            latex_hint_shown: false,
         }
     }
 
@@ -1042,6 +1052,9 @@ impl App {
                 } else {
                     return ActionResult::Quit;
                 }
+            }
+            Redraw => {
+                return ActionResult::Redraw;
             }
 
             // === Navigation ===
@@ -1626,7 +1639,7 @@ impl App {
             AppMode::Search => self.search_backspace(),
             AppMode::DocSearch => self.doc_search_backspace(),
             AppMode::LinkFollow if self.link_search_active => self.link_search_pop(),
-            AppMode::FileSearch => {
+            AppMode::FilePicker if self.file_search_active => {
                 if self.file_search_query.is_empty() {
                     // Empty search query + Backspace => navigate to parent directory
                     self.file_picker_parent_dir();
@@ -2010,7 +2023,12 @@ impl App {
     }
 
     pub fn first(&mut self) {
-        if self.focus == Focus::Outline && !self.outline_items.is_empty() {
+        if self.mode == AppMode::FilePicker {
+            let total = self.file_picker_item_count();
+            if total > 0 {
+                self.selected_file_idx = Some(0);
+            }
+        } else if self.focus == Focus::Outline && !self.outline_items.is_empty() {
             self.select_outline_index(0);
         } else {
             self.content_scroll = 0;
@@ -2019,7 +2037,12 @@ impl App {
     }
 
     pub fn last(&mut self) {
-        if self.focus == Focus::Outline && !self.outline_items.is_empty() {
+        if self.mode == AppMode::FilePicker {
+            let total = self.file_picker_item_count();
+            if total > 0 {
+                self.selected_file_idx = Some(total - 1);
+            }
+        } else if self.focus == Focus::Outline && !self.outline_items.is_empty() {
             let last = self.outline_items.len() - 1;
             self.select_outline_index(last);
         } else {
@@ -2069,9 +2092,9 @@ impl App {
         self.help_scroll = self.help_scroll.saturating_sub(1);
     }
 
-    /// Scroll help popup down by half a page
+    /// Scroll help popup down by a page
     pub fn scroll_help_page_down(&mut self) {
-        let page_size = 10u16;
+        let page_size = self.content_viewport_height.saturating_sub(2).max(1);
         let new_scroll = self.help_scroll.saturating_add(page_size);
         let max_scroll = help_text::HELP_LINES.len() as u16;
         if new_scroll < max_scroll {
@@ -2079,9 +2102,9 @@ impl App {
         }
     }
 
-    /// Scroll help popup up by half a page
+    /// Scroll help popup up by a page
     pub fn scroll_help_page_up(&mut self) {
-        let page_size = 10u16;
+        let page_size = self.content_viewport_height.saturating_sub(2).max(1);
         self.help_scroll = self.help_scroll.saturating_sub(page_size);
     }
 
@@ -2515,7 +2538,8 @@ impl App {
 
     pub fn scroll_page_down(&mut self) {
         if self.focus == Focus::Content {
-            let new_scroll = self.content_scroll.saturating_add(10);
+            let page = self.content_viewport_height.saturating_sub(2).max(1);
+            let new_scroll = self.content_scroll.saturating_add(page);
             self.content_scroll = new_scroll.min(self.max_content_scroll());
             self.content_scroll_state = self
                 .content_scroll_state
@@ -2525,7 +2549,8 @@ impl App {
 
     pub fn scroll_page_up(&mut self) {
         if self.focus == Focus::Content {
-            self.content_scroll = self.content_scroll.saturating_sub(10);
+            let page = self.content_viewport_height.saturating_sub(2).max(1);
+            self.content_scroll = self.content_scroll.saturating_sub(page);
             self.content_scroll_state = self
                 .content_scroll_state
                 .position(self.content_scroll as usize);
@@ -2534,7 +2559,8 @@ impl App {
 
     /// Scroll page down in interactive mode (bypasses focus check)
     pub fn scroll_page_down_interactive(&mut self) {
-        let new_scroll = self.content_scroll.saturating_add(10);
+        let page = self.content_viewport_height.saturating_sub(2).max(1);
+        let new_scroll = self.content_scroll.saturating_add(page);
         self.content_scroll = new_scroll.min(self.max_content_scroll());
         self.content_scroll_state = self
             .content_scroll_state
@@ -2543,7 +2569,8 @@ impl App {
 
     /// Scroll page up in interactive mode (bypasses focus check)
     pub fn scroll_page_up_interactive(&mut self) {
-        self.content_scroll = self.content_scroll.saturating_sub(10);
+        let page = self.content_viewport_height.saturating_sub(2).max(1);
+        self.content_scroll = self.content_scroll.saturating_sub(page);
         self.content_scroll_state = self
             .content_scroll_state
             .position(self.content_scroll as usize);
@@ -4260,6 +4287,21 @@ impl App {
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
         self.interactive_state.index_elements(&blocks);
+
+        // Detect LaTeX content for status hint
+        self.latex_detected = content.contains("\\begin{")
+            || content.contains("\\end{")
+            || content.contains("\\textbf{")
+            || content.contains("\\textit{")
+            || content.contains("\\usepackage")
+            || content.contains("\\documentclass")
+            || content.contains("\\newpage")
+            || content.contains("\\section{");
+
+        if self.latex_detected && self.should_hide_latex() && !self.latex_hint_shown {
+            self.latex_hint_shown = true;
+            self.set_status_message("LaTeX detected · filtered via hide_latex in config");
+        }
     }
 
     /// Navigate back in file history
@@ -4713,7 +4755,7 @@ impl App {
             }
             LinkTarget::RelativeFile { path, anchor } => {
                 // Check if the file has a markdown extension
-                let has_md_extension = Self::is_markdown_extension(&path);
+                let has_md_extension = Self::is_markdown_extension(path);
 
                 let current_dir = self
                     .current_file_path

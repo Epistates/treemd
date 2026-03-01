@@ -45,6 +45,8 @@ pub fn render_help_popup(frame: &mut Frame, app: &App, area: Rect) {
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .begin_symbol(Some("↑"))
         .end_symbol(Some("↓"))
+        .thumb_symbol("┃")
+        .track_symbol(Some("│"))
         .style(Style::default().fg(theme.modal_border()));
 
     let mut scrollbar_state = ScrollbarState::new(help_text_len).position(app.help_scroll as usize);
@@ -271,6 +273,8 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓"))
+            .thumb_symbol("┃")
+            .track_symbol(Some("│"))
             .style(Style::default().fg(theme.modal_border()));
 
         let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll_offset as usize);
@@ -1009,7 +1013,7 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     let total_lines = lines.len();
     let inner_height = popup_area.height.saturating_sub(2) as usize;
-    let header_lines = 2;
+    let header_lines = if app.file_search_active || !app.file_search_query.is_empty() { 3 } else { 2 };
     let footer_lines = 2;
     let visible_area = inner_height.saturating_sub(header_lines + footer_lines);
 
@@ -1042,6 +1046,8 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓"))
+            .thumb_symbol("┃")
+            .track_symbol(Some("│"))
             .style(Style::default().fg(theme.modal_border()));
 
         let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll_offset as usize);

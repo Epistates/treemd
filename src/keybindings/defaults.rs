@@ -124,6 +124,7 @@ fn add_normal_mode(kb: &mut Keybindings) {
     // Application
     bind(kb, Normal, "q", Quit);
     bind(kb, Normal, "Escape", Quit);
+    bind(kb, Normal, "Ctrl+l", Redraw);
 
     // Jump to heading by number
     bind(kb, Normal, "1", JumpToHeading1);

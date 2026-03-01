@@ -319,6 +319,8 @@ fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .begin_symbol(Some("↑"))
         .end_symbol(Some("↓"))
+        .thumb_symbol("┃")
+        .track_symbol(Some("│"))
         .style(Style::default().fg(theme.scrollbar_fg));
 
     frame.render_stateful_widget(
@@ -463,6 +465,8 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .begin_symbol(Some("↑"))
         .end_symbol(Some("↓"))
+        .thumb_symbol("┃")
+        .track_symbol(Some("│"))
         .style(Style::default().fg(theme.scrollbar_fg));
 
     frame.render_stateful_widget(
@@ -1091,7 +1095,15 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     let theme_name = format!(" • Theme:{}", app.theme.name);
     let raw_indicator = if app.show_raw_source { " [RAW]" } else { "" };
-    let status_text = format!("{}{}{}", status_text, theme_name, raw_indicator);
+    let latex_indicator = if app.latex_detected && app.should_hide_latex() {
+        " [LaTeX filtered]"
+    } else {
+        ""
+    };
+    let status_text = format!(
+        "{}{}{}{}",
+        status_text, theme_name, raw_indicator, latex_indicator
+    );
 
     let status_style = if app.mode == AppMode::Interactive {
         Style::default()

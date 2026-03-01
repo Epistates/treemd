@@ -112,7 +112,7 @@ fn default_hide_latex() -> bool {
 }
 
 fn default_latex_aggressive() -> bool {
-    false
+    true
 }
 
 /// Custom theme color overrides

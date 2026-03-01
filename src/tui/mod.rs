@@ -276,6 +276,9 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                         }
                                     }
                                 }
+                                ActionResult::Redraw => {
+                                    terminal.clear()?;
+                                }
                                 ActionResult::Continue => {}
                             }
                         }

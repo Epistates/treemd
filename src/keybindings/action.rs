@@ -139,6 +139,8 @@ pub enum Action {
     // === Application ===
     /// Quit the application
     Quit,
+    /// Redraw the screen
+    Redraw,
 
     // === Jump to Heading by Number ===
     JumpToHeading1,
@@ -279,6 +281,7 @@ impl Action {
 
             // Application
             Action::Quit => "Quit",
+            Action::Redraw => "Redraw screen",
 
             // Jump to heading
             Action::JumpToHeading1 => "Jump to heading 1",
@@ -391,7 +394,7 @@ impl Action {
             | Action::DiscardAndQuit
             | Action::DiscardAndContinue => "Dialog",
 
-            Action::Quit => "Application",
+            Action::Quit | Action::Redraw => "Application",
 
             Action::JumpToHeading1
             | Action::JumpToHeading2
