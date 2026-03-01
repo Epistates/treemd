@@ -1057,8 +1057,10 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 // Show content scroll position
                 let scroll_pos = app.content_scroll as usize;
                 let content_height = app.content_height as usize;
+                let viewport = app.content_viewport_height as usize;
+                let bottom_line = (scroll_pos + viewport).min(content_height);
                 let percentage = if content_height > 0 {
-                    ((scroll_pos + 1) * 100 / content_height).min(100)
+                    (bottom_line * 100 / content_height).min(100)
                 } else {
                     0
                 };
