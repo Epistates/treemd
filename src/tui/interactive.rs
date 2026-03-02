@@ -29,6 +29,16 @@ pub const TABLE_OFFSET: usize = 6000;
 /// Offset for images nested in list items
 pub const IMAGE_OFFSET: usize = 7000;
 
+/// Placeholder lines reserved for block-level images in rendered output.
+/// 1 label line + IMAGE_PLACEHOLDER_LINES blank lines = BLOCK_IMAGE_TOTAL_LINES.
+pub const IMAGE_PLACEHOLDER_LINES: usize = 16;
+pub const BLOCK_IMAGE_TOTAL_LINES: usize = 1 + IMAGE_PLACEHOLDER_LINES; // 17
+
+/// Placeholder lines reserved for paragraphs containing inline images.
+/// 1 text line + PARAGRAPH_IMAGE_PLACEHOLDER_LINES blank lines = PARAGRAPH_WITH_IMAGE_TOTAL_LINES.
+pub const PARAGRAPH_IMAGE_PLACEHOLDER_LINES: usize = 13;
+pub const PARAGRAPH_WITH_IMAGE_TOTAL_LINES: usize = 1 + PARAGRAPH_IMAGE_PLACEHOLDER_LINES; // 14
+
 // Sub-index encoding constants for nested elements within details blocks
 /// Base offset for elements nested inside details blocks
 pub const DETAILS_NESTED_BASE: usize = 100000;
@@ -335,6 +345,7 @@ impl InteractiveState {
                 }
                 Block::Paragraph { inline, .. } => {
                     // Extract links and images from inline elements
+                    let mut paragraph_has_image = false;
                     for (inline_idx, inline_elem) in inline.iter().enumerate() {
                         if let InlineElement::Link { text, url, .. } = inline_elem {
                             let id = ElementId {
@@ -380,6 +391,7 @@ impl InteractiveState {
                                 line_range: (current_line, current_line + 1),
                             });
                         } else if let InlineElement::Image { alt, src, .. } = inline_elem {
+                            paragraph_has_image = true;
                             let id = ElementId {
                                 block_idx,
                                 sub_idx: Some(inline_idx),
@@ -392,11 +404,18 @@ impl InteractiveState {
                                     src: src.clone(),
                                     block_idx,
                                 },
-                                line_range: (current_line, current_line + 1),
+                                line_range: (
+                                    current_line,
+                                    current_line + PARAGRAPH_WITH_IMAGE_TOTAL_LINES,
+                                ),
                             });
                         }
                     }
-                    current_line += 1;
+                    if paragraph_has_image {
+                        current_line += PARAGRAPH_WITH_IMAGE_TOTAL_LINES;
+                    } else {
+                        current_line += 1;
+                    }
                 }
                 Block::List { items, .. } => {
                     // Extract checkboxes and links from list items
@@ -632,10 +651,10 @@ impl InteractiveState {
                             src: src.clone(),
                             block_idx,
                         },
-                        line_range: (current_line, current_line + 1),
+                        line_range: (current_line, current_line + BLOCK_IMAGE_TOTAL_LINES),
                     });
 
-                    current_line += 1;
+                    current_line += BLOCK_IMAGE_TOTAL_LINES;
                 }
                 _ => {
                     // Non-interactive blocks (still count lines)
@@ -1115,12 +1134,21 @@ fn count_block_lines(blocks: &[Block]) -> usize {
 fn count_single_block_lines(block: &Block) -> usize {
     match block {
         Block::Heading { .. } => 1,
-        Block::Paragraph { .. } => 1,
+        Block::Paragraph { inline, .. } => {
+            let has_image = inline
+                .iter()
+                .any(|e| matches!(e, InlineElement::Image { .. }));
+            if has_image {
+                PARAGRAPH_WITH_IMAGE_TOTAL_LINES
+            } else {
+                1
+            }
+        }
         Block::Code { content, .. } => 2 + content.lines().count(),
         Block::List { items, .. } => items.len(),
         Block::Blockquote { blocks, .. } => count_block_lines(blocks),
         Block::Table { rows, .. } => 3 + rows.len(),
-        Block::Image { .. } => 1,
+        Block::Image { .. } => BLOCK_IMAGE_TOTAL_LINES,
         Block::HorizontalRule => 1,
         Block::Details { blocks, .. } => 1 + count_block_lines(blocks),
     }

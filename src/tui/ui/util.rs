@@ -427,6 +427,35 @@ pub fn strip_latex(content: &str) -> String {
     // 1. Convert common LaTeX symbols to Unicode approximations (SOTA)
     let mut result = content.to_string();
 
+    // Protect code spans and fenced code blocks from LaTeX transformations.
+    // Extract them as placeholders, apply transforms, then restore.
+    static CODE_FENCE: OnceLock<Regex> = OnceLock::new();
+    static CODE_SPAN_DOUBLE: OnceLock<Regex> = OnceLock::new();
+    static CODE_SPAN_SINGLE: OnceLock<Regex> = OnceLock::new();
+    let code_fence = CODE_FENCE.get_or_init(|| Regex::new(r"(?s)```[^\n]*\n.*?```").unwrap());
+    let code_span_double = CODE_SPAN_DOUBLE.get_or_init(|| Regex::new(r"``(.+?)``").unwrap());
+    let code_span_single = CODE_SPAN_SINGLE.get_or_init(|| Regex::new(r"`([^`]+)`").unwrap());
+
+    let mut code_placeholders: Vec<String> = Vec::new();
+    // Replace fenced code blocks first (multi-line)
+    result = code_fence.replace_all(&result, |caps: &Captures| {
+        let idx = code_placeholders.len();
+        code_placeholders.push(caps[0].to_string());
+        format!("\x00CODE{idx}\x00")
+    }).to_string();
+    // Replace double-backtick code spans
+    result = code_span_double.replace_all(&result, |caps: &Captures| {
+        let idx = code_placeholders.len();
+        code_placeholders.push(caps[0].to_string());
+        format!("\x00CODE{idx}\x00")
+    }).to_string();
+    // Replace single-backtick code spans
+    result = code_span_single.replace_all(&result, |caps: &Captures| {
+        let idx = code_placeholders.len();
+        code_placeholders.push(caps[0].to_string());
+        format!("\x00CODE{idx}\x00")
+    }).to_string();
+
     for (re, replacement) in symbol_patterns {
         result = re.replace_all(&result, replacement.as_str()).to_string();
     }
@@ -467,6 +496,11 @@ pub fn strip_latex(content: &str) -> String {
     // Collapse multiple spaces left by stripped inline commands
     let multi_space = MULTI_SPACE.get_or_init(|| Regex::new(r"  +").unwrap());
     result = multi_space.replace_all(&result, " ").to_string();
+
+    // Restore protected code spans and fenced code blocks
+    for (idx, original) in code_placeholders.iter().enumerate() {
+        result = result.replace(&format!("\x00CODE{idx}\x00"), original);
+    }
 
     result
 }
@@ -865,6 +899,31 @@ mod tests {
             assert!(!result.contains("  "), "Double spaces found in: {:?}", result);
             assert!(result.contains("Text with"));
             assert!(result.contains("more text here."));
+        }
+
+        #[test]
+        fn test_code_spans_preserved_in_tables() {
+            let content = "| `post_tweet` | Post a tweet |\n| `post_reddit` | Submit a Reddit post |";
+            let result = strip_latex(content);
+            assert!(result.contains("`post_tweet`"), "code span mangled: {result}");
+            assert!(result.contains("`post_reddit`"), "code span mangled: {result}");
+            assert!(!result.contains("ₜ"), "subscript leaked into code span: {result}");
+            assert!(!result.contains("ᵣ"), "subscript leaked into code span: {result}");
+        }
+
+        #[test]
+        fn test_code_spans_with_underscores_preserved() {
+            let content = "Use `my_variable` and `some_function` in code";
+            let result = strip_latex(content);
+            assert!(result.contains("`my_variable`"), "code span mangled: {result}");
+            assert!(result.contains("`some_function`"), "code span mangled: {result}");
+        }
+
+        #[test]
+        fn test_fenced_code_block_preserved() {
+            let content = "Text\n```rust\nlet x_n = 1;\n```\nMore text";
+            let result = strip_latex(content);
+            assert!(result.contains("x_n"), "fenced code mangled: {result}");
         }
     }
 

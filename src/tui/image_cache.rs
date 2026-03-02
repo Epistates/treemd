@@ -35,8 +35,7 @@ impl std::fmt::Display for ImageError {
 
 impl std::error::Error for ImageError {}
 
-/// Simple image cache placeholder (kept for now, not actively used).
-#[derive(Default)]
+/// Namespace for image loading static methods.
 pub struct ImageCache;
 
 /// GIF frame with timing information
@@ -48,11 +47,6 @@ pub struct GifFrame {
 }
 
 impl ImageCache {
-    /// Create a new image cache.
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Composite a GIF frame onto a canvas, handling transparency
     fn composite_gif_frame(canvas: &mut RgbaImage, frame: &gif::Frame, width: u32, height: u32) {
         let frame_buffer = &frame.buffer;
@@ -132,6 +126,7 @@ impl ImageCache {
     fn load_static_image(path: &Path) -> Result<Vec<GifFrame>, ImageError> {
         image::ImageReader::open(path)
             .ok()
+            .and_then(|r| r.with_guessed_format().ok())
             .and_then(|r| r.decode().ok())
             .map(|img| {
                 vec![GifFrame {
@@ -167,6 +162,7 @@ impl ImageCache {
                 } else {
                     image::ImageReader::open(path)
                         .ok()
+                        .and_then(|r| r.with_guessed_format().ok())
                         .and_then(|r| r.decode().ok())
                         .ok_or_else(|| {
                             ImageError::InvalidFormat("Failed to decode image".to_string())
@@ -175,6 +171,7 @@ impl ImageCache {
             }
             Err(_) => image::ImageReader::open(path)
                 .ok()
+                .and_then(|r| r.with_guessed_format().ok())
                 .and_then(|r| r.decode().ok())
                 .ok_or_else(|| ImageError::InvalidFormat("Unsupported format".to_string())),
         }
@@ -184,12 +181,6 @@ impl ImageCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_create_cache() {
-        // ImageCache is now a simple placeholder with static methods
-        let _cache = ImageCache::new();
-    }
 
     #[test]
     fn test_gif_frame_struct() {

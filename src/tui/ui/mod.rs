@@ -514,13 +514,20 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
         None
     };
 
-    // Render all images that are visible in the current scroll viewport
+    // Render all images that are visible in the current scroll viewport.
+    // Only render images that have placeholder space reserved (line_range > 1 line).
+    // Nested images in details/lists have 1-line ranges with no placeholder space.
     for elem in &app.interactive_state.elements {
         if let ElementType::Image {
             src, block_idx: _, ..
         } = &elem.element_type
         {
             let (line_start, line_end) = elem.line_range;
+
+            // Skip images without placeholder space (nested in details/lists)
+            if line_end.saturating_sub(line_start) < 3 {
+                continue;
+            }
 
             // Check if this image is visible in current scroll window
             let scroll = app.content_scroll as usize;
@@ -554,14 +561,9 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let image_height = available_height.min(max_image_height);
 
-            // Resolve image path
+            // Resolve image path and use cached protocol
             if let Ok(image_path) = app.resolve_image_path(src) {
-                // Load and render the image
-                if let Ok(img_data) =
-                    crate::tui::image_cache::ImageCache::extract_first_frame(&image_path)
-                    && let Some(picker) = &mut app.picker
-                {
-                    let protocol = picker.new_resize_protocol(img_data);
+                if let Some(protocol_state) = app.image_protocol_cache.get_mut(&image_path) {
                     let resize = Resize::Scale(Some(FilterType::Triangle));
 
                     // Check if this image is selected
@@ -598,8 +600,7 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
                     };
 
                     let img_widget = StatefulImage::new().resize(resize);
-                    let mut protocol_state = protocol;
-                    frame.render_stateful_widget(img_widget, render_area, &mut protocol_state);
+                    frame.render_stateful_widget(img_widget, render_area, protocol_state);
                 }
             }
         }
@@ -1369,8 +1370,9 @@ fn render_markdown_enhanced(
                     .iter()
                     .any(|elem| matches!(elem, InlineElement::Image { .. }));
                 if has_images {
-                    // Reserve space for image (max 12 lines + 1 blank line separator)
-                    for _ in 0..13 {
+                    // Reserve space for image rendering overlay
+                    use crate::tui::interactive::PARAGRAPH_IMAGE_PLACEHOLDER_LINES;
+                    for _ in 0..PARAGRAPH_IMAGE_PLACEHOLDER_LINES {
                         lines.push(Line::from(vec![]));
                     }
                 }
@@ -1751,8 +1753,9 @@ fn render_markdown_enhanced(
                 ));
                 lines.push(Line::from(img_line));
 
-                // Add empty lines as placeholder for image height (16 cells)
-                for _ in 0..16 {
+                // Add empty lines as placeholder for image rendering overlay
+                use crate::tui::interactive::IMAGE_PLACEHOLDER_LINES;
+                for _ in 0..IMAGE_PLACEHOLDER_LINES {
                     lines.push(Line::from(""));
                 }
             }

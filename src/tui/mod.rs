@@ -93,13 +93,6 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         let _ = watcher.watch(&app.current_file_path);
     }
 
-    // Load first image from the document if picker is available
-    // (Picker is already initialized in App::new with fallback font size)
-    if app.picker.is_some() {
-        let content = app.document.content.clone();
-        app.load_first_image(&content);
-    }
-
     loop {
         // Use synchronized output when animating GIFs (reduces flicker on iTerm2, etc.)
         // This makes the entire frame update atomic from the terminal's perspective.

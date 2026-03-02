@@ -2,15 +2,14 @@ use crate::config::Config;
 use crate::keybindings::{Action, KeybindingMode, Keybindings};
 use crate::parser::{Document, HeadingNode, Link, extract_links};
 use crate::tui::help_text;
-use crate::tui::image_cache::ImageCache;
-use crate::tui::interactive::InteractiveState;
+use crate::tui::interactive::{InteractiveState, ElementType};
 use crate::tui::kitty_animation::{self, KittyAnimation};
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
 use crate::tui::theme::{Theme, ThemeName};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::widgets::{ListState, ScrollbarState};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -407,15 +406,11 @@ pub struct App {
     // Pending navigation (for confirm save dialog when navigating with unsaved changes)
     pub pending_navigation: Option<PendingNavigation>,
 
-    // Image cache for lazy-loaded images
-    pub image_cache: ImageCache,
-
     // Terminal graphics protocol picker (with fallback font size)
     pub picker: Option<ratatui_image::picker::Picker>,
 
-    // Stateful image protocols for rendering (resizable, first image only)
-    pub image_state: Option<ratatui_image::protocol::StatefulProtocol>,
-    pub image_path: Option<std::path::PathBuf>,
+    // Cached image protocols keyed by resolved path (avoids re-decoding from disk every frame)
+    pub image_protocol_cache: HashMap<PathBuf, ratatui_image::protocol::StatefulProtocol>,
 
     // Image modal viewing state
     pub viewing_image_path: Option<std::path::PathBuf>,
@@ -620,9 +615,6 @@ impl App {
             // Pending navigation (for confirm save dialog)
             pending_navigation: None,
 
-            // Image cache (initialized later after entering alternate screen)
-            image_cache: ImageCache::new(),
-
             // Terminal graphics protocol picker with fallback (like figif)
             // Only initialize if images are enabled
             picker: if images_enabled {
@@ -631,9 +623,8 @@ impl App {
                 None
             },
 
-            // First image in document for rendering (stateful for resizing)
-            image_state: None,
-            image_path: None,
+            // Cached image protocols (populated after index_elements)
+            image_protocol_cache: HashMap::new(),
 
             // Image modal viewing state
             viewing_image_path: None,
@@ -685,84 +676,68 @@ impl App {
         }
     }
 
-    /// Load first image from document into stateful protocol.
+    /// Populate the image protocol cache from indexed interactive elements.
     ///
-    /// Finds the first image in the document content, extracts its first frame
-    /// (for GIFs), and creates a stateful protocol for rendering.
-    pub fn load_first_image(&mut self, content: &str) {
-        use crate::parser::content::parse_content;
-        use crate::parser::output::Block as ContentBlock;
+    /// Iterates all image elements, resolves paths, decodes images, and creates
+    /// stateful protocols. Called after every `index_elements()` to keep cache in sync.
+    pub fn populate_image_cache(&mut self) {
+        use std::collections::HashSet as ImgSet;
 
-        // Parse content to find first image
-        let blocks = parse_content(content, 0);
-
-        for block in blocks {
-            // Check for block-level images
-            if let ContentBlock::Image { src, .. } = &block
-                && self.try_load_image_from_src(src)
-            {
-                eprintln!("✓ Image loaded: {}", src);
-                return;
-            }
-
-            // Check for inline images within paragraphs
-            // (Most markdown images appear as inline elements, not block-level)
-            if let ContentBlock::Paragraph { inline, .. } = &block {
-                for inline_elem in inline {
-                    if let crate::parser::output::InlineElement::Image { src, .. } = inline_elem
-                        && self.try_load_image_from_src(src)
-                    {
-                        eprintln!("✓ Image loaded: {}", src);
-                        return;
-                    }
-                }
-            }
+        if self.picker.is_none() || !self.images_enabled {
+            return;
         }
 
-        // No image found, clear state (not an error - just no images in document)
-        self.image_state = None;
-        self.image_path = None;
-    }
+        // Collect unique image src strings from indexed elements
+        let mut seen = ImgSet::new();
+        let srcs: Vec<String> = self
+            .interactive_state
+            .elements
+            .iter()
+            .filter_map(|elem| {
+                if let ElementType::Image { src, .. } = &elem.element_type {
+                    if seen.insert(src.clone()) {
+                        Some(src.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-    /// Try to load an image from a source path (helper for load_first_image).
-    /// Returns true if successfully loaded, false otherwise.
-    /// Fails silently if path resolution, file loading, or picker availability fails.
-    fn try_load_image_from_src(&mut self, src: &str) -> bool {
-        // Resolve image path relative to current file
-        let path = match self.resolve_image_path(src) {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
+        // Clear old cache entries not in current element set
+        let valid_paths: HashSet<PathBuf> = srcs
+            .iter()
+            .filter_map(|src| self.resolve_image_path(src).ok())
+            .collect();
+        self.image_protocol_cache.retain(|k, _| valid_paths.contains(k));
 
-        // Load image file (with GIF first-frame extraction)
-        let img_data = match crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
-            Ok(data) => data,
-            Err(_) => return false,
-        };
+        // Populate cache for new images
+        for src in &srcs {
+            let path = match self.resolve_image_path(src) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
 
-        // Create stateful protocol with the picker
-        let picker = match self.picker.as_mut() {
-            Some(p) => p,
-            None => return false,
-        };
-
-        let protocol = picker.new_resize_protocol(img_data);
-        self.image_state = Some(protocol);
-        self.image_path = Some(path);
-        true
-    }
-
-    /// Refresh image state by reloading from path (call every render to update protocol)
-    pub fn refresh_image_state(&mut self) {
-        if let Some(path) = self.image_path.clone() {
-            // Reload the image and recreate the protocol
-            // Silently fail on errors - just don't render the image
-            if let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(&path)
-                && let Some(picker) = &mut self.picker
-            {
-                let protocol = picker.new_resize_protocol(img_data);
-                self.image_state = Some(protocol);
+            // Skip if already cached
+            if self.image_protocol_cache.contains_key(&path) {
+                continue;
             }
+
+            let img_data =
+                match crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
+                    Ok(data) => data,
+                    Err(_) => continue,
+                };
+
+            let picker = match self.picker.as_mut() {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let protocol = picker.new_resize_protocol(img_data);
+            self.image_protocol_cache.insert(path, protocol);
         }
     }
 
@@ -1968,6 +1943,7 @@ impl App {
             use crate::parser::content::parse_content;
             let blocks = parse_content(&content_text, 0);
             self.interactive_state.index_elements(&blocks);
+            self.populate_image_cache();
         }
 
         // Update content height based on current section
@@ -4278,15 +4254,13 @@ impl App {
         // Clear previous selection tracking
         self.previous_selection = None;
 
-        // Load first image from the new document
-        let content = self.document.content.clone();
-        self.load_first_image(&content);
-
         // Index interactive elements (links, images, etc.) even in normal mode
         // This allows inline images to render without entering interactive mode
+        let content = self.document.content.clone();
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
         self.interactive_state.index_elements(&blocks);
+        self.populate_image_cache();
 
         // Detect LaTeX content for status hint
         self.latex_detected = content.contains("\\begin{")
@@ -4422,6 +4396,7 @@ impl App {
 
         // Index interactive elements
         self.interactive_state.index_elements(&blocks);
+        self.populate_image_cache();
 
         // Enter interactive mode at current scroll position (preserve user's view)
         self.interactive_state
@@ -4577,6 +4552,7 @@ impl App {
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
         self.interactive_state.index_elements(&blocks);
+        self.populate_image_cache();
     }
 
     /// Toggle a checkbox and save changes to the file

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.8] - 2026-02-28
+## [0.5.8] - 2026-03-01
 
 ### Added
 
@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Gapless cursor** - Command palette cursor uses reverse-video space instead of `█` for gap-free rendering ([#43](https://github.com/Epistates/treemd/issues/43))
 
+- **Image position misalignment** — Block images and paragraphs with inline images now reserve the correct number of placeholder lines in the interactive element indexer, matching the renderer (17 for block images, 14 for inline image paragraphs)
+
+- **Images not loading with non-standard extensions** — Added `with_guessed_format()` to all image loading paths so content-type detection no longer relies solely on file extension
+
+- **LaTeX subscript mangling code spans** - Inline code containing underscores (e.g., `` `post_tweet` ``) was corrupted by the LaTeX subscript converter, turning `_t` → `ₜ`, `_r` → `ᵣ`, etc.
+  - Code spans (`` ` ``), double-backtick spans, and fenced code blocks are now protected from all LaTeX transformations
+  - Fixes rendering of tables with code identifiers like `post_tweet`, `my_variable`, `some_function`
+
 ### Changed
 
 - **Dependencies updated**
@@ -52,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Performance: Directory scanning** - Single-pass classification using `entry.file_type()` instead of separate `is_file()`/`is_dir()` stat syscalls
 - **Refactoring** - Extracted `max_content_scroll()`, `effective_picker_dir()`, `navigate_picker_to_dir()`, `is_markdown_extension()`, and `filter_by_name()` helpers to eliminate code duplication
 - **Bug fix** - `scan_markdown_files()` now recognizes `.mdown` extension (was missing from file picker scan)
+- **Performance: Image protocol caching** — Images are now decoded from disk once when elements are indexed, then cached as `StatefulProtocol` objects. Previously, every ~16ms render frame re-decoded and re-created protocols from disk.
 
 ## [0.5.7] - 2026-02-26
 
