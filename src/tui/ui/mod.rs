@@ -562,46 +562,46 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
             let image_height = available_height.min(max_image_height);
 
             // Resolve image path and use cached protocol
-            if let Ok(image_path) = app.resolve_image_path(src) {
-                if let Some(protocol_state) = app.image_protocol_cache.get_mut(&image_path) {
-                    let resize = Resize::Scale(Some(FilterType::Triangle));
+            if let Ok(image_path) = app.resolve_image_path(src)
+                && let Some(protocol_state) = app.image_protocol_cache.get_mut(&image_path)
+            {
+                let resize = Resize::Scale(Some(FilterType::Triangle));
 
-                    // Check if this image is selected
-                    let is_selected = selected_image_id == Some(elem.id);
+                // Check if this image is selected
+                let is_selected = selected_image_id == Some(elem.id);
 
-                    // Calculate image area - add border space when selected
-                    let image_area = Rect {
-                        x: inner.x,
-                        y: image_y,
-                        width: max_image_width.min(inner.width),
-                        height: image_height,
-                    };
+                // Calculate image area - add border space when selected
+                let image_area = Rect {
+                    x: inner.x,
+                    y: image_y,
+                    width: max_image_width.min(inner.width),
+                    height: image_height,
+                };
 
-                    // If selected, render a selection border around the image
-                    let render_area = if is_selected {
-                        let border_style = Style::default()
-                            .fg(theme.selection_indicator_fg)
-                            .bg(theme.selection_indicator_bg)
-                            .add_modifier(Modifier::BOLD);
+                // If selected, render a selection border around the image
+                let render_area = if is_selected {
+                    let border_style = Style::default()
+                        .fg(theme.selection_indicator_fg)
+                        .bg(theme.selection_indicator_bg)
+                        .add_modifier(Modifier::BOLD);
 
-                        let border = Block::default()
-                            .borders(Borders::ALL)
-                            .border_style(border_style)
-                            .title(" ▶ Selected ")
-                            .title_alignment(ratatui::layout::Alignment::Left);
+                    let border = Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border_style)
+                        .title(" ▶ Selected ")
+                        .title_alignment(ratatui::layout::Alignment::Left);
 
-                        // Render border first
-                        frame.render_widget(border.clone(), image_area);
+                    // Render border first
+                    frame.render_widget(border.clone(), image_area);
 
-                        // Return inner area for image (inside border)
-                        border.inner(image_area)
-                    } else {
-                        image_area
-                    };
+                    // Return inner area for image (inside border)
+                    border.inner(image_area)
+                } else {
+                    image_area
+                };
 
-                    let img_widget = StatefulImage::new().resize(resize);
-                    frame.render_stateful_widget(img_widget, render_area, protocol_state);
-                }
+                let img_widget = StatefulImage::new().resize(resize);
+                frame.render_stateful_widget(img_widget, render_area, protocol_state);
             }
         }
     }

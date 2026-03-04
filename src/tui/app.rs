@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::keybindings::{Action, KeybindingMode, Keybindings};
 use crate::parser::{Document, HeadingNode, Link, extract_links};
 use crate::tui::help_text;
-use crate::tui::interactive::{InteractiveState, ElementType};
+use crate::tui::interactive::{ElementType, InteractiveState};
 use crate::tui::kitty_animation::{self, KittyAnimation};
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
@@ -341,15 +341,15 @@ pub struct App {
     pub link_search_active: bool,   // Whether search input is active
 
     // File picker state
-    pub files_in_directory: Vec<PathBuf>,  // All .md files in directory
-    pub dirs_in_directory: Vec<PathBuf>,   // Subdirectories in directory
+    pub files_in_directory: Vec<PathBuf>, // All .md files in directory
+    pub dirs_in_directory: Vec<PathBuf>,  // Subdirectories in directory
     pub filtered_file_indices: Vec<usize>, // Indices after filtering (files)
-    pub filtered_dir_indices: Vec<usize>,  // Indices after filtering (dirs)
-    pub selected_file_idx: Option<usize>,  // Selected index in combined list
-    pub file_search_query: String,         // Search query for filtering files
-    pub file_search_active: bool,          // Whether search input is active
-    pub startup_needs_file_picker: bool,   // True if started without file arg
-    pub file_picker_dir: Option<PathBuf>,  // Custom directory for file picker
+    pub filtered_dir_indices: Vec<usize>, // Indices after filtering (dirs)
+    pub selected_file_idx: Option<usize>, // Selected index in combined list
+    pub file_search_query: String,        // Search query for filtering files
+    pub file_search_active: bool,         // Whether search input is active
+    pub startup_needs_file_picker: bool,  // True if started without file arg
+    pub file_picker_dir: Option<PathBuf>, // Custom directory for file picker
 
     pub file_history: Vec<FileState>,   // Back navigation stack
     pub file_future: Vec<FileState>,    // Forward navigation stack (for undo back)
@@ -711,7 +711,8 @@ impl App {
             .iter()
             .filter_map(|src| self.resolve_image_path(src).ok())
             .collect();
-        self.image_protocol_cache.retain(|k, _| valid_paths.contains(k));
+        self.image_protocol_cache
+            .retain(|k, _| valid_paths.contains(k));
 
         // Populate cache for new images
         for src in &srcs {
@@ -725,11 +726,10 @@ impl App {
                 continue;
             }
 
-            let img_data =
-                match crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
-                    Ok(data) => data,
-                    Err(_) => continue,
-                };
+            let img_data = match crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
+                Ok(data) => data,
+                Err(_) => continue,
+            };
 
             let picker = match self.picker.as_mut() {
                 Some(p) => p,
@@ -1255,7 +1255,13 @@ impl App {
                 }
             }
             OpenInEditor => {
-                let line = self.selected_heading_source_line();
+                let line = if self.mode == AppMode::Interactive {
+                    // In interactive mode, jump to the current element's source line
+                    self.interactive_element_source_line()
+                        .or_else(|| self.selected_heading_source_line())
+                } else {
+                    self.selected_heading_source_line()
+                };
                 return ActionResult::RunEditor(self.current_file_path.clone(), line);
             }
             UndoEdit => {
@@ -3265,6 +3271,26 @@ impl App {
         Some(line as u32)
     }
 
+    /// Get the source line number (1-indexed) for the current interactive element.
+    ///
+    /// Computes the source line by adding the element's rendered line offset
+    /// to the section's starting line in the source file.
+    pub fn interactive_element_source_line(&self) -> Option<u32> {
+        let (element_line, _) = self.interactive_state.current_element_line_range()?;
+
+        let selected_text = self.selected_heading_text();
+        let is_overview = selected_text.is_none_or(|t| t == DOCUMENT_OVERVIEW);
+
+        if is_overview {
+            // Document overview: element lines are relative to full document content
+            Some((element_line + 1) as u32)
+        } else {
+            // Section: element lines are relative to section content (after heading line)
+            let heading_line = self.selected_heading_source_line().unwrap_or(1) as usize;
+            Some((heading_line + 1 + element_line) as u32)
+        }
+    }
+
     /// Sync previous_selection to current selection (prevents spurious scroll resets)
     pub fn sync_previous_selection(&mut self) {
         self.previous_selection = self.selected_heading_text().map(|s| s.to_string());
@@ -3628,9 +3654,7 @@ impl App {
             for entry in entries.filter_map(|e| e.ok()) {
                 let ft = entry.file_type().ok();
                 let path = entry.path();
-                if ft.map(|t| t.is_file()).unwrap_or(false)
-                    && Self::is_markdown_extension(&path)
-                {
+                if ft.map(|t| t.is_file()).unwrap_or(false) && Self::is_markdown_extension(&path) {
                     files.push(path);
                 } else if ft.map(|t| t.is_dir()).unwrap_or(false)
                     && path
@@ -3683,11 +3707,7 @@ impl App {
         // Reset selection if current is out of bounds
         if let Some(sel) = self.selected_file_idx {
             if sel >= combined_count {
-                self.selected_file_idx = if combined_count == 0 {
-                    None
-                } else {
-                    Some(0)
-                };
+                self.selected_file_idx = if combined_count == 0 { None } else { Some(0) };
             }
         } else if combined_count > 0 {
             self.selected_file_idx = Some(0);

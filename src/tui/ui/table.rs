@@ -480,7 +480,11 @@ mod tests {
             let lines = render_table(&headers, &[], &rows, &theme, true, true, Some((1, 0)), None);
 
             // Find the row with the arrow
-            assert!(lines.iter().any(|l| l.spans.iter().any(|s| s.content.contains("→"))));
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.spans.iter().any(|s| s.content.contains("→")))
+            );
         }
 
         #[test]
@@ -603,11 +607,7 @@ mod tests {
                     None,
                     Some(width),
                 );
-                assert!(
-                    !lines.is_empty(),
-                    "Table should render at width {}",
-                    width
-                );
+                assert!(!lines.is_empty(), "Table should render at width {}", width);
             }
         }
     }

@@ -239,6 +239,9 @@ fn add_interactive_mode(kb: &mut Keybindings) {
     // Undo last edit
     bind(kb, Interactive, "Ctrl+z", UndoEdit);
 
+    // Open in editor
+    bind(kb, Interactive, "e", OpenInEditor);
+
     // Quit
     bind(kb, Interactive, "q", Quit);
 }

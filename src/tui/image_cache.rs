@@ -14,21 +14,15 @@ use image::RgbaImage;
 pub enum ImageError {
     /// Image file not found
     NotFound,
-    /// Image is currently being loaded
-    Loading,
     /// Invalid image format
     InvalidFormat(String),
-    /// Other errors (IO, parsing, etc.)
-    Failed(String),
 }
 
 impl std::fmt::Display for ImageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ImageError::NotFound => write!(f, "Image not found"),
-            ImageError::Loading => write!(f, "Image loading"),
             ImageError::InvalidFormat(s) => write!(f, "Invalid format: {}", s),
-            ImageError::Failed(s) => write!(f, "Failed: {}", s),
         }
     }
 }

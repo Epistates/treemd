@@ -315,29 +315,77 @@ pub fn strip_latex(content: &str) -> String {
     static SYMBOL_PATTERNS: OnceLock<Vec<(Regex, String)>> = OnceLock::new();
     let symbol_patterns = SYMBOL_PATTERNS.get_or_init(|| {
         let symbols: &[(&str, &str)] = &[
-            (r"\\alpha", "α"), (r"\\beta", "β"), (r"\\gamma", "γ"), (r"\\delta", "δ"),
-            (r"\\epsilon", "ε"), (r"\\zeta", "ζ"), (r"\\eta", "η"), (r"\\theta", "θ"),
-            (r"\\iota", "ι"), (r"\\kappa", "κ"), (r"\\lambda", "λ"), (r"\\mu", "μ"),
-            (r"\\nu", "ν"), (r"\\xi", "ξ"), (r"\\pi", "π"), (r"\\rho", "ρ"),
-            (r"\\sigma", "σ"), (r"\\tau", "τ"), (r"\\upsilon", "υ"), (r"\\phi", "φ"),
-            (r"\\chi", "χ"), (r"\\psi", "ψ"), (r"\\omega", "ω"),
-            (r"\\Gamma", "Γ"), (r"\\Delta", "Δ"), (r"\\Theta", "Θ"), (r"\\Lambda", "Λ"),
-            (r"\\Xi", "Ξ"), (r"\\Pi", "Π"), (r"\\Sigma", "Σ"), (r"\\Phi", "Φ"),
-            (r"\\Psi", "Ψ"), (r"\\Omega", "Ω"),
-            (r"\\sum", "∑"), (r"\\prod", "∏"), (r"\\int", "∫"), (r"\\infty", "∞"),
-            (r"\\approx", "≈"), (r"\\neq", "≠"), (r"\\le", "≤"), (r"\\ge", "≥"),
-            (r"\\pm", "±"), (r"\\times", "×"), (r"\\div", "÷"), (r"\\partial", "∂"),
-            (r"\\nabla", "∇"), (r"\\forall", "∀"), (r"\\exists", "∃"), (r"\\in", "∈"),
-            (r"\\notin", "∉"), (r"\\subset", "⊂"), (r"\\supset", "⊃"), (r"\\cup", "∪"),
-            (r"\\cap", "∩"), (r"\\Rightarrow", "⇒"), (r"\\rightarrow", "→"),
-            (r"\\Leftarrow", "⇐"), (r"\\leftarrow", "←"), (r"\\Leftrightarrow", "⇔"),
-            (r"\\leftrightarrow", "↔"), (r"\\cdot", "·"), (r"\\dots", "…"),
+            (r"\\alpha", "α"),
+            (r"\\beta", "β"),
+            (r"\\gamma", "γ"),
+            (r"\\delta", "δ"),
+            (r"\\epsilon", "ε"),
+            (r"\\zeta", "ζ"),
+            (r"\\eta", "η"),
+            (r"\\theta", "θ"),
+            (r"\\iota", "ι"),
+            (r"\\kappa", "κ"),
+            (r"\\lambda", "λ"),
+            (r"\\mu", "μ"),
+            (r"\\nu", "ν"),
+            (r"\\xi", "ξ"),
+            (r"\\pi", "π"),
+            (r"\\rho", "ρ"),
+            (r"\\sigma", "σ"),
+            (r"\\tau", "τ"),
+            (r"\\upsilon", "υ"),
+            (r"\\phi", "φ"),
+            (r"\\chi", "χ"),
+            (r"\\psi", "ψ"),
+            (r"\\omega", "ω"),
+            (r"\\Gamma", "Γ"),
+            (r"\\Delta", "Δ"),
+            (r"\\Theta", "Θ"),
+            (r"\\Lambda", "Λ"),
+            (r"\\Xi", "Ξ"),
+            (r"\\Pi", "Π"),
+            (r"\\Sigma", "Σ"),
+            (r"\\Phi", "Φ"),
+            (r"\\Psi", "Ψ"),
+            (r"\\Omega", "Ω"),
+            (r"\\sum", "∑"),
+            (r"\\prod", "∏"),
+            (r"\\int", "∫"),
+            (r"\\infty", "∞"),
+            (r"\\approx", "≈"),
+            (r"\\neq", "≠"),
+            (r"\\le", "≤"),
+            (r"\\ge", "≥"),
+            (r"\\pm", "±"),
+            (r"\\times", "×"),
+            (r"\\div", "÷"),
+            (r"\\partial", "∂"),
+            (r"\\nabla", "∇"),
+            (r"\\forall", "∀"),
+            (r"\\exists", "∃"),
+            (r"\\in", "∈"),
+            (r"\\notin", "∉"),
+            (r"\\subset", "⊂"),
+            (r"\\supset", "⊃"),
+            (r"\\cup", "∪"),
+            (r"\\cap", "∩"),
+            (r"\\Rightarrow", "⇒"),
+            (r"\\rightarrow", "→"),
+            (r"\\Leftarrow", "⇐"),
+            (r"\\leftarrow", "←"),
+            (r"\\Leftrightarrow", "⇔"),
+            (r"\\leftrightarrow", "↔"),
+            (r"\\cdot", "·"),
+            (r"\\dots", "…"),
         ];
-        symbols.iter().map(|(pattern, replacement)| {
-            let re = Regex::new(&format!(r"{}([^a-zA-Z]|$)", pattern)).unwrap();
-            let repl = format!("{}$1", replacement);
-            (re, repl)
-        }).collect()
+        symbols
+            .iter()
+            .map(|(pattern, replacement)| {
+                let re = Regex::new(&format!(r"{}([^a-zA-Z]|$)", pattern)).unwrap();
+                let repl = format!("{}$1", replacement);
+                (re, repl)
+            })
+            .collect()
     });
 
     static SUPERSCRIPT: OnceLock<Regex> = OnceLock::new();
@@ -364,14 +412,19 @@ pub fn strip_latex(content: &str) -> String {
     static MULTI_SPACE: OnceLock<Regex> = OnceLock::new();
 
     let superscript = SUPERSCRIPT.get_or_init(|| Regex::new(r"\^\{?([0-9+\-=()nix])\}?").unwrap());
-    let subscript = SUBSCRIPT.get_or_init(|| Regex::new(r"_\{?([0-9+\-=()aehijklmnoprstuvx])\}?").unwrap());
+    let subscript =
+        SUBSCRIPT.get_or_init(|| Regex::new(r"_\{?([0-9+\-=()aehijklmnoprstuvx])\}?").unwrap());
     let display_math = DISPLAY_MATH.get_or_init(|| Regex::new(r"\$\$[\s\S]*?\$\$").unwrap());
     let inline_math = INLINE_MATH.get_or_init(|| Regex::new(r"\$([^\$\n]+)\$").unwrap());
     let paren_math = PAREN_MATH.get_or_init(|| Regex::new(r"\\\(([\s\S]*?)\\\)").unwrap());
     let bracket_math = BRACKET_MATH.get_or_init(|| Regex::new(r"\\\[([\s\S]*?)\\\]").unwrap());
-    let latex_env = LATEX_ENV.get_or_init(|| Regex::new(r"(?s)^\s*\\begin\{[^}]+\}\s*(.*?)\s*\\end\{[^}]+\}\s*$").unwrap());
-    let latex_env_inline = LATEX_ENV_INLINE.get_or_init(|| Regex::new(r"(?s)\\begin\{[^}]+\}(.*?)\\end\{[^}]+\}").unwrap());
-    let begin_end_standalone = BEGIN_END_STANDALONE.get_or_init(|| Regex::new(r"\\(begin|end)\{[^}]*\}").unwrap());
+    let latex_env = LATEX_ENV.get_or_init(|| {
+        Regex::new(r"(?s)^\s*\\begin\{[^}]+\}\s*(.*?)\s*\\end\{[^}]+\}\s*$").unwrap()
+    });
+    let latex_env_inline = LATEX_ENV_INLINE
+        .get_or_init(|| Regex::new(r"(?s)\\begin\{[^}]+\}(.*?)\\end\{[^}]+\}").unwrap());
+    let begin_end_standalone =
+        BEGIN_END_STANDALONE.get_or_init(|| Regex::new(r"\\(begin|end)\{[^}]*\}").unwrap());
     let font_size_cmd = FONT_SIZE_CMD.get_or_init(|| Regex::new(
         r"(?m)^\s*\\(tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge|HUGE|ssmall|miniscule)\s*$"
     ).unwrap());
@@ -384,14 +437,20 @@ pub fn strip_latex(content: &str) -> String {
     let cmd_with_args_inline_strip = CMD_WITH_ARGS_INLINE_STRIP.get_or_init(|| Regex::new(
         r"\\(usepackage|documentclass|setlength|renewcommand|newcommand|setcounter|addtocounter|pagenumbering|pagestyle|thispagestyle|geometry|hypersetup|definecolor|graphicspath|addbibresource|sethlcolor|titlespacing|titleformat|captionsetup|lstset)(\[[^\]]*\])?(\{[^}]*\})+"
     ).unwrap());
-    let fontsize_inline = FONTSIZE_INLINE.get_or_init(|| Regex::new(r"\\fontsize\{[^}]*\}\{[^}]*\}").unwrap());
-    let cmd_with_args_inline = CMD_WITH_ARGS_INLINE.get_or_init(|| Regex::new(
-        r"\\(label|ref|cite|eqref|pageref|vspace|hspace|phantom|hphantom|vphantom)\{[^}]*\}",
-    ).unwrap());
-    let text_formatting = TEXT_FORMATTING.get_or_init(|| Regex::new(
-        r"\\(textbf|textit|emph|underline|texttt|hl|textsf|textsc|textsl)\{([^}]*)\}"
-    ).unwrap());
-    let textcolor = TEXTCOLOR.get_or_init(|| Regex::new(r"\\textcolor\{[^}]*\}\{([^}]*)\}").unwrap());
+    let fontsize_inline =
+        FONTSIZE_INLINE.get_or_init(|| Regex::new(r"\\fontsize\{[^}]*\}\{[^}]*\}").unwrap());
+    let cmd_with_args_inline = CMD_WITH_ARGS_INLINE.get_or_init(|| {
+        Regex::new(
+            r"\\(label|ref|cite|eqref|pageref|vspace|hspace|phantom|hphantom|vphantom)\{[^}]*\}",
+        )
+        .unwrap()
+    });
+    let text_formatting = TEXT_FORMATTING.get_or_init(|| {
+        Regex::new(r"\\(textbf|textit|emph|underline|texttt|hl|textsf|textsc|textsl)\{([^}]*)\}")
+            .unwrap()
+    });
+    let textcolor =
+        TEXTCOLOR.get_or_init(|| Regex::new(r"\\textcolor\{[^}]*\}\{([^}]*)\}").unwrap());
     let colorbox = COLORBOX.get_or_init(|| Regex::new(r"\\colorbox\{[^}]*\}\{([^}]*)\}").unwrap());
     let font_size_inline = FONT_SIZE_INLINE.get_or_init(|| Regex::new(
         r"\\(tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge|HUGE|ssmall|miniscule)([^a-zA-Z]|$)"
@@ -402,24 +461,61 @@ pub fn strip_latex(content: &str) -> String {
     // Superscript/subscript lookups as match expressions (compiler reduces to jump tables)
     fn to_superscript(c: char) -> Option<char> {
         match c {
-            '0' => Some('⁰'), '1' => Some('¹'), '2' => Some('²'), '3' => Some('³'),
-            '4' => Some('⁴'), '5' => Some('⁵'), '6' => Some('⁶'), '7' => Some('⁷'),
-            '8' => Some('⁸'), '9' => Some('⁹'), '+' => Some('⁺'), '-' => Some('⁻'),
-            '=' => Some('⁼'), '(' => Some('⁽'), ')' => Some('⁾'), 'n' => Some('ⁿ'),
-            'i' => Some('ⁱ'), 'x' => Some('ˣ'),
+            '0' => Some('⁰'),
+            '1' => Some('¹'),
+            '2' => Some('²'),
+            '3' => Some('³'),
+            '4' => Some('⁴'),
+            '5' => Some('⁵'),
+            '6' => Some('⁶'),
+            '7' => Some('⁷'),
+            '8' => Some('⁸'),
+            '9' => Some('⁹'),
+            '+' => Some('⁺'),
+            '-' => Some('⁻'),
+            '=' => Some('⁼'),
+            '(' => Some('⁽'),
+            ')' => Some('⁾'),
+            'n' => Some('ⁿ'),
+            'i' => Some('ⁱ'),
+            'x' => Some('ˣ'),
             _ => None,
         }
     }
     fn to_subscript(c: char) -> Option<char> {
         match c {
-            '0' => Some('₀'), '1' => Some('₁'), '2' => Some('₂'), '3' => Some('₃'),
-            '4' => Some('₄'), '5' => Some('₅'), '6' => Some('₆'), '7' => Some('₇'),
-            '8' => Some('₈'), '9' => Some('₉'), '+' => Some('₊'), '-' => Some('₋'),
-            '=' => Some('₌'), '(' => Some('₍'), ')' => Some('₎'), 'a' => Some('ₐ'),
-            'e' => Some('ₑ'), 'h' => Some('ₕ'), 'i' => Some('ᵢ'), 'j' => Some('ⱼ'),
-            'k' => Some('ₖ'), 'l' => Some('ₗ'), 'm' => Some('ₘ'), 'n' => Some('ₙ'),
-            'o' => Some('ₒ'), 'p' => Some('ₚ'), 'r' => Some('ᵣ'), 's' => Some('ₛ'),
-            't' => Some('ₜ'), 'u' => Some('ᵤ'), 'v' => Some('ᵥ'), 'x' => Some('ₓ'),
+            '0' => Some('₀'),
+            '1' => Some('₁'),
+            '2' => Some('₂'),
+            '3' => Some('₃'),
+            '4' => Some('₄'),
+            '5' => Some('₅'),
+            '6' => Some('₆'),
+            '7' => Some('₇'),
+            '8' => Some('₈'),
+            '9' => Some('₉'),
+            '+' => Some('₊'),
+            '-' => Some('₋'),
+            '=' => Some('₌'),
+            '(' => Some('₍'),
+            ')' => Some('₎'),
+            'a' => Some('ₐ'),
+            'e' => Some('ₑ'),
+            'h' => Some('ₕ'),
+            'i' => Some('ᵢ'),
+            'j' => Some('ⱼ'),
+            'k' => Some('ₖ'),
+            'l' => Some('ₗ'),
+            'm' => Some('ₘ'),
+            'n' => Some('ₙ'),
+            'o' => Some('ₒ'),
+            'p' => Some('ₚ'),
+            'r' => Some('ᵣ'),
+            's' => Some('ₛ'),
+            't' => Some('ₜ'),
+            'u' => Some('ᵤ'),
+            'v' => Some('ᵥ'),
+            'x' => Some('ₓ'),
             _ => None,
         }
     }
@@ -438,39 +534,53 @@ pub fn strip_latex(content: &str) -> String {
 
     let mut code_placeholders: Vec<String> = Vec::new();
     // Replace fenced code blocks first (multi-line)
-    result = code_fence.replace_all(&result, |caps: &Captures| {
-        let idx = code_placeholders.len();
-        code_placeholders.push(caps[0].to_string());
-        format!("\x00CODE{idx}\x00")
-    }).to_string();
+    result = code_fence
+        .replace_all(&result, |caps: &Captures| {
+            let idx = code_placeholders.len();
+            code_placeholders.push(caps[0].to_string());
+            format!("\x00CODE{idx}\x00")
+        })
+        .to_string();
     // Replace double-backtick code spans
-    result = code_span_double.replace_all(&result, |caps: &Captures| {
-        let idx = code_placeholders.len();
-        code_placeholders.push(caps[0].to_string());
-        format!("\x00CODE{idx}\x00")
-    }).to_string();
+    result = code_span_double
+        .replace_all(&result, |caps: &Captures| {
+            let idx = code_placeholders.len();
+            code_placeholders.push(caps[0].to_string());
+            format!("\x00CODE{idx}\x00")
+        })
+        .to_string();
     // Replace single-backtick code spans
-    result = code_span_single.replace_all(&result, |caps: &Captures| {
-        let idx = code_placeholders.len();
-        code_placeholders.push(caps[0].to_string());
-        format!("\x00CODE{idx}\x00")
-    }).to_string();
+    result = code_span_single
+        .replace_all(&result, |caps: &Captures| {
+            let idx = code_placeholders.len();
+            code_placeholders.push(caps[0].to_string());
+            format!("\x00CODE{idx}\x00")
+        })
+        .to_string();
 
     for (re, replacement) in symbol_patterns {
         result = re.replace_all(&result, replacement.as_str()).to_string();
     }
 
     // Replace ^x with superscript if x is in map
-    result = superscript.replace_all(&result, |caps: &Captures| {
-        let val = caps[1].chars().next().unwrap();
-        to_superscript(val).map(|v| v.to_string()).unwrap_or_else(|| caps[0].to_string())
-    }).to_string();
+    result = superscript
+        .replace_all(&result, |caps: &Captures| {
+            let val = caps[1].chars().next().unwrap();
+            to_superscript(val)
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| caps[0].to_string())
+        })
+        .to_string();
 
     // Replace _x with subscript if x is in map
-    result = subscript.replace_all(&result, |caps: &Captures| {
-        let val = caps[1].chars().next().unwrap();
-        to_subscript(val).map(|v| v.to_string()).unwrap_or_else(|| caps[0].to_string())
-    }).to_string();
+    result = subscript
+        .replace_all(&result, |caps: &Captures| {
+            let val = caps[1].chars().next().unwrap();
+            to_subscript(val)
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| caps[0].to_string())
+        })
+        .to_string();
 
     // 2. Strip remaining delimiters and structural commands
     result = display_math.replace_all(&result, "").to_string();
@@ -483,7 +593,9 @@ pub fn strip_latex(content: &str) -> String {
     result = font_size_cmd.replace_all(&result, "").to_string();
     result = standalone_cmd.replace_all(&result, "").to_string();
     result = cmd_with_args_line.replace_all(&result, "").to_string();
-    result = cmd_with_args_inline_strip.replace_all(&result, "").to_string();
+    result = cmd_with_args_inline_strip
+        .replace_all(&result, "")
+        .to_string();
     result = fontsize_inline.replace_all(&result, "").to_string();
     result = cmd_with_args_inline.replace_all(&result, "").to_string();
     result = text_formatting.replace_all(&result, "$2").to_string();
@@ -567,7 +679,9 @@ pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
                     chunk.push(c);
                     chunk_width += c_width;
                 }
-                if chunk.is_empty() { break; }
+                if chunk.is_empty() {
+                    break;
+                }
                 let chunk_len = chunk.len();
                 lines.push(chunk);
                 remaining = &remaining[chunk_len..];
@@ -896,27 +1010,50 @@ mod tests {
         fn test_no_double_spaces_after_stripping() {
             let content = "Text with \\fontsize{12}{14} commands and \\setlength{\\parskip}{1em} more text here.";
             let result = strip_latex(content);
-            assert!(!result.contains("  "), "Double spaces found in: {:?}", result);
+            assert!(
+                !result.contains("  "),
+                "Double spaces found in: {:?}",
+                result
+            );
             assert!(result.contains("Text with"));
             assert!(result.contains("more text here."));
         }
 
         #[test]
         fn test_code_spans_preserved_in_tables() {
-            let content = "| `post_tweet` | Post a tweet |\n| `post_reddit` | Submit a Reddit post |";
+            let content =
+                "| `post_tweet` | Post a tweet |\n| `post_reddit` | Submit a Reddit post |";
             let result = strip_latex(content);
-            assert!(result.contains("`post_tweet`"), "code span mangled: {result}");
-            assert!(result.contains("`post_reddit`"), "code span mangled: {result}");
-            assert!(!result.contains("ₜ"), "subscript leaked into code span: {result}");
-            assert!(!result.contains("ᵣ"), "subscript leaked into code span: {result}");
+            assert!(
+                result.contains("`post_tweet`"),
+                "code span mangled: {result}"
+            );
+            assert!(
+                result.contains("`post_reddit`"),
+                "code span mangled: {result}"
+            );
+            assert!(
+                !result.contains("ₜ"),
+                "subscript leaked into code span: {result}"
+            );
+            assert!(
+                !result.contains("ᵣ"),
+                "subscript leaked into code span: {result}"
+            );
         }
 
         #[test]
         fn test_code_spans_with_underscores_preserved() {
             let content = "Use `my_variable` and `some_function` in code";
             let result = strip_latex(content);
-            assert!(result.contains("`my_variable`"), "code span mangled: {result}");
-            assert!(result.contains("`some_function`"), "code span mangled: {result}");
+            assert!(
+                result.contains("`my_variable`"),
+                "code span mangled: {result}"
+            );
+            assert!(
+                result.contains("`some_function`"),
+                "code span mangled: {result}"
+            );
         }
 
         #[test]

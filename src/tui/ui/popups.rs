@@ -979,8 +979,7 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Show "no matches" message
-    if total_items == 0
-        && (!app.files_in_directory.is_empty() || !app.dirs_in_directory.is_empty())
+    if total_items == 0 && (!app.files_in_directory.is_empty() || !app.dirs_in_directory.is_empty())
     {
         lines.push(Line::from(vec![Span::styled(
             "No items match your search",
@@ -1013,7 +1012,11 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     let total_lines = lines.len();
     let inner_height = popup_area.height.saturating_sub(2) as usize;
-    let header_lines = if app.file_search_active || !app.file_search_query.is_empty() { 3 } else { 2 };
+    let header_lines = if app.file_search_active || !app.file_search_query.is_empty() {
+        3
+    } else {
+        2
+    };
     let footer_lines = 2;
     let visible_area = inner_height.saturating_sub(header_lines + footer_lines);
 
