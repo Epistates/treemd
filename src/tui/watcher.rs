@@ -8,17 +8,14 @@ use notify::{
     event::{AccessKind, AccessMode, ModifyKind, RenameMode},
 };
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::Duration;
 
 /// Manages file watching for live reload.
 pub struct FileWatcher {
     watcher: RecommendedWatcher,
     receiver: Receiver<Result<Event, notify::Error>>,
     current_path: Option<PathBuf>,
-    /// Debounce: ignore events within this duration of the last reload
-    last_reload: Instant,
-    debounce_duration: Duration,
 }
 
 impl FileWatcher {
@@ -31,24 +28,25 @@ impl FileWatcher {
             watcher,
             receiver: rx,
             current_path: None,
-            last_reload: Instant::now(),
-            debounce_duration: Duration::from_millis(100),
         })
     }
 
     /// Start watching a file. Stops watching any previously watched file.
-    pub fn watch(&mut self, path: &std::path::Path) -> Result<(), notify::Error> {
+    pub fn watch(&mut self, path: &std::path::Path) -> Result<(), ()> {
         // Unwatch previous file if any
         if let Some(ref old_path) = self.current_path {
             let _ = self.watcher.unwatch(old_path);
         }
 
-        // Watch the new file (non-recursive since it's a single file)
-        self.watcher.watch(path, RecursiveMode::NonRecursive)?;
+        // Watch the parent directory of the new file,
+        // allows better atomic save support
+        let Some(dir_path) = path.parent() else {
+            return Err(());
+        };
+        if let Err(_) = self.watcher.watch(dir_path, RecursiveMode::NonRecursive) {
+            return Err(());
+        }
         self.current_path = Some(path.to_path_buf());
-
-        // Reset debounce timer
-        self.last_reload = Instant::now();
 
         Ok(())
     }
@@ -69,7 +67,7 @@ impl FileWatcher {
         let mut should_reload = false;
 
         loop {
-            match self.receiver.try_recv() {
+            match self.receiver.recv_timeout(Duration::from_millis(50)) {
                 Ok(Ok(event)) => {
                     // Check if this is a modification event we care about
                     if self.is_relevant_event(&event) {
@@ -79,27 +77,12 @@ impl FileWatcher {
                 Ok(Err(_)) => {
                     // Watch error, ignore
                 }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
 
-        // Apply debouncing
-        if should_reload {
-            let now = Instant::now();
-            if now.duration_since(self.last_reload) >= self.debounce_duration {
-                self.last_reload = now;
-                return true;
-            }
-        }
-
-        false
-    }
-
-    /// Mark that a reload just happened (for debouncing after internal saves).
-    #[allow(dead_code)]
-    pub fn mark_reloaded(&mut self) {
-        self.last_reload = Instant::now();
+        should_reload
     }
 
     /// Check if an event is relevant for triggering a reload.
@@ -164,7 +147,7 @@ impl FileWatcher {
                 | EventKind::Access(AccessKind::Close(AccessMode::Write))
                 // File created (new file or recreated)
                 | EventKind::Create(_)
-                // Atomic saves: write to temp then rename to target
+                // Atomic saves: write to temp then rename (or variant)
                 | EventKind::Modify(ModifyKind::Name(RenameMode::To))
                 | EventKind::Modify(ModifyKind::Name(RenameMode::Any))
         )
