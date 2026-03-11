@@ -8,14 +8,19 @@ use notify::{
     event::{AccessKind, AccessMode, ModifyKind, RenameMode},
 };
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 
 /// Manages file watching for live reload.
 pub struct FileWatcher {
     watcher: RecommendedWatcher,
     receiver: Receiver<Result<Event, notify::Error>>,
     current_path: Option<PathBuf>,
+    /// The directory path actually being watched (parent of current_path)
+    watched_dir: Option<PathBuf>,
+    /// Timestamp of the first relevant event in the current debounce window
+    debounce_start: Option<Instant>,
+    debounce_duration: Duration,
 }
 
 impl FileWatcher {
@@ -28,25 +33,28 @@ impl FileWatcher {
             watcher,
             receiver: rx,
             current_path: None,
+            watched_dir: None,
+            debounce_start: None,
+            debounce_duration: Duration::from_millis(100),
         })
     }
 
     /// Start watching a file. Stops watching any previously watched file.
-    pub fn watch(&mut self, path: &std::path::Path) -> Result<(), ()> {
-        // Unwatch previous file if any
-        if let Some(ref old_path) = self.current_path {
-            let _ = self.watcher.unwatch(old_path);
+    /// Watches the parent directory to support atomic saves (e.g. Helix).
+    pub fn watch(&mut self, path: &std::path::Path) -> Result<(), notify::Error> {
+        // Unwatch previous directory if any
+        if let Some(ref old_dir) = self.watched_dir {
+            let _ = self.watcher.unwatch(old_dir);
         }
 
-        // Watch the parent directory of the new file,
-        // allows better atomic save support
-        let Some(dir_path) = path.parent() else {
-            return Err(());
-        };
-        if let Err(_) = self.watcher.watch(dir_path, RecursiveMode::NonRecursive) {
-            return Err(());
-        }
+        // Watch the parent directory of the file for atomic save support
+        let dir_path = path.parent().ok_or_else(|| {
+            notify::Error::generic("Cannot watch a file with no parent directory")
+        })?;
+        self.watcher.watch(dir_path, RecursiveMode::NonRecursive)?;
         self.current_path = Some(path.to_path_buf());
+        self.watched_dir = Some(dir_path.to_path_buf());
+        self.debounce_start = None;
 
         Ok(())
     }
@@ -54,35 +62,53 @@ impl FileWatcher {
     /// Stop watching the current file.
     #[allow(dead_code)]
     pub fn unwatch(&mut self) {
-        if let Some(ref path) = self.current_path {
-            let _ = self.watcher.unwatch(path);
+        if let Some(ref dir) = self.watched_dir {
+            let _ = self.watcher.unwatch(dir);
         }
         self.current_path = None;
+        self.watched_dir = None;
+        self.debounce_start = None;
     }
 
     /// Check if the watched file has been modified.
     /// Returns true if a reload should be triggered.
+    ///
+    /// Uses non-blocking drain with time-based debouncing: the first relevant
+    /// event starts a debounce window, and we only signal a reload once the
+    /// window has elapsed on a subsequent poll. This avoids blocking the event loop.
     pub fn check_for_changes(&mut self) -> bool {
-        // Drain all pending events
-        let mut should_reload = false;
+        // Drain all pending events (non-blocking)
+        let mut saw_relevant = false;
 
         loop {
-            match self.receiver.recv_timeout(Duration::from_millis(50)) {
+            match self.receiver.try_recv() {
                 Ok(Ok(event)) => {
-                    // Check if this is a modification event we care about
                     if self.is_relevant_event(&event) {
-                        should_reload = true;
+                        saw_relevant = true;
                     }
                 }
                 Ok(Err(_)) => {
                     // Watch error, ignore
                 }
-                Err(RecvTimeoutError::Timeout) => break,
-                Err(RecvTimeoutError::Disconnected) => break,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
             }
         }
 
-        should_reload
+        if saw_relevant {
+            // Start debounce window if not already running
+            self.debounce_start.get_or_insert_with(Instant::now);
+        }
+
+        // Check if debounce window has elapsed
+        if let Some(start) = self.debounce_start {
+            if start.elapsed() >= self.debounce_duration {
+                self.debounce_start = None;
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Check if an event is relevant for triggering a reload.
