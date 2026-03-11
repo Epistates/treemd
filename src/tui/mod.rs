@@ -3,6 +3,8 @@ mod help_text;
 mod image_cache;
 mod interactive;
 mod kitty_animation;
+#[cfg(feature = "mermaid")]
+mod mermaid;
 mod syntax;
 pub mod terminal_compat;
 pub mod theme;
@@ -93,21 +95,26 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         let _ = watcher.watch(&app.current_file_path);
     }
 
+    let mut needs_redraw = true;
+
     loop {
-        // Use synchronized output when animating GIFs (reduces flicker on iTerm2, etc.)
-        // This makes the entire frame update atomic from the terminal's perspective.
-        let use_sync = app.is_image_modal_open()
-            && app.modal_gif_frames.len() > 1
-            && !app.has_kitty_animation(); // Kitty uses native animation, no sync needed
+        if needs_redraw {
+            // Use synchronized output when animating GIFs (reduces flicker).
+            let use_sync = app.is_image_modal_open()
+                && app.modal_gif_frames.len() > 1
+                && !app.has_kitty_animation();
 
-        if use_sync {
-            let _ = stdout().execute(BeginSynchronizedUpdate);
-        }
+            if use_sync {
+                let _ = stdout().execute(BeginSynchronizedUpdate);
+            }
 
-        terminal.draw(|frame| ui::render(frame, &mut app))?;
+            terminal.draw(|frame| ui::render(frame, &mut app))?;
 
-        if use_sync {
-            let _ = stdout().execute(EndSynchronizedUpdate);
+            if use_sync {
+                let _ = stdout().execute(EndSynchronizedUpdate);
+            }
+
+            needs_redraw = false;
         }
 
         // Update file watcher if the current file changed (e.g., via navigation)
@@ -133,6 +140,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                     app.status_message = Some(format!("✗ Failed to open {}: {}", filename, e));
                 }
             }
+            needs_redraw = true;
             continue; // Redraw after returning from editor
         }
 
@@ -143,6 +151,11 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
             .time_until_next_frame()
             .unwrap_or(Duration::from_millis(100));
         if !tty::poll_event(poll_timeout)? {
+            // GIF animation needs redraw on timeout
+            if app.is_image_modal_open() && app.modal_gif_frames.len() > 1 {
+                needs_redraw = true;
+            }
+
             // No keyboard event - check for file changes (unless suppressed after internal save)
             if app.suppress_file_watch {
                 // Clear suppression and drain any pending file events
@@ -182,9 +195,13 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
 
                     app.status_message = Some("↻ File reloaded (external change)".to_string());
                 }
+                needs_redraw = true;
             }
             continue;
         }
+
+        // Any key event requires a redraw
+        needs_redraw = true;
 
         if let Event::Key(key) = tty::read_event()?
             && key.kind == KeyEventKind::Press

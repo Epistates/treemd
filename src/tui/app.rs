@@ -431,6 +431,14 @@ pub struct App {
     // Image rendering control (can be disabled via config or CLI)
     pub images_enabled: bool,
 
+    // Mermaid diagram rendering cache: source hash → rendered protocol
+    #[cfg(feature = "mermaid")]
+    pub mermaid_protocol_cache: HashMap<u64, ratatui_image::protocol::StatefulProtocol>,
+    #[cfg(feature = "mermaid")]
+    pub mermaid_render_errors: HashMap<u64, String>,
+    #[cfg(feature = "mermaid")]
+    pub mermaid_last_width: u16,
+
     // LaTeX detection state
     pub latex_detected: bool,
     pub latex_hint_shown: bool,
@@ -645,35 +653,81 @@ impl App {
             // Image rendering control
             images_enabled,
 
+            // Mermaid diagram cache
+            #[cfg(feature = "mermaid")]
+            mermaid_protocol_cache: HashMap::new(),
+            #[cfg(feature = "mermaid")]
+            mermaid_render_errors: HashMap::new(),
+            #[cfg(feature = "mermaid")]
+            mermaid_last_width: 0,
+
             // LaTeX detection
             latex_detected: false,
             latex_hint_shown: false,
         }
     }
 
-    /// Initialize graphics protocol picker with fallback font size (like figif).
+    /// Initialize graphics protocol picker with environment-based protocol detection.
     ///
-    /// Tries to detect terminal capabilities via Picker::from_query_stdio(), checks
-    /// font size validity, and falls back to a reasonable default if needed.
+    /// Checks environment variables (TERM_PROGRAM, KITTY_WINDOW_ID, etc.) to
+    /// detect the best image protocol, then queries stdio for font/cell dimensions.
+    /// Falls back to halfblocks if nothing better is available.
     fn init_picker() -> Option<ratatui_image::picker::Picker> {
         use ratatui_image::picker::Picker;
 
-        match Picker::from_query_stdio() {
+        let env_protocol = Self::detect_image_protocol();
+
+        // Query stdio for accurate font/cell dimensions, then override protocol
+        let mut picker = match Picker::from_query_stdio() {
             Ok(picker) => {
-                // Check if font size seems reasonable (at least 4x4 pixels per cell)
                 let (w, h) = picker.font_size();
                 if w < 4 || h < 4 {
-                    // Font size detection failed - use halfblocks fallback
-                    Some(Picker::halfblocks())
+                    Picker::halfblocks()
                 } else {
-                    Some(picker)
+                    picker
                 }
             }
-            Err(_) => {
-                // Query failed - use halfblocks (unicode rendering, works everywhere)
-                Some(Picker::halfblocks())
+            Err(_) => Picker::halfblocks(),
+        };
+
+        // Override detected protocol with environment-based detection
+        if let Some(protocol) = env_protocol {
+            picker.set_protocol_type(protocol);
+        }
+
+        Some(picker)
+    }
+
+    /// Detect the best image protocol from environment variables.
+    ///
+    /// Returns None if no specific protocol is detected (use stdio detection).
+    fn detect_image_protocol() -> Option<ratatui_image::picker::ProtocolType> {
+        use ratatui_image::picker::ProtocolType;
+
+        // Kitty graphics protocol
+        if std::env::var("KITTY_WINDOW_ID").is_ok() {
+            return Some(ProtocolType::Kitty);
+        }
+
+        // iTerm2 / WezTerm inline images protocol
+        if let Ok(term_program) = std::env::var("TERM_PROGRAM") {
+            if term_program == "iTerm.app" || term_program == "WezTerm" {
+                return Some(ProtocolType::Iterm2);
             }
         }
+
+        // Ghostty uses Kitty protocol
+        if let Ok(term) = std::env::var("TERM") {
+            if term.contains("ghostty") {
+                return Some(ProtocolType::Kitty);
+            }
+            // Sixel support
+            if term.contains("sixel") || term.contains("foot") {
+                return Some(ProtocolType::Sixel);
+            }
+        }
+
+        None
     }
 
     /// Populate the image protocol cache from indexed interactive elements.
@@ -739,6 +793,57 @@ impl App {
             let protocol = picker.new_resize_protocol(img_data);
             self.image_protocol_cache.insert(path, protocol);
         }
+    }
+
+    /// Render a mermaid diagram and cache the result as a StatefulProtocol.
+    /// Returns true if a cached protocol is available (either fresh or from prior render).
+    #[cfg(feature = "mermaid")]
+    pub fn render_mermaid_if_needed(&mut self, source: &str, width: u16) -> bool {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        // Clear caches on width change (re-rasterize at new size)
+        if width != self.mermaid_last_width {
+            self.mermaid_protocol_cache.clear();
+            self.mermaid_render_errors.clear();
+            self.mermaid_last_width = width;
+        }
+
+        // Already cached (success or failure)
+        if self.mermaid_protocol_cache.contains_key(&hash) {
+            return true;
+        }
+        if self.mermaid_render_errors.contains_key(&hash) {
+            return false;
+        }
+
+        // Render: target pixel width ≈ terminal columns × ~8px per cell
+        let target_px = (width as u32) * 8;
+        match crate::tui::mermaid::render_mermaid_to_image(source, target_px) {
+            Ok(img) => {
+                if let Some(picker) = self.picker.as_mut() {
+                    let protocol = picker.new_resize_protocol(img);
+                    self.mermaid_protocol_cache.insert(hash, protocol);
+                    return true;
+                }
+                false
+            }
+            Err(e) => {
+                self.mermaid_render_errors.insert(hash, e);
+                false
+            }
+        }
+    }
+
+    /// Get the hash for a mermaid source string.
+    #[cfg(feature = "mermaid")]
+    pub fn mermaid_source_hash(source: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Open image modal for a given image path

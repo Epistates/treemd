@@ -31,13 +31,16 @@ pub const IMAGE_OFFSET: usize = 7000;
 
 /// Placeholder lines reserved for block-level images in rendered output.
 /// 1 label line + IMAGE_PLACEHOLDER_LINES blank lines = BLOCK_IMAGE_TOTAL_LINES.
-pub const IMAGE_PLACEHOLDER_LINES: usize = 16;
-pub const BLOCK_IMAGE_TOTAL_LINES: usize = 1 + IMAGE_PLACEHOLDER_LINES; // 17
+pub const IMAGE_PLACEHOLDER_LINES: usize = 22;
+pub const BLOCK_IMAGE_TOTAL_LINES: usize = 1 + IMAGE_PLACEHOLDER_LINES; // 23
 
 /// Placeholder lines reserved for paragraphs containing inline images.
 /// 1 text line + PARAGRAPH_IMAGE_PLACEHOLDER_LINES blank lines = PARAGRAPH_WITH_IMAGE_TOTAL_LINES.
-pub const PARAGRAPH_IMAGE_PLACEHOLDER_LINES: usize = 13;
-pub const PARAGRAPH_WITH_IMAGE_TOTAL_LINES: usize = 1 + PARAGRAPH_IMAGE_PLACEHOLDER_LINES; // 14
+pub const PARAGRAPH_IMAGE_PLACEHOLDER_LINES: usize = 22;
+pub const PARAGRAPH_WITH_IMAGE_TOTAL_LINES: usize = 1 + PARAGRAPH_IMAGE_PLACEHOLDER_LINES; // 23
+
+/// Placeholder lines reserved for mermaid diagram rendering.
+pub const MERMAID_PLACEHOLDER_LINES: usize = 22;
 
 // Sub-index encoding constants for nested elements within details blocks
 /// Base offset for elements nested inside details blocks
@@ -244,6 +247,13 @@ impl InteractiveState {
                                         sub_idx: Some(nested_base + CODE_BLOCK_OFFSET),
                                     };
 
+                                    #[cfg(feature = "mermaid")]
+                                    let code_lines = if language.as_deref() == Some("mermaid") {
+                                        1 + MERMAID_PLACEHOLDER_LINES
+                                    } else {
+                                        2 + content.lines().count()
+                                    };
+                                    #[cfg(not(feature = "mermaid"))]
                                     let code_lines = 2 + content.lines().count();
 
                                     self.elements.push(InteractiveElement {
@@ -521,6 +531,13 @@ impl InteractiveState {
                                         sub_idx: Some(nested_base + CODE_BLOCK_OFFSET),
                                     };
 
+                                    #[cfg(feature = "mermaid")]
+                                    let lines = if language.as_deref() == Some("mermaid") {
+                                        1 + MERMAID_PLACEHOLDER_LINES
+                                    } else {
+                                        2 + content.lines().count()
+                                    };
+                                    #[cfg(not(feature = "mermaid"))]
                                     let lines = 2 + content.lines().count();
 
                                     self.elements.push(InteractiveElement {
@@ -596,7 +613,15 @@ impl InteractiveState {
                         sub_idx: None,
                     };
 
-                    let lines = 2 + content.lines().count(); // +2 for fences
+                    // Mermaid blocks use placeholder lines; regular code uses fences + content
+                    #[cfg(feature = "mermaid")]
+                    let lines = if language.as_deref() == Some("mermaid") {
+                        1 + MERMAID_PLACEHOLDER_LINES // header + blank lines
+                    } else {
+                        2 + content.lines().count() // +2 for fences
+                    };
+                    #[cfg(not(feature = "mermaid"))]
+                    let lines = 2 + content.lines().count();
 
                     self.elements.push(InteractiveElement {
                         id,
@@ -1144,7 +1169,16 @@ fn count_single_block_lines(block: &Block) -> usize {
                 1
             }
         }
-        Block::Code { content, .. } => 2 + content.lines().count(),
+        Block::Code {
+            language, content, ..
+        } => {
+            #[cfg(feature = "mermaid")]
+            if language.as_deref() == Some("mermaid") {
+                return 1 + MERMAID_PLACEHOLDER_LINES;
+            }
+            let _ = language;
+            2 + content.lines().count()
+        }
         Block::List { items, .. } => items.len(),
         Block::Blockquote { blocks, .. } => count_block_lines(blocks),
         Block::Table { rows, .. } => 3 + rows.len(),

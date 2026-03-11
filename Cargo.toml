@@ -91,9 +91,14 @@ opensesame = { version = "0.1.1", features = ["serde"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Mermaid diagram rendering (pure Rust, no external tools)
+mermaid-rs-renderer = { version = "0.2", default-features = false, optional = true }
+resvg = { version = "0.44", optional = true }
+
 [features]
-default = ["unstable-dynamic"]
+default = ["unstable-dynamic", "mermaid"]
 unstable-dynamic = ["clap_complete/unstable-dynamic"]
+mermaid = ["dep:mermaid-rs-renderer", "dep:resvg"]
 
 [profile.release]
 # Enable Link Time Optimization for better performance and smaller binary

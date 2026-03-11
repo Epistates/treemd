@@ -461,6 +461,10 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     // Render inline images (first image in content)
     render_inline_images(frame, app, area);
 
+    // Render mermaid diagrams as image overlays
+    #[cfg(feature = "mermaid")]
+    render_mermaid_images(frame, app, area);
+
     // Render scrollbar
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .begin_symbol(Some("↑"))
@@ -496,10 +500,10 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
         horizontal: 1,
     });
 
-    // Maximum image width: 80% of content area, but reasonable constraints
+    // Maximum image width: 80% of content area
     let max_image_width = ((inner.width as usize * 80) / 100).max(20) as u16;
-    // Max 12 lines per image to avoid covering too much text
-    let max_image_height = 12u16;
+    // Use the full placeholder height reserved for images
+    let max_image_height = crate::tui::interactive::IMAGE_PLACEHOLDER_LINES as u16;
 
     // Get currently selected image if in interactive mode
     let selected_image_id = if app.mode == crate::tui::app::AppMode::Interactive {
@@ -603,6 +607,146 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
                 let img_widget = StatefulImage::new().resize(resize);
                 frame.render_stateful_widget(img_widget, render_area, protocol_state);
             }
+        }
+    }
+}
+
+#[cfg(feature = "mermaid")]
+fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
+    use crate::tui::app::App as MermaidApp;
+    use crate::tui::interactive::{ElementType, MERMAID_PLACEHOLDER_LINES};
+    use ratatui_image::{Resize, StatefulImage};
+
+    if app.viewing_image_path.is_some() || !app.images_enabled {
+        return;
+    }
+
+    let theme = app.theme.clone();
+    let inner = area.inner(ratatui::layout::Margin {
+        vertical: 1,
+        horizontal: 1,
+    });
+
+    // Use 80% of content width for image display
+    let image_width = ((inner.width as usize * 80) / 100).max(20) as u16;
+    // Use the full placeholder height
+    let max_image_height = MERMAID_PLACEHOLDER_LINES as u16;
+
+    let selected_code_id = if app.mode == crate::tui::app::AppMode::Interactive {
+        app.interactive_state.current_element().and_then(|elem| {
+            if let ElementType::CodeBlock { language, .. } = &elem.element_type {
+                if language.as_deref() == Some("mermaid") {
+                    return Some(elem.id);
+                }
+            }
+            None
+        })
+    } else {
+        None
+    };
+
+    // Collect mermaid elements info before mutable borrow
+    let mermaid_elements: Vec<_> = app
+        .interactive_state
+        .elements
+        .iter()
+        .filter_map(|elem| {
+            if let ElementType::CodeBlock {
+                language, content, ..
+            } = &elem.element_type
+            {
+                if language.as_deref() == Some("mermaid") {
+                    return Some((elem.id, elem.line_range, content.clone()));
+                }
+            }
+            None
+        })
+        .collect();
+
+    for (elem_id, line_range, source) in &mermaid_elements {
+        let (line_start, line_end) = *line_range;
+
+        if line_end.saturating_sub(line_start) < 3 {
+            continue;
+        }
+
+        let scroll = app.content_scroll as usize;
+        let viewport_height = app.content_viewport_height as usize;
+        let viewport_end = scroll + viewport_height;
+
+        if line_end < scroll || line_start >= viewport_end {
+            continue;
+        }
+
+        // Trigger rendering (caches on first call)
+        let rendered = app.render_mermaid_if_needed(source, image_width);
+
+        let y_offset = if line_start >= scroll {
+            (line_start - scroll) as u16
+        } else {
+            0
+        };
+
+        let image_y = inner.y + y_offset;
+        if image_y >= inner.bottom() {
+            continue;
+        }
+
+        let available_height = inner.bottom().saturating_sub(image_y);
+        if available_height < 3 {
+            continue;
+        }
+
+        let image_height = available_height.min(max_image_height);
+        let hash = MermaidApp::mermaid_source_hash(source);
+
+        if rendered {
+            if let Some(protocol_state) = app.mermaid_protocol_cache.get_mut(&hash) {
+                let is_selected = selected_code_id == Some(*elem_id);
+
+                let image_area = Rect {
+                    x: inner.x,
+                    y: image_y,
+                    width: image_width.min(inner.width),
+                    height: image_height,
+                };
+
+                let render_area = if is_selected {
+                    let border_style = Style::default()
+                        .fg(theme.selection_indicator_fg)
+                        .bg(theme.selection_indicator_bg)
+                        .add_modifier(Modifier::BOLD);
+
+                    let border = Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border_style)
+                        .title(" ▶ Mermaid ")
+                        .title_alignment(ratatui::layout::Alignment::Left);
+
+                    frame.render_widget(border.clone(), image_area);
+                    border.inner(image_area)
+                } else {
+                    image_area
+                };
+
+                let img_widget = StatefulImage::new().resize(Resize::Scale(None));
+                frame.render_stateful_widget(img_widget, render_area, protocol_state);
+            }
+        } else if let Some(error) = app.mermaid_render_errors.get(&hash) {
+            let error_line = Line::from(vec![
+                Span::styled("⚠ ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("mermaid render failed: {}", error),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            let error_area = Rect {
+                x: inner.x,
+                y: image_y,
+                width: inner.width,
+                height: 1,
+            };
+            frame.render_widget(Paragraph::new(error_line), error_area);
         }
     }
 }
@@ -1380,35 +1524,65 @@ fn render_markdown_enhanced(
             ContentBlock::Code {
                 language, content, ..
             } => {
-                // Opening fence
                 let lang_str = language.as_deref().unwrap_or("");
 
-                let mut fence_spans = vec![];
-                if is_block_selected {
-                    fence_spans.push(Span::styled(
-                        "→ ",
-                        Style::default()
-                            .fg(theme.selection_indicator_fg)
-                            .bg(theme.selection_indicator_bg)
-                            .add_modifier(Modifier::BOLD),
+                #[cfg(feature = "mermaid")]
+                let is_mermaid = lang_str == "mermaid";
+                #[cfg(not(feature = "mermaid"))]
+                let is_mermaid = false;
+
+                if is_mermaid {
+                    // Mermaid diagram: render header + placeholder lines for image overlay
+                    let mut header_spans = vec![];
+                    if is_block_selected {
+                        header_spans.push(Span::styled(
+                            "→ ",
+                            Style::default()
+                                .fg(theme.selection_indicator_fg)
+                                .bg(theme.selection_indicator_bg)
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    header_spans.push(Span::styled(
+                        "▸ mermaid diagram",
+                        theme.code_fence_style(),
                     ));
+                    lines.push(Line::from(header_spans));
+
+                    // Reserve blank lines for the image overlay
+                    use crate::tui::interactive::MERMAID_PLACEHOLDER_LINES;
+                    for _ in 0..MERMAID_PLACEHOLDER_LINES {
+                        lines.push(Line::from(vec![]));
+                    }
+                } else {
+                    // Standard code block: opening fence + highlighted code + closing fence
+                    let mut fence_spans = vec![];
+                    if is_block_selected {
+                        fence_spans.push(Span::styled(
+                            "→ ",
+                            Style::default()
+                                .fg(theme.selection_indicator_fg)
+                                .bg(theme.selection_indicator_bg)
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    fence_spans.push(Span::styled(
+                        format!("```{}", lang_str),
+                        theme.code_fence_style(),
+                    ));
+
+                    lines.push(Line::from(fence_spans));
+
+                    // Highlighted code
+                    let highlighted = highlighter.highlight_code(content, lang_str);
+                    lines.extend(highlighted);
+
+                    // Closing fence
+                    lines.push(Line::from(vec![Span::styled(
+                        "```".to_string(),
+                        theme.code_fence_style(),
+                    )]));
                 }
-                fence_spans.push(Span::styled(
-                    format!("```{}", lang_str),
-                    theme.code_fence_style(),
-                ));
-
-                lines.push(Line::from(fence_spans));
-
-                // Highlighted code
-                let highlighted = highlighter.highlight_code(content, lang_str);
-                lines.extend(highlighted);
-
-                // Closing fence
-                lines.push(Line::from(vec![Span::styled(
-                    "```".to_string(),
-                    theme.code_fence_style(),
-                )]));
             }
             ContentBlock::List { ordered, items } => {
                 for (idx, item) in items.iter().enumerate() {
