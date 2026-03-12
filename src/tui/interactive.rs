@@ -31,13 +31,13 @@ pub const IMAGE_OFFSET: usize = 7000;
 
 /// Placeholder lines reserved for block-level images in rendered output.
 /// 1 label line + IMAGE_PLACEHOLDER_LINES blank lines = BLOCK_IMAGE_TOTAL_LINES.
-pub const IMAGE_PLACEHOLDER_LINES: usize = 22;
-pub const BLOCK_IMAGE_TOTAL_LINES: usize = 1 + IMAGE_PLACEHOLDER_LINES; // 23
+pub const IMAGE_PLACEHOLDER_LINES: usize = 16;
+pub const BLOCK_IMAGE_TOTAL_LINES: usize = 1 + IMAGE_PLACEHOLDER_LINES; // 17
 
 /// Placeholder lines reserved for paragraphs containing inline images.
 /// 1 text line + PARAGRAPH_IMAGE_PLACEHOLDER_LINES blank lines = PARAGRAPH_WITH_IMAGE_TOTAL_LINES.
-pub const PARAGRAPH_IMAGE_PLACEHOLDER_LINES: usize = 22;
-pub const PARAGRAPH_WITH_IMAGE_TOTAL_LINES: usize = 1 + PARAGRAPH_IMAGE_PLACEHOLDER_LINES; // 23
+pub const PARAGRAPH_IMAGE_PLACEHOLDER_LINES: usize = 13;
+pub const PARAGRAPH_WITH_IMAGE_TOTAL_LINES: usize = 1 + PARAGRAPH_IMAGE_PLACEHOLDER_LINES; // 14
 
 /// Placeholder lines reserved for mermaid diagram rendering.
 pub const MERMAID_PLACEHOLDER_LINES: usize = 22;

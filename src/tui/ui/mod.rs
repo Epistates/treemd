@@ -733,10 +733,17 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
                 frame.render_stateful_widget(img_widget, render_area, protocol_state);
             }
         } else if let Some(error) = app.mermaid_render_errors.get(&hash) {
+            let prefix = "⚠ mermaid render failed: ";
+            let max_msg_len = (inner.width as usize).saturating_sub(prefix.len());
+            let truncated = if error.len() > max_msg_len {
+                format!("{}…", &error[..max_msg_len.saturating_sub(1)])
+            } else {
+                error.clone()
+            };
             let error_line = Line::from(vec![
                 Span::styled("⚠ ", Style::default().fg(Color::Yellow)),
                 Span::styled(
-                    format!("mermaid render failed: {}", error),
+                    format!("mermaid render failed: {}", truncated),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]);
@@ -1543,10 +1550,7 @@ fn render_markdown_enhanced(
                                 .add_modifier(Modifier::BOLD),
                         ));
                     }
-                    header_spans.push(Span::styled(
-                        "▸ mermaid diagram",
-                        theme.code_fence_style(),
-                    ));
+                    header_spans.push(Span::styled("▸ mermaid diagram", theme.code_fence_style()));
                     lines.push(Line::from(header_spans));
 
                     // Reserve blank lines for the image overlay
@@ -1570,6 +1574,14 @@ fn render_markdown_enhanced(
                         format!("```{}", lang_str),
                         theme.code_fence_style(),
                     ));
+
+                    #[cfg(not(feature = "mermaid"))]
+                    if lang_str == "mermaid" {
+                        fence_spans.push(Span::styled(
+                            " (enable 'mermaid' feature to render)",
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
 
                     lines.push(Line::from(fence_spans));
 

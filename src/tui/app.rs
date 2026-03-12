@@ -437,7 +437,7 @@ pub struct App {
     #[cfg(feature = "mermaid")]
     pub mermaid_render_errors: HashMap<u64, String>,
     #[cfg(feature = "mermaid")]
-    pub mermaid_last_width: u16,
+    pub mermaid_last_render_width: u32,
 
     // LaTeX detection state
     pub latex_detected: bool,
@@ -659,7 +659,7 @@ impl App {
             #[cfg(feature = "mermaid")]
             mermaid_render_errors: HashMap::new(),
             #[cfg(feature = "mermaid")]
-            mermaid_last_width: 0,
+            mermaid_last_render_width: 0,
 
             // LaTeX detection
             latex_detected: false,
@@ -804,11 +804,18 @@ impl App {
         source.hash(&mut hasher);
         let hash = hasher.finish();
 
-        // Clear caches on width change (re-rasterize at new size)
-        if width != self.mermaid_last_width {
+        // Use picker's actual font width for accurate pixel calculation
+        let font_width = self.picker.as_ref().map_or(8u16, |p| {
+            let (w, _) = p.font_size();
+            if w < 1 { 8 } else { w }
+        });
+        let target_px = (width as u32) * (font_width as u32);
+
+        // Clear caches on render width change (re-rasterize at new size)
+        if target_px != self.mermaid_last_render_width {
             self.mermaid_protocol_cache.clear();
             self.mermaid_render_errors.clear();
-            self.mermaid_last_width = width;
+            self.mermaid_last_render_width = target_px;
         }
 
         // Already cached (success or failure)
@@ -818,9 +825,6 @@ impl App {
         if self.mermaid_render_errors.contains_key(&hash) {
             return false;
         }
-
-        // Render: target pixel width ≈ terminal columns × ~8px per cell
-        let target_px = (width as u32) * 8;
         match crate::tui::mermaid::render_mermaid_to_image(source, target_px) {
             Ok(img) => {
                 if let Some(picker) = self.picker.as_mut() {

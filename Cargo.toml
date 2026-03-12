@@ -92,6 +92,7 @@ opensesame = { version = "0.1.1", features = ["serde"] }
 libc = "0.2"
 
 # Mermaid diagram rendering (pure Rust, no external tools)
+# NOTE: pre-1.0 crate in early development; semver pins to >=0.2.0, <0.3.0
 mermaid-rs-renderer = { version = "0.2", default-features = false, optional = true }
 resvg = { version = "0.44", optional = true }
 
