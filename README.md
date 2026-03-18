@@ -476,6 +476,30 @@ search_current_fg = "Black"
 
 </details>
 
+### Custom Code Blocks Theme
+
+Customize syntax highlighting in code blocks using Sublime Text `.tmTheme` files.
+
+```toml
+[ui]
+code_theme = "base16-ocean.dark"  # Default theme
+```
+
+**Built-in themes:** `base16-ocean.dark`, `base16-ocean.light`, `base16-eighties.dark`, `base16-mocha.dark`, `InspiredGitHub`, `Solarized (dark)`, `Solarized (light)`
+
+**Using custom themes:**
+
+1. Create the `code-themes` directory next to your `config.toml file`
+
+2. Add your `.tmTheme` files to the directory
+
+3. Reference the theme by name (filename without extension):
+
+   ```toml
+   [ui]
+   code_theme = "MyCustomTheme"
+   ```
+
 ### CLI Overrides
 
 Override settings for a single session:
