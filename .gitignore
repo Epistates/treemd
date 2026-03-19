@@ -15,6 +15,7 @@
 *.swp
 *.swo
 *~
+debug_output.txt
 !.github/
 
 # IDE

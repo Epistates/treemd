@@ -296,18 +296,36 @@ impl Config {
             // Prefer XDG-style path on macOS for CLI tools
             if let Some(xdg_path) = Self::xdg_config_path()
                 && let Ok(contents) = fs::read_to_string(&xdg_path)
-                && let Ok(config) = toml::from_str(&contents)
             {
-                return config;
+                match toml::from_str(&contents) {
+                    Ok(config) => return config,
+                    Err(e) => {
+                        eprintln!(
+                            "warning: failed to parse config {}: {} (using defaults)",
+                            xdg_path.display(),
+                            e
+                        );
+                        return Self::default();
+                    }
+                }
             }
         }
 
         // Fall back to platform-specific path
         Self::config_path()
             .and_then(|path| {
-                fs::read_to_string(&path)
-                    .ok()
-                    .and_then(|contents| toml::from_str(&contents).ok())
+                let contents = fs::read_to_string(&path).ok()?;
+                match toml::from_str(&contents) {
+                    Ok(config) => Some(config),
+                    Err(e) => {
+                        eprintln!(
+                            "warning: failed to parse config {}: {} (using defaults)",
+                            path.display(),
+                            e
+                        );
+                        None
+                    }
+                }
             })
             .unwrap_or_default()
     }

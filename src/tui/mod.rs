@@ -186,7 +186,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         }
                     }
                     // Restore scroll position
-                    app.content_scroll = saved_scroll.min(app.content_height.saturating_sub(1));
+                    app.content_scroll = saved_scroll.min(app.max_content_scroll());
                     app.content_scroll_state = app
                         .content_scroll_state
                         .position(app.content_scroll as usize);

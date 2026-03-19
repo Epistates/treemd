@@ -255,7 +255,7 @@ fn main() -> Result<()> {
                 // Only wait for keypress if stdin is still available (not piped)
                 if !stdin_was_piped {
                     use std::io::{Read, stdin};
-                    let _ = stdin().read(&mut [0u8]).unwrap();
+                    let _ = stdin().read(&mut [0u8]);
                 } else {
                     eprintln!("Press any key in the TUI to continue...");
                 }
@@ -367,7 +367,8 @@ fn print_headings(headings: &[&parser::Heading], format: &OutputFormat, doc: &Do
         OutputFormat::Json => {
             // Use new nested JSON output with markdown intelligence
             let json_output = parser::build_json_output(doc, None);
-            let json = serde_json::to_string_pretty(&json_output).unwrap();
+            let json = serde_json::to_string_pretty(&json_output)
+                .expect("JSON serialization of document output should not fail");
             println!("{}", json);
         }
         OutputFormat::Tree => {
@@ -392,7 +393,8 @@ fn print_tree(doc: &Document, format: &OutputFormat) {
         OutputFormat::Json => {
             // For JSON, we'll serialize the flat headings list
             // (Tree serialization would need custom implementation)
-            let json = serde_json::to_string_pretty(&doc.headings).unwrap();
+            let json = serde_json::to_string_pretty(&doc.headings)
+                .expect("JSON serialization of headings should not fail");
             println!("{}", json);
         }
     }

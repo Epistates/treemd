@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Content height u16 truncation** - Changed `content_height` from `u16` to `usize` to prevent silent overflow on documents with >65535 rendered lines; scroll clamped at ratatui's u16 boundary
+- **Terminal restoration when stdin is piped** - `disable_raw_mode` now fully restores the original termios saved during `enable_raw_mode`, instead of only re-setting ICANON/ECHO/ISIG (which left IEXTEN, ICRNL, OPOST, etc. cleared by `cfmakeraw`)
+- **Table cell edit index using unreliable string search** - `calculate_current_table_index` now uses the heading's byte offset from the document structure instead of `content.find()`, which could match the wrong occurrence in documents with repeated section text
+- **Panic on stdin read during terminal warning** - Replaced `stdin().read().unwrap()` with non-panicking variant
+- **Silent config parse failure** - Malformed `config.toml` now prints a warning instead of silently falling back to defaults
+
+### Changed
+
+- **Extracted `current_section_content()` helper** - Deduplicated 9 instances of the section-content-extraction pattern across `app.rs` (-70 lines)
+- **Extracted `resolve_relative_file_link()` helper** - Deduplicated identical relative-file-link resolution logic between `follow_selected_link` and `follow_link_from_interactive` (-50 lines)
+- **Extracted `with_tty_stdin()` helper in tty.rs** - Deduplicated fd-swap logic shared by `read_event` and `poll_event` (-40 lines)
+- **Removed `debug_output.txt` from git tracking** - Added to `.gitignore`
+
 ## [0.5.9] - 2026-03-04
 
 ### Added

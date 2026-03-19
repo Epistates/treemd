@@ -441,7 +441,7 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     // Use line_count() for accurate visual line count after wrapping
     // (requires ratatui "unstable-rendered-line-info" feature)
     let inner_width = area.width.saturating_sub(2); // subtract block borders
-    let visual_line_count = paragraph.line_count(inner_width) as u16;
+    let visual_line_count = paragraph.line_count(inner_width);
     if app.content_height != visual_line_count {
         app.content_height = visual_line_count;
     }
@@ -1207,7 +1207,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             Focus::Content => {
                 // Show content scroll position
                 let scroll_pos = app.content_scroll as usize;
-                let content_height = app.content_height as usize;
+                let content_height = app.content_height;
                 let viewport = app.content_viewport_height as usize;
                 let bottom_line = (scroll_pos + viewport).min(content_height);
                 let percentage = if content_height > 0 {

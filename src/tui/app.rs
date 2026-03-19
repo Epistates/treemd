@@ -303,7 +303,7 @@ pub struct App {
     pub outline_items: Vec<OutlineItem>,
     pub content_scroll: u16,
     pub content_scroll_state: ScrollbarState,
-    pub content_height: u16,
+    pub content_height: usize,
     pub content_viewport_height: u16, // Actual viewport height for scroll calculations
     pub show_help: bool,
     pub help_scroll: u16,
@@ -524,7 +524,7 @@ impl App {
             outline_items,
             content_scroll: 0,
             content_scroll_state: ScrollbarState::new(content_lines),
-            content_height: content_lines as u16,
+            content_height: content_lines,
             content_viewport_height: 20, // Default, will be updated by UI on first render
             show_help: false,
             help_scroll: 0,
@@ -1786,8 +1786,8 @@ impl App {
 
     /// Maximum scroll offset: stops when last line is at bottom of viewport
     pub fn max_content_scroll(&self) -> u16 {
-        self.content_height
-            .saturating_sub(self.content_viewport_height)
+        let viewport = self.content_viewport_height as usize;
+        self.content_height.saturating_sub(viewport).min(u16::MAX as usize) as u16
     }
 
     /// Scroll content down by one line
@@ -2042,20 +2042,10 @@ impl App {
         if current_selection != self.previous_selection {
             // Reset content scroll when selection changes
             self.content_scroll = 0;
-            self.previous_selection = current_selection.clone();
+            self.previous_selection = current_selection;
 
             // Reindex interactive elements for the new section
-            let content_text = if let Some(heading_text) = &current_selection {
-                if let Some(_heading) = self.document.find_heading(heading_text) {
-                    self.document
-                        .extract_section(heading_text)
-                        .unwrap_or_else(|| self.document.content.clone())
-                } else {
-                    self.document.content.clone()
-                }
-            } else {
-                self.document.content.clone()
-            };
+            let content_text = self.current_section_content();
 
             use crate::parser::content::parse_content;
             let blocks = parse_content(&content_text, 0);
@@ -2064,21 +2054,9 @@ impl App {
         }
 
         // Update content height based on current section
-        let content_text = if let Some(heading_text) = &current_selection {
-            if let Some(_heading) = self.document.find_heading(heading_text) {
-                // Use extract_section_content to get the actual displayed content
-                self.document
-                    .extract_section(heading_text)
-                    .unwrap_or_else(|| self.document.content.clone())
-            } else {
-                self.document.content.clone()
-            }
-        } else {
-            self.document.content.clone()
-        };
-
+        let content_text = self.current_section_content();
         let content_lines = content_text.lines().count();
-        self.content_height = content_lines as u16;
+        self.content_height = content_lines;
         self.content_scroll_state =
             ScrollbarState::new(content_lines).position(self.content_scroll as usize);
     }
@@ -2392,13 +2370,7 @@ impl App {
         }
 
         // Get current section content
-        let content = if let Some(heading_text) = self.selected_heading_text() {
-            self.document
-                .extract_section(heading_text)
-                .unwrap_or_else(|| self.document.content.clone())
-        } else {
-            self.document.content.clone()
-        };
+        let content = self.current_section_content();
 
         // Convert to plain text using parser (strips links, formatting, etc.)
         // This ensures search matches what's visible when rendered
@@ -2447,7 +2419,7 @@ impl App {
             self.content_scroll = match_line.saturating_sub(half_viewport);
             self.content_scroll = self
                 .content_scroll
-                .min(self.content_height.saturating_sub(1));
+                .min(self.max_content_scroll());
             self.content_scroll_state = self
                 .content_scroll_state
                 .position(self.content_scroll as usize);
@@ -2467,13 +2439,7 @@ impl App {
         use crate::parser::links::extract_links;
 
         // Get current section content
-        let content = if let Some(heading_text) = self.selected_heading_text() {
-            self.document
-                .extract_section(heading_text)
-                .unwrap_or_else(|| self.document.content.clone())
-        } else {
-            self.document.content.clone()
-        };
+        let content = self.current_section_content();
 
         // Convert line/col to byte offset
         let mut byte_offset = 0;
@@ -3357,6 +3323,13 @@ impl App {
             .map(|item| item.text.as_str())
     }
 
+    /// Get the content for the currently selected section, or the full document if no heading is selected.
+    fn current_section_content(&self) -> String {
+        self.selected_heading_text()
+            .and_then(|text| self.document.extract_section(text))
+            .unwrap_or_else(|| self.document.content.clone())
+    }
+
     /// Get the source line number (1-indexed) for the currently selected heading.
     ///
     /// Returns None if no heading is selected or if the selection is the document overview.
@@ -3544,13 +3517,7 @@ impl App {
     /// Enter link follow mode - extract links from current section and highlight them
     pub fn enter_link_follow_mode(&mut self) {
         // Extract content for current section
-        let content = if let Some(heading_text) = self.selected_heading_text() {
-            self.document
-                .extract_section(heading_text)
-                .unwrap_or_else(|| self.document.content.clone())
-        } else {
-            self.document.content.clone()
-        };
+        let content = self.current_section_content();
 
         // Extract all links from the content
         self.links_in_view = extract_links(&content);
@@ -3694,13 +3661,7 @@ impl App {
                         self.select_outline_index(i);
 
                         // Now extract links from parent's content
-                        let content = if let Some(heading_text) = self.selected_heading_text() {
-                            self.document
-                                .extract_section(heading_text)
-                                .unwrap_or_else(|| self.document.content.clone())
-                        } else {
-                            self.document.content.clone()
-                        };
+                        let content = self.current_section_content();
                         self.links_in_view = extract_links(&content);
 
                         // Reset link selection
@@ -3999,6 +3960,54 @@ impl App {
         self.config.content.latex_aggressive
     }
 
+    /// Handle loading a relative file link, resolving markdown extensions and fallbacks.
+    ///
+    /// Returns `true` if the caller should exit its current mode (link-follow or interactive).
+    fn resolve_relative_file_link(
+        &mut self,
+        path: &PathBuf,
+        anchor: &Option<String>,
+    ) -> Result<bool, String> {
+        let has_md_extension = Self::is_markdown_extension(path);
+
+        let current_dir = self
+            .current_file_path
+            .parent()
+            .ok_or("Cannot determine current directory")?;
+
+        if has_md_extension {
+            self.load_file(path, anchor.as_deref())?;
+            // Only signal exit if we're not prompting for file creation
+            Ok(self.mode != AppMode::ConfirmFileCreate)
+        } else {
+            // No markdown extension — try .md, then as-is, then prompt to create
+            let md_path = PathBuf::from(format!("{}.md", path.display()));
+            let absolute_md_path = current_dir.join(&md_path);
+
+            if absolute_md_path.exists() && !absolute_md_path.is_symlink() {
+                self.load_file(&md_path, anchor.as_deref())?;
+                Ok(true)
+            } else {
+                let absolute_path = current_dir.join(path);
+
+                if absolute_path.exists() && !absolute_path.is_symlink() {
+                    // Non-markdown file — open in editor
+                    self.pending_editor_file = Some(absolute_path);
+                    Ok(true)
+                } else {
+                    // File doesn't exist — prompt to create markdown file
+                    let relative_path = if path.extension().is_none() {
+                        PathBuf::from(format!("{}.md", path.display()))
+                    } else {
+                        path.clone()
+                    };
+                    self.load_file(&relative_path, anchor.as_deref())?;
+                    Ok(self.mode != AppMode::ConfirmFileCreate)
+                }
+            }
+        }
+    }
+
     /// Follow the currently selected link
     pub fn follow_selected_link(&mut self) -> Result<(), String> {
         let link = match self.get_selected_link() {
@@ -4015,62 +4024,10 @@ impl App {
                 Ok(())
             }
             crate::parser::LinkTarget::RelativeFile { path, anchor } => {
-                // Check if the file has a markdown extension
-                let has_md_extension = Self::is_markdown_extension(&path);
-
-                let current_dir = self
-                    .current_file_path
-                    .parent()
-                    .ok_or("Cannot determine current directory")?;
-
                 let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-
-                if has_md_extension {
-                    // Explicit markdown extension - load in treemd
-                    self.load_file(&path, anchor.as_deref())?;
-                    // Only exit link follow mode if we're not prompting for file creation
-                    if self.mode != AppMode::ConfirmFileCreate {
-                        self.status_message = Some(format!("✓ Opened {}", filename));
-                        self.exit_link_follow_mode();
-                    }
-                } else {
-                    // No markdown extension - could be:
-                    // 1. A markdown file without extension (common in wikis)
-                    // 2. A non-markdown file to open in editor
-
-                    // First, try with .md extension (wiki-style links)
-                    let md_path = PathBuf::from(format!("{}.md", path.display()));
-                    let absolute_md_path = current_dir.join(&md_path);
-
-                    if absolute_md_path.exists() && !absolute_md_path.is_symlink() {
-                        // Found markdown file with .md extension (exists check passed)
-                        self.load_file(&md_path, anchor.as_deref())?;
-                        self.status_message = Some(format!("✓ Opened {}.md", filename));
-                        self.exit_link_follow_mode();
-                    } else {
-                        // Try the path as-is
-                        let absolute_path = current_dir.join(&path);
-
-                        if absolute_path.exists() && !absolute_path.is_symlink() {
-                            // File exists - open in editor (non-markdown)
-                            self.pending_editor_file = Some(absolute_path);
-                            self.exit_link_follow_mode();
-                        } else {
-                            // File doesn't exist - prompt to create markdown file
-                            let relative_path = if path.extension().is_none() {
-                                PathBuf::from(format!("{}.md", path.display()))
-                            } else {
-                                path.clone()
-                            };
-                            self.load_file(&relative_path, anchor.as_deref())?;
-                            // Only exit link follow mode if we're not prompting for file creation
-                            if self.mode != AppMode::ConfirmFileCreate {
-                                self.status_message =
-                                    Some(format!("✓ Opened {}", relative_path.display()));
-                                self.exit_link_follow_mode();
-                            }
-                        }
-                    }
+                if self.resolve_relative_file_link(&path, &anchor)? {
+                    self.status_message = Some(format!("✓ Opened {}", filename));
+                    self.exit_link_follow_mode();
                 }
                 Ok(())
             }
@@ -4379,7 +4336,7 @@ impl App {
         // Reset content scroll
         self.content_scroll = 0;
         let content_lines = self.document.content.lines().count();
-        self.content_height = content_lines as u16;
+        self.content_height = content_lines;
         self.content_scroll_state = ScrollbarState::new(content_lines);
 
         // Clear previous selection tracking
@@ -4497,7 +4454,7 @@ impl App {
         }
 
         // Restore scroll position (may be adjusted if content changed)
-        if current_scroll < self.content_height {
+        if (current_scroll as usize) < self.content_height {
             self.content_scroll = current_scroll;
             self.content_scroll_state = self.content_scroll_state.position(current_scroll as usize);
         }
@@ -4513,13 +4470,7 @@ impl App {
         }
 
         // Get current section content to index
-        let content = if let Some(selected) = self.selected_heading_text() {
-            self.document
-                .extract_section(selected)
-                .unwrap_or_else(|| self.document.content.clone())
-        } else {
-            self.document.content.clone()
-        };
+        let content = self.current_section_content();
 
         // Parse content into blocks
         use crate::parser::content::parse_content;
@@ -4672,13 +4623,7 @@ impl App {
 
     /// Re-index interactive elements after state changes
     pub fn reindex_interactive_elements(&mut self) {
-        let content = if let Some(selected) = self.selected_heading_text() {
-            self.document
-                .extract_section(selected)
-                .unwrap_or_else(|| self.document.content.clone())
-        } else {
-            self.document.content.clone()
-        };
+        let content = self.current_section_content();
 
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
@@ -4695,13 +4640,7 @@ impl App {
     ) -> Result<(), String> {
         // Get the checkbox content text to use as identifier
         let checkbox_content = {
-            let content = if let Some(selected) = self.selected_heading_text() {
-                self.document
-                    .extract_section(selected)
-                    .unwrap_or_else(|| self.document.content.clone())
-            } else {
-                self.document.content.clone()
-            };
+            let content = self.current_section_content();
 
             use crate::parser::content::parse_content;
             let blocks = parse_content(&content, 0);
@@ -4758,7 +4697,7 @@ impl App {
         self.reindex_interactive_elements();
 
         // Restore scroll position (clamped to valid range)
-        self.content_scroll = saved_scroll.min(self.content_height.saturating_sub(1));
+        self.content_scroll = saved_scroll.min(self.max_content_scroll());
         self.content_scroll_state = self
             .content_scroll_state
             .position(self.content_scroll as usize);
@@ -4861,56 +4800,8 @@ impl App {
                 Ok(())
             }
             LinkTarget::RelativeFile { path, anchor } => {
-                // Check if the file has a markdown extension
-                let has_md_extension = Self::is_markdown_extension(path);
-
-                let current_dir = self
-                    .current_file_path
-                    .parent()
-                    .ok_or("Cannot determine current directory")?;
-
-                if has_md_extension {
-                    // Explicit markdown extension - load in treemd
-                    self.load_file(path, anchor.as_deref())?;
-                    // Only exit interactive mode if we're not prompting for file creation
-                    if self.mode != AppMode::ConfirmFileCreate {
-                        self.exit_interactive_mode();
-                    }
-                } else {
-                    // No markdown extension - could be:
-                    // 1. A markdown file without extension (common in wikis)
-                    // 2. A non-markdown file to open in editor
-
-                    // First, try with .md extension (wiki-style links)
-                    let md_path = PathBuf::from(format!("{}.md", path.display()));
-                    let absolute_md_path = current_dir.join(&md_path);
-
-                    if absolute_md_path.exists() && !absolute_md_path.is_symlink() {
-                        // Found markdown file with .md extension (exists check passed)
-                        self.load_file(&md_path, anchor.as_deref())?;
-                        self.exit_interactive_mode();
-                    } else {
-                        // Try the path as-is
-                        let absolute_path = current_dir.join(path);
-
-                        if absolute_path.exists() && !absolute_path.is_symlink() {
-                            // File exists - open in editor (non-markdown)
-                            self.pending_editor_file = Some(absolute_path);
-                            self.exit_interactive_mode();
-                        } else {
-                            // File doesn't exist - prompt to create markdown file
-                            let relative_path = if path.extension().is_none() {
-                                PathBuf::from(format!("{}.md", path.display()))
-                            } else {
-                                path.clone()
-                            };
-                            self.load_file(&relative_path, anchor.as_deref())?;
-                            // Only exit interactive mode if we're not prompting for file creation
-                            if self.mode != AppMode::ConfirmFileCreate {
-                                self.exit_interactive_mode();
-                            }
-                        }
-                    }
+                if self.resolve_relative_file_link(path, anchor)? {
+                    self.exit_interactive_mode();
                 }
                 Ok(())
             }
@@ -4960,13 +4851,7 @@ impl App {
                 &element.element_type
         {
             // Parse current section to get table data
-            let content = if let Some(selected) = self.selected_heading_text() {
-                self.document
-                    .extract_section(selected)
-                    .unwrap_or_else(|| self.document.content.clone())
-            } else {
-                self.document.content.clone()
-            };
+            let content = self.current_section_content();
 
             use crate::parser::content::parse_content;
             let blocks = parse_content(&content, 0);
@@ -5125,13 +5010,7 @@ impl App {
         use crate::parser::output::Block;
 
         // Get the current section content to find the right table
-        let section_content = if let Some(heading_text) = self.selected_heading_text() {
-            self.document
-                .extract_section(heading_text)
-                .unwrap_or_else(|| self.document.content.clone())
-        } else {
-            self.document.content.clone()
-        };
+        let section_content = self.current_section_content();
 
         // Parse to find the table block
         let blocks = parse_content(&section_content, 0);
@@ -5147,9 +5026,14 @@ impl App {
                     .filter(|b| matches!(b, Block::Table { .. }))
                     .count();
 
-                // Find where this section starts in the full file and count tables before it
-                let section_start = self.document.content.find(&section_content).unwrap_or(0);
-                let content_before_section = &self.document.content[..section_start];
+                // Use heading offset to find section start (avoids unreliable string search)
+                let section_start = self
+                    .selected_heading_text()
+                    .and_then(|text| self.document.find_heading(text))
+                    .map(|h| h.offset)
+                    .unwrap_or(0);
+                let content_before_section = &self.document.content
+                    [..section_start.min(self.document.content.len())];
 
                 // Count tables (groups of | lines) before section
                 let mut table_count_before = 0;
