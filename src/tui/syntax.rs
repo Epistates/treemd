@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use syntect::easy::HighlightLines;
@@ -11,10 +13,18 @@ pub struct SyntaxHighlighter {
 }
 
 impl SyntaxHighlighter {
-    pub fn new() -> Self {
+    pub fn new(theme: &str, theme_dir: Option<PathBuf>) -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();
-        let theme_set = ThemeSet::load_defaults();
-        let theme = theme_set.themes["base16-ocean.dark"].clone();
+        let mut theme_set = ThemeSet::load_defaults();
+        if let Some(dir) = theme_dir {
+            // Load the user themes if any (silently ignore errors)
+            let _ = theme_set.add_from_folder(dir);
+        }
+
+        let theme = theme_set.themes.get(theme).cloned().unwrap_or_else(|| {
+            // Fallback to the first theme (we know there is one since `load_defaults was used`)
+            theme_set.themes.first_entry().unwrap().get().clone()
+        });
 
         Self { syntax_set, theme }
     }
@@ -80,11 +90,5 @@ impl SyntaxHighlighter {
             .next()
             .unwrap_or("text")
             .to_lowercase()
-    }
-}
-
-impl Default for SyntaxHighlighter {
-    fn default() -> Self {
-        Self::new()
     }
 }

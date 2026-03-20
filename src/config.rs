@@ -8,6 +8,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(skip)]
+    pub path: Option<PathBuf>,
+
     #[serde(default)]
     pub ui: UiConfig,
 
@@ -37,6 +40,9 @@ pub struct Config {
 pub struct UiConfig {
     #[serde(default = "default_theme")]
     pub theme: String,
+
+    #[serde(default = "default_code_theme")]
+    pub code_theme: String,
 
     #[serde(default = "default_outline_width")]
     pub outline_width: u16,
@@ -241,6 +247,7 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             theme: default_theme(),
+            code_theme: default_code_theme(),
             outline_width: default_outline_width(),
             tree_style: default_tree_style(),
         }
@@ -264,6 +271,10 @@ fn default_theme() -> String {
     "OceanDark".to_string()
 }
 
+fn default_code_theme() -> String {
+    "base16-ocean.dark".to_string()
+}
+
 fn default_outline_width() -> u16 {
     30
 }
@@ -284,55 +295,56 @@ impl Config {
     /// - macOS: ~/Library/Application Support/treemd/config.toml
     /// - Linux: ~/.config/treemd/config.toml
     /// - Windows: %APPDATA%/treemd/config.toml
-    pub fn config_path() -> Option<PathBuf> {
+    fn config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|p| p.join("treemd").join("config.toml"))
     }
 
-    /// Load config from file, or return default if file doesn't exist
+    /// Resolve the config file path
     /// On macOS, checks ~/.config/treemd first, then falls back to ~/Library/Application Support
-    pub fn load() -> Self {
+    fn resolve_config_path() -> Option<PathBuf> {
         #[cfg(target_os = "macos")]
-        {
-            // Prefer XDG-style path on macOS for CLI tools
-            if let Some(xdg_path) = Self::xdg_config_path()
-                && let Ok(contents) = fs::read_to_string(&xdg_path)
-            {
-                match toml::from_str(&contents) {
-                    Ok(config) => return config,
-                    Err(e) => {
-                        eprintln!(
-                            "warning: failed to parse config {}: {} (using defaults)",
-                            xdg_path.display(),
-                            e
-                        );
-                        return Self::default();
-                    }
-                }
-            }
-        }
+        return Self::xdg_config_path().or_else(Self::config_path);
 
-        // Fall back to platform-specific path
+        #[cfg(not(target_os = "macos"))]
         Self::config_path()
-            .and_then(|path| {
-                let contents = fs::read_to_string(&path).ok()?;
-                match toml::from_str(&contents) {
-                    Ok(config) => Some(config),
-                    Err(e) => {
-                        eprintln!(
-                            "warning: failed to parse config {}: {} (using defaults)",
-                            path.display(),
-                            e
-                        );
-                        None
-                    }
-                }
+    }
+
+    /// Load the configuration file, falling back to `Default` on error.
+    fn load_from_path(path: &PathBuf) -> Self {
+        let Ok(content) = fs::read_to_string(&path) else {
+            return Self::default();
+        };
+
+        match toml::from_str::<Self>(&content) {
+            Ok(config) => return config,
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to parse config {}: {} (using defaults)",
+                    path.display(),
+                    e
+                );
+                return Self::default();
+            }
+        };
+    }
+
+    /// Resolve and load the configuration file, falling back to `Default` if any step fails.
+    pub fn load() -> Self {
+        Self::resolve_config_path()
+            .map(|path| {
+                let mut config = Self::load_from_path(&path);
+                config.path = Some(path.to_owned());
+                config
             })
             .unwrap_or_default()
     }
 
     /// Save config to file
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = Self::config_path().ok_or("Could not determine config directory")?;
+        let path = self
+            .path
+            .as_ref()
+            .ok_or("Could not determine config directory")?;
 
         // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
@@ -397,5 +409,14 @@ impl Config {
     /// Check if compact (gapless) tree style is enabled
     pub fn is_compact_tree(&self) -> bool {
         self.ui.tree_style == "compact"
+    }
+
+    /// Get the path of the directory that contains the user's sublime color schemes
+    /// (used for syntax highlighting in code blocks)
+    pub fn code_theme_dir_path(&self) -> Option<PathBuf> {
+        self.path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(|parent| parent.join("code-themes"))
     }
 }

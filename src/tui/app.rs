@@ -503,6 +503,11 @@ impl App {
             .with_color_mode(color_mode, current_theme)
             .with_custom_colors(&config.theme, color_mode);
 
+        // Load sublime color scheme directory
+        let code_theme_dir = config.code_theme_dir_path();
+        // Load sublime color scheme name (for code higlighting)
+        let code_theme = config.ui.code_theme.as_str();
+
         // Load outline width from config
         let outline_width = config.ui.outline_width;
 
@@ -531,7 +536,7 @@ impl App {
             show_search: false,
             outline_search_active: false,
             search_query: String::new(),
-            highlighter: SyntaxHighlighter::new(),
+            highlighter: SyntaxHighlighter::new(code_theme, code_theme_dir),
             show_outline: true,
             outline_width,
             config_has_custom_outline_width,
