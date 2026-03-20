@@ -4,7 +4,7 @@ use opensesame::EditorConfig;
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -303,29 +303,36 @@ impl Config {
     /// On macOS, checks ~/.config/treemd first, then falls back to ~/Library/Application Support
     fn resolve_config_path() -> Option<PathBuf> {
         #[cfg(target_os = "macos")]
-        return Self::xdg_config_path().or_else(Self::config_path);
+        {
+            if let Some(xdg_path) = Self::xdg_config_path()
+                && xdg_path.exists()
+            {
+                return Some(xdg_path);
+            }
+            Self::config_path()
+        }
 
         #[cfg(not(target_os = "macos"))]
         Self::config_path()
     }
 
     /// Load the configuration file, falling back to `Default` on error.
-    fn load_from_path(path: &PathBuf) -> Self {
-        let Ok(content) = fs::read_to_string(&path) else {
+    fn load_from_path(path: &Path) -> Self {
+        let Ok(content) = fs::read_to_string(path) else {
             return Self::default();
         };
 
         match toml::from_str::<Self>(&content) {
-            Ok(config) => return config,
+            Ok(config) => config,
             Err(e) => {
                 eprintln!(
                     "warning: failed to parse config {}: {} (using defaults)",
                     path.display(),
                     e
                 );
-                return Self::default();
+                Self::default()
             }
-        };
+        }
     }
 
     /// Resolve and load the configuration file, falling back to `Default` if any step fails.
@@ -333,7 +340,7 @@ impl Config {
         Self::resolve_config_path()
             .map(|path| {
                 let mut config = Self::load_from_path(&path);
-                config.path = Some(path.to_owned());
+                config.path = Some(path);
                 config
             })
             .unwrap_or_default()
@@ -352,7 +359,7 @@ impl Config {
         }
 
         let contents = toml::to_string_pretty(self)?;
-        fs::write(&path, contents)?;
+        fs::write(path, contents)?;
 
         Ok(())
     }
