@@ -350,6 +350,7 @@ pub struct App {
     pub file_search_active: bool,         // Whether search input is active
     pub startup_needs_file_picker: bool,  // True if started without file arg
     pub file_picker_dir: Option<PathBuf>, // Custom directory for file picker
+    pub show_hidden_dirs: bool,           // Whether to show hidden (dot) directories
 
     pub file_history: Vec<FileState>,   // Back navigation stack
     pub file_future: Vec<FileState>,    // Forward navigation stack (for undo back)
@@ -572,6 +573,7 @@ impl App {
             file_search_active: false,
             startup_needs_file_picker: false,
             file_picker_dir: None,
+            show_hidden_dirs: false,
 
             file_history: Vec::new(),
             file_future: Vec::new(),
@@ -1391,6 +1393,10 @@ impl App {
             }
             ParentDirectory => {
                 self.file_picker_parent_dir();
+            }
+            ToggleHiddenDirs => {
+                self.show_hidden_dirs = !self.show_hidden_dirs;
+                self.scan_markdown_files();
             }
 
             // === Dialog Actions ===
@@ -3737,7 +3743,7 @@ impl App {
                     && path
                         .file_name()
                         .and_then(|n| n.to_str())
-                        .map(|name| !name.starts_with('.'))
+                        .map(|name| self.show_hidden_dirs || !name.starts_with('.'))
                         .unwrap_or(false)
                 {
                     dirs.push(path);

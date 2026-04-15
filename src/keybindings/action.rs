@@ -129,6 +129,8 @@ pub enum Action {
     OpenFilePicker,
     /// Navigate to parent directory in file picker
     ParentDirectory,
+    /// Toggle visibility of hidden (dot) directories in file picker
+    ToggleHiddenDirs,
 
     // === Dialog Actions ===
     /// Confirm action in dialog
@@ -279,6 +281,7 @@ impl Action {
             Action::UndoEdit => "Undo last edit",
             Action::OpenFilePicker => "Open file picker",
             Action::ParentDirectory => "Go to parent directory",
+            Action::ToggleHiddenDirs => "Toggle hidden directories",
 
             // Dialog
             Action::ConfirmAction => "Confirm",
@@ -396,7 +399,8 @@ impl Action {
             | Action::OpenInEditor
             | Action::UndoEdit
             | Action::OpenFilePicker
-            | Action::ParentDirectory => "Files",
+            | Action::ParentDirectory
+            | Action::ToggleHiddenDirs => "Files",
 
             Action::ConfirmAction
             | Action::CancelAction
