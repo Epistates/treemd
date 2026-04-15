@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Toggle hidden files and directories in file picker** - Press `h` in the file picker to toggle visibility of dot-prefixed files and directories (e.g. `.obsidian/`, `.notes.md`); rebindable via the keybindings config ([#52](https://github.com/Epistates/treemd/pull/52)) — thanks to [@ktaka-ccmp](https://github.com/ktaka-ccmp) for the original directory-toggle implementation, extended in follow-up to cover hidden files as well
+
 ### Fixed
 
 - **Content height u16 truncation** - Changed `content_height` from `u16` to `usize` to prevent silent overflow on documents with >65535 rendered lines; scroll clamped at ratatui's u16 boundary

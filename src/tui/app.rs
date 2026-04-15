@@ -350,7 +350,7 @@ pub struct App {
     pub file_search_active: bool,         // Whether search input is active
     pub startup_needs_file_picker: bool,  // True if started without file arg
     pub file_picker_dir: Option<PathBuf>, // Custom directory for file picker
-    pub show_hidden_dirs: bool,           // Whether to show hidden (dot) directories
+    pub show_hidden: bool,                // Whether to show hidden (dot) files and directories
 
     pub file_history: Vec<FileState>,   // Back navigation stack
     pub file_future: Vec<FileState>,    // Forward navigation stack (for undo back)
@@ -573,7 +573,7 @@ impl App {
             file_search_active: false,
             startup_needs_file_picker: false,
             file_picker_dir: None,
-            show_hidden_dirs: false,
+            show_hidden: false,
 
             file_history: Vec::new(),
             file_future: Vec::new(),
@@ -1394,8 +1394,8 @@ impl App {
             ParentDirectory => {
                 self.file_picker_parent_dir();
             }
-            ToggleHiddenDirs => {
-                self.show_hidden_dirs = !self.show_hidden_dirs;
+            ToggleHidden => {
+                self.show_hidden = !self.show_hidden;
                 self.scan_markdown_files();
             }
 
@@ -3737,15 +3737,17 @@ impl App {
             for entry in entries.filter_map(|e| e.ok()) {
                 let ft = entry.file_type().ok();
                 let path = entry.path();
+                let is_visible = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|name| self.show_hidden || !name.starts_with('.'))
+                    .unwrap_or(false);
+                if !is_visible {
+                    continue;
+                }
                 if ft.map(|t| t.is_file()).unwrap_or(false) && Self::is_markdown_extension(&path) {
                     files.push(path);
-                } else if ft.map(|t| t.is_dir()).unwrap_or(false)
-                    && path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|name| self.show_hidden_dirs || !name.starts_with('.'))
-                        .unwrap_or(false)
-                {
+                } else if ft.map(|t| t.is_dir()).unwrap_or(false) {
                     dirs.push(path);
                 }
             }

@@ -1002,7 +1002,7 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     let footer_text = if app.file_search_active {
         "Type to filter • Enter: select • Esc: stop search • Backspace: delete"
     } else {
-        "j/k: Navigate • /: Filter • Enter: Open • Backspace: Parent dir • h: Hidden dirs • Esc: Cancel"
+        "j/k: Navigate • /: Filter • Enter: Open • Backspace: Parent dir • h: Hidden • Esc: Cancel"
     };
     lines.push(Line::from(vec![Span::styled(
         footer_text,

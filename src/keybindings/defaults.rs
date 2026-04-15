@@ -464,8 +464,8 @@ fn add_file_picker_mode(kb: &mut Keybindings) {
     // Search
     bind(kb, FilePicker, "/", LinkSearch);
 
-    // Toggle hidden directories
-    bind(kb, FilePicker, "h", ToggleHiddenDirs);
+    // Toggle hidden files and directories
+    bind(kb, FilePicker, "h", ToggleHidden);
 
     // Exit
     bind(kb, FilePicker, "Escape", ExitMode);
