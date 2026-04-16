@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-04-16
+
 ### Added
 
 - **Toggle hidden files and directories in file picker** - Press `h` in the file picker to toggle visibility of dot-prefixed files and directories (e.g. `.obsidian/`, `.notes.md`); rebindable via the keybindings config ([#52](https://github.com/Epistates/treemd/pull/52)) — thanks to [@ktaka-ccmp](https://github.com/ktaka-ccmp) for the original directory-toggle implementation, extended in follow-up to cover hidden files as well
@@ -21,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Upgraded all dependencies to latest** - Major: `resvg` 0.44 → 0.47. Minor: `clap`/`clap_complete` 4.5 → 4.6, `indextree` 4.7 → 4.8, `indexmap` 2.13 → 2.14, `tempfile` 3.26 → 3.27, `toml` 1.0 → 1.1, `notify` 8.0 → 8.2. Plus refreshed transitive deps (`image`, `uuid`, `wayland-*`, `wasm-bindgen`, `zerocopy`, etc.)
 - **Extracted `current_section_content()` helper** - Deduplicated 9 instances of the section-content-extraction pattern across `app.rs` (-70 lines)
 - **Extracted `resolve_relative_file_link()` helper** - Deduplicated identical relative-file-link resolution logic between `follow_selected_link` and `follow_link_from_interactive` (-50 lines)
 - **Extracted `with_tty_stdin()` helper in tty.rs** - Deduplicated fd-swap logic shared by `read_event` and `poll_event` (-40 lines)
