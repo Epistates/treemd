@@ -253,4 +253,51 @@ Also [[Another Valid]]
             panic!("Expected Details block, got {:?}", blocks[0]);
         }
     }
+
+    #[test]
+    fn test_heading_inline_code_not_leaked_to_paragraph() {
+        // Regression test for: inline code in headings was leaking into the
+        // next paragraph's content and inline element buffer.
+        let markdown = "### Convert `foo` to `bar`\n\nReplace `baz` with a redirect:";
+        let blocks = parse_content(markdown, 0);
+
+        assert_eq!(blocks.len(), 2);
+
+        // Heading must contain the Code inline elements
+        if let Block::Heading { inline, .. } = &blocks[0] {
+            let code_values: Vec<&str> = inline
+                .iter()
+                .filter_map(|e| {
+                    if let turbovault_parser::InlineElement::Code { value } = e {
+                        Some(value.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                code_values,
+                vec!["foo", "bar"],
+                "heading inline should contain both Code elements"
+            );
+        } else {
+            panic!("Expected Heading block, got {:?}", blocks[0]);
+        }
+
+        // Paragraph must NOT start with code leaked from the heading
+        if let Block::Paragraph { content, inline } = &blocks[1] {
+            assert!(
+                content.starts_with("Replace"),
+                "paragraph content should start with 'Replace', got: {content:?}"
+            );
+            if let Some(first) = inline.first() {
+                assert!(
+                    matches!(first, turbovault_parser::InlineElement::Text { .. }),
+                    "paragraph should start with Text, not leaked Code: {first:?}"
+                );
+            }
+        } else {
+            panic!("Expected Paragraph block, got {:?}", blocks[1]);
+        }
+    }
 }
