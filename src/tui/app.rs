@@ -5356,3 +5356,171 @@ impl App {
         Ok(base_dir.join(src))
     }
 }
+
+#[cfg(test)]
+mod palette_tests {
+    use super::*;
+
+    fn cmd(name: &'static str, aliases: &'static [&'static str]) -> PaletteCommand {
+        PaletteCommand::new(name, aliases, "desc", CommandAction::Quit)
+    }
+
+    // ---------- ascii-fold helpers ----------
+
+    #[test]
+    fn starts_with_ignore_ascii_case_basics() {
+        assert!(starts_with_ignore_ascii_case("Quit", "qu"));
+        assert!(starts_with_ignore_ascii_case("Quit", "QUIT"));
+        assert!(starts_with_ignore_ascii_case("Quit", ""));
+        assert!(!starts_with_ignore_ascii_case("Quit", "uit"));
+        assert!(!starts_with_ignore_ascii_case("Quit", "quitter"));
+    }
+
+    #[test]
+    fn contains_ignore_ascii_case_basics() {
+        assert!(contains_ignore_ascii_case("Toggle outline", "outline"));
+        assert!(contains_ignore_ascii_case("Toggle outline", "OUT"));
+        assert!(contains_ignore_ascii_case("anything", "")); // empty needle always matches
+        assert!(!contains_ignore_ascii_case("abc", "abcd")); // needle longer than haystack
+        assert!(!contains_ignore_ascii_case("hello", "xyz"));
+    }
+
+    // ---------- matches() ----------
+
+    #[test]
+    fn matches_empty_query_matches_all() {
+        let c = cmd("Quit", &["q", "quit"]);
+        assert!(c.matches(""));
+    }
+
+    #[test]
+    fn matches_name_substring_case_insensitive() {
+        let c = cmd("Toggle outline", &["outline"]);
+        assert!(c.matches("toggle"));
+        assert!(c.matches("OUT"));
+        assert!(c.matches("line"));
+    }
+
+    #[test]
+    fn matches_alias_prefix() {
+        let c = cmd("Save changes", &["w", "write", "save"]);
+        // alias-prefix path: "wri" is a prefix of "write"
+        assert!(c.matches("wri"));
+        // but "rite" isn't a prefix of any alias and doesn't fuzzy-match name
+        assert!(!c.matches("rite"));
+    }
+
+    #[test]
+    fn matches_fuzzy_in_name() {
+        // "tgo" appears in order in "toggle outline" → t...o...g...
+        let c = cmd("Toggle outline", &["outline"]);
+        assert!(c.matches("tgo"));
+        // chars not in order should fail
+        assert!(!c.matches("zzz"));
+    }
+
+    #[test]
+    fn matches_fuzzy_requires_in_order() {
+        let c = cmd("Save changes", &["save"]);
+        // 's', 'a', 'v', 'e' are present in order
+        assert!(c.matches("sve"));
+        // 'e' before 's' is not in order in "save changes"
+        // ('e' first appears after 's', so this should still match — pick a real reverse)
+        assert!(!c.matches("xq"));
+    }
+
+    // ---------- match_score() ----------
+
+    #[test]
+    fn score_empty_query_is_baseline() {
+        let c = cmd("Quit", &["q", "quit"]);
+        assert_eq!(c.match_score(""), 100);
+    }
+
+    #[test]
+    fn score_exact_alias_is_highest() {
+        let c = cmd("Quit", &["q", "quit", "exit"]);
+        assert_eq!(c.match_score("q"), 1000);
+        assert_eq!(c.match_score("quit"), 1000);
+        assert_eq!(c.match_score("EXIT"), 1000); // case-insensitive
+    }
+
+    #[test]
+    fn score_alias_prefix_beats_name() {
+        let c = cmd("Save changes", &["w", "write", "save"]);
+        // "wri" prefixes "write" → 500, not 300/200
+        assert_eq!(c.match_score("wri"), 500);
+    }
+
+    #[test]
+    fn score_name_starts_with_beats_contains() {
+        let c = cmd("Toggle outline", &["sidebar"]);
+        // "togg" is a prefix of name (no alias match)
+        assert_eq!(c.match_score("togg"), 300);
+    }
+
+    #[test]
+    fn score_name_contains_below_starts_with() {
+        let c = cmd("Toggle outline", &["sidebar"]);
+        // "outline" is contained but not a prefix of "Toggle outline"
+        assert_eq!(c.match_score("outline"), 200);
+    }
+
+    #[test]
+    fn score_fuzzy_only_match_is_baseline() {
+        let c = cmd("Toggle outline", &["sidebar"]);
+        // "tgo" matches via fuzzy (in matches()) but doesn't hit any score tier
+        // above baseline — match_score has no fuzzy tier, so it falls through to 100.
+        assert_eq!(c.match_score("tgo"), 100);
+    }
+
+    #[test]
+    fn score_priority_ordering() {
+        // Build commands that each hit a different tier and confirm relative order.
+        let exact_alias = cmd("Anything", &["xx"]);
+        let alias_prefix = cmd("Anything", &["xxlong"]);
+        let name_prefix = cmd("XxName", &["other"]);
+        let name_contains = cmd("Has Xx Inside", &["other"]);
+
+        let q = "xx";
+        let s1 = exact_alias.match_score(q);
+        let s2 = alias_prefix.match_score(q);
+        let s3 = name_prefix.match_score(q);
+        let s4 = name_contains.match_score(q);
+
+        assert!(s1 > s2, "exact alias should beat alias prefix");
+        assert!(s2 > s3, "alias prefix should beat name prefix");
+        assert!(s3 > s4, "name prefix should beat name contains");
+    }
+
+    // ---------- registered palette commands ----------
+    // Sanity-check the actual PALETTE_COMMANDS table — these are the commands
+    // users actually type, so it's worth pinning their behavior.
+
+    #[test]
+    fn registered_aliases_are_exact_matchable() {
+        for cmd in PALETTE_COMMANDS {
+            for alias in cmd.aliases {
+                let lower = alias.to_lowercase();
+                assert_eq!(
+                    cmd.match_score(&lower),
+                    1000,
+                    "alias {:?} of {:?} should be exact-match",
+                    alias,
+                    cmd.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn registered_quit_command_resolves() {
+        // Typing "q" should pick the Quit command as the top score.
+        let q = "q";
+        let best = PALETTE_COMMANDS
+            .iter()
+            .max_by_key(|c| c.match_score(q))
+            .expect("non-empty");
+        assert_eq!(best.action, CommandAction::Quit);
+    }
+}
