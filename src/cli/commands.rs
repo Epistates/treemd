@@ -38,8 +38,15 @@ pub struct Cli {
     #[arg(add = markdown_file_completer())]
     pub file: Vec<PathBuf>,
 
-    #[command(subcommand)]
-    pub command: Option<Command>,
+    /// Show heading at or before a specific line number (non-interactive)
+    ///
+    /// Finds and prints the heading that appears at or immediately before the
+    /// given 1-indexed line. Useful for jumping to a location in the document
+    /// structure (e.g. from an editor cursor position).
+    ///
+    /// Example: --at-line 42
+    #[arg(long = "at-line", value_name = "LINE")]
+    pub at_line: Option<usize>,
 
     /// List all headings in the document (non-interactive)
     ///
@@ -193,21 +200,6 @@ pub enum ColorModeArg {
     /// Force 256-color mode
     #[value(name = "256")]
     Color256,
-}
-
-#[derive(Debug, clap::Subcommand)]
-pub enum Command {
-    /// Show heading at specific line number
-    ///
-    /// Finds and displays the heading that appears at or before the given line number.
-    /// Useful for jumping to a specific location in the document structure.
-    AtLine {
-        /// Line number in the markdown file
-        ///
-        /// The line number to search for. Returns the heading at or immediately
-        /// before this line.
-        line: usize,
-    },
 }
 
 #[derive(Debug, Clone, ValueEnum)]

@@ -213,7 +213,7 @@ fn main() -> Result<()> {
         && !args.tree
         && !args.count
         && args.section.is_none()
-        && args.command.is_none()
+        && args.at_line.is_none()
         && !args.setup_completions
     {
         // Load configuration
@@ -355,6 +355,12 @@ fn handle_cli_mode(args: &Cli, doc: &Document) {
         doc.headings.iter().collect()
     };
 
+    // --at-line takes precedence over the other flag-based modes.
+    if let Some(line) = args.at_line {
+        print_heading_at_line(doc, line);
+        return;
+    }
+
     // Handle different modes
     if args.count {
         print_heading_counts(doc);
@@ -364,6 +370,44 @@ fn handle_cli_mode(args: &Cli, doc: &Document) {
         extract_section(doc, section_name);
     } else if args.list {
         print_headings(&headings, &args.output, doc);
+    }
+}
+
+/// Print the heading at or immediately before `target_line` (1-indexed).
+///
+/// Used by the `at-line` subcommand. Walks the heading list once, counting
+/// newlines between consecutive offsets so the whole call is O(content_len)
+/// rather than O(headings * content_len).
+fn print_heading_at_line(doc: &Document, target_line: usize) {
+    if target_line == 0 {
+        eprintln!("Error: line number must be >= 1");
+        process::exit(1);
+    }
+
+    let mut best: Option<&parser::Heading> = None;
+    let mut prev_line = 1usize;
+    let mut prev_offset = 0usize;
+
+    for h in &doc.headings {
+        let h_line = prev_line + doc.content[prev_offset..h.offset].matches('\n').count();
+        if h_line <= target_line {
+            best = Some(h);
+        } else {
+            break;
+        }
+        prev_line = h_line;
+        prev_offset = h.offset;
+    }
+
+    match best {
+        Some(h) => {
+            let prefix = "#".repeat(h.level);
+            println!("{} {}", prefix, h.text);
+        }
+        None => {
+            eprintln!("No heading at or before line {}", target_line);
+            process::exit(1);
+        }
     }
 }
 
@@ -437,29 +481,19 @@ fn extract_section(doc: &Document, section_name: &str) {
         }
     };
 
-    // Find the section in content
-    // This is a simple implementation - could be improved
-    let search = format!("{} {}", "#".repeat(heading.level), heading.text);
-    if let Some(start) = doc.content.find(&search) {
-        // Find next heading at same or higher level
-        let after = &doc.content[start..];
-        let section_level = heading.level;
+    // Use stored byte offsets instead of string-searching the rendered heading.
+    // String search is wrong when the heading source has inline markdown
+    // (e.g. `## **Bold** Section`) since heading.text is the stripped form.
+    let start = heading.offset;
+    let level = heading.level;
+    let end = doc
+        .headings
+        .iter()
+        .find(|h| h.offset > start && h.level <= level)
+        .map(|h| h.offset)
+        .unwrap_or(doc.content.len());
 
-        // Find end of section
-        let end_pos = doc
-            .headings
-            .iter()
-            .skip_while(|h| h.text != heading.text)
-            .skip(1)
-            .find(|h| h.level <= section_level)
-            .and_then(|next_heading| {
-                let search = format!("{} {}", "#".repeat(next_heading.level), next_heading.text);
-                after.find(&search)
-            })
-            .unwrap_or(after.len());
-
-        println!("{}", &after[..end_pos].trim());
-    }
+    println!("{}", doc.content[start..end].trim());
 }
 
 fn handle_query_mode(doc: &Document, query_str: &str, output_format: Option<&str>) -> Result<()> {

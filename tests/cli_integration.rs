@@ -279,33 +279,88 @@ fn list_reads_markdown_from_stdin() {
 }
 
 // ------------------------------------------------------------------
-// at-line subcommand
+// --at-line
 // ------------------------------------------------------------------
-//
-// NOTE: The `at-line` subcommand is declared in cli/commands.rs but its
-// handler is not wired up in main.rs (handle_cli_mode never inspects
-// args.command). The binary currently exits 1 with no output when
-// `at-line` is invoked. This test is ignored until the handler is
-// implemented; remove the #[ignore] once it's wired up.
 
 #[test]
-#[ignore = "at-line subcommand is parsed but not implemented in main.rs"]
 fn at_line_finds_enclosing_heading() {
     let f = fixture_file();
+    // 1-indexed line number of "## Usage" in FIXTURE.
     let usage_line = FIXTURE
         .lines()
         .position(|l| l.starts_with("## Usage"))
         .expect("Usage heading present")
         + 1;
+    // A line *inside* the Usage section — should resolve to "## Usage".
     let target = usage_line + 1;
-    let (stdout, _, code) = run(&[
-        f.to_str().unwrap(),
-        "at-line",
+    let (stdout, stderr, code) = run(&[
+        "--at-line",
         &target.to_string(),
+        f.to_str().unwrap(),
     ]);
-    assert_eq!(code, 0, "stderr would be: {stdout}");
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "## Usage");
+}
+
+#[test]
+fn at_line_on_heading_line_returns_that_heading() {
+    let f = fixture_file();
+    let install_line = FIXTURE
+        .lines()
+        .position(|l| l.starts_with("## Installation"))
+        .expect("Installation heading present")
+        + 1;
+    let (stdout, _, code) = run(&[
+        "--at-line",
+        &install_line.to_string(),
+        f.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "## Installation");
+}
+
+#[test]
+fn at_line_before_first_heading_exits_nonzero() {
+    // First heading is on line 5; line 2 has no heading at or before it.
+    let dir = std::env::temp_dir().join(format!("treemd-it-noheading-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("doc.md");
+    std::fs::write(&path, "lorem\nipsum\ndolor\nsit\n# Hello\nbody\n").unwrap();
+    let (_, stderr, code) = run(&["--at-line", "2", path.to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("No heading"));
+}
+
+#[test]
+fn at_line_zero_is_rejected() {
+    let f = fixture_file();
+    let (_, stderr, code) = run(&["--at-line", "0", f.to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains(">= 1"));
+}
+
+// ------------------------------------------------------------------
+// -s with formatted heading text (regression: previously broken because
+// main.rs::extract_section did string-search on heading.text, which is
+// the stripped form, so `## **Bold** Section` was never found).
+// ------------------------------------------------------------------
+
+#[test]
+fn section_with_inline_markdown_in_heading() {
+    let dir = std::env::temp_dir().join(format!("treemd-it-fmt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("doc.md");
+    std::fs::write(
+        &path,
+        "# Top\n\n## **Bold** Section\nbody-of-bold\n\n## Next\nbody-of-next\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run(&["-s", "Bold Section", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {stderr}");
     assert!(
-        stdout.contains("Usage") || stdout.contains("## Usage"),
-        "expected Usage heading, got: {stdout}"
+        stdout.contains("body-of-bold"),
+        "expected body of formatted-heading section, got: {stdout:?}"
     );
+    assert!(!stdout.contains("body-of-next"));
 }
