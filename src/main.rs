@@ -365,7 +365,7 @@ fn handle_cli_mode(args: &Cli, doc: &Document) {
     if args.count {
         print_heading_counts(doc);
     } else if args.tree {
-        print_tree(doc, &args.output);
+        print_tree(doc, &args.output, &headings);
     } else if let Some(ref section_name) = args.section {
         extract_section(doc, section_name);
     } else if args.list {
@@ -433,8 +433,19 @@ fn print_headings(headings: &[&parser::Heading], format: &OutputFormat, doc: &Do
     }
 }
 
-fn print_tree(doc: &Document, format: &OutputFormat) {
-    let tree = doc.build_tree();
+fn print_tree(doc: &Document, format: &OutputFormat, headings: &[&parser::Heading]) {
+    // Build the tree from the (possibly filtered) heading subset so that
+    // --tree --filter / --tree --level honor the docstring. When no filter
+    // is in play, `headings` is the full list and we get the same tree as
+    // doc.build_tree().
+    let tree = if headings.len() == doc.headings.len() {
+        doc.build_tree()
+    } else {
+        let owned: Vec<parser::Heading> = headings.iter().map(|&h| h.clone()).collect();
+        // build_tree only inspects self.headings, so empty content is fine.
+        Document::new(String::new(), owned).build_tree()
+    };
+
     let config = treemd::Config::load();
     let compact = config.is_compact_tree();
 
@@ -446,9 +457,10 @@ fn print_tree(doc: &Document, format: &OutputFormat) {
             }
         }
         OutputFormat::Json => {
-            // For JSON, we'll serialize the flat headings list
-            // (Tree serialization would need custom implementation)
-            let json = serde_json::to_string_pretty(&doc.headings)
+            // For JSON, serialize the (filtered) flat headings list.
+            // Tree serialization would need custom implementation.
+            let owned: Vec<parser::Heading> = headings.iter().map(|&h| h.clone()).collect();
+            let json = serde_json::to_string_pretty(&owned)
                 .expect("JSON serialization of headings should not fail");
             println!("{}", json);
         }

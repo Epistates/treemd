@@ -203,6 +203,31 @@ fn tree_output_uses_box_drawing_chars() {
     assert!(stdout.contains("Advanced"));
 }
 
+#[test]
+fn tree_with_filter_narrows_tree() {
+    // Regression: --filter was documented to work with --tree but
+    // print_tree ignored it.
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["--tree", "--filter", "Install", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Installation"));
+    assert!(!stdout.contains("Title"), "non-matching headings leaked");
+    assert!(!stdout.contains("Usage"), "non-matching headings leaked");
+    assert!(!stdout.contains("Conclusion"), "non-matching headings leaked");
+}
+
+#[test]
+fn tree_with_level_narrows_tree() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["--tree", "-L", "2", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Installation"));
+    assert!(stdout.contains("Usage"));
+    assert!(stdout.contains("Conclusion"));
+    assert!(!stdout.contains("# Title"), "h1 leaked: {stdout}");
+    assert!(!stdout.contains("Advanced"), "h3 leaked: {stdout}");
+}
+
 // ------------------------------------------------------------------
 // -s / --section
 // ------------------------------------------------------------------
