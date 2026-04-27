@@ -8,6 +8,7 @@ use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
 use crate::tui::theme::{Theme, ThemeName};
 use crossterm::event::{KeyCode, KeyModifiers};
+use indexmap::IndexMap;
 use ratatui::widgets::{ListState, ScrollbarState};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -109,28 +110,27 @@ impl PaletteCommand {
         }
     }
 
-    /// Check if query matches this command (fuzzy match on name or aliases)
-    pub fn matches(&self, query: &str) -> bool {
-        if query.is_empty() {
-            return true;
-        }
-        let query_lower = query.to_lowercase();
-
-        // Check name
-        if self.name.to_lowercase().contains(&query_lower) {
+    /// Check if query matches this command (fuzzy match on name or aliases).
+    /// `query_lower` is the caller's pre-lowercased query — avoids re-allocating
+    /// per command when filtering the palette.
+    pub fn matches(&self, query_lower: &str) -> bool {
+        if query_lower.is_empty() {
             return true;
         }
 
-        // Check aliases
+        // Aliases and name are static ASCII — compare case-insensitively without
+        // allocating a lowercase copy of each.
+        if contains_ignore_ascii_case(self.name, query_lower) {
+            return true;
+        }
         for alias in self.aliases {
-            if alias.to_lowercase().starts_with(&query_lower) {
+            if starts_with_ignore_ascii_case(alias, query_lower) {
                 return true;
             }
         }
 
-        // Fuzzy match: check if all query chars appear in order in name
-        let name_lower = self.name.to_lowercase();
-        let mut name_chars = name_lower.chars().peekable();
+        // Fuzzy: every char of query appears in order in name (ASCII fold).
+        let mut name_chars = self.name.chars().map(|c| c.to_ascii_lowercase()).peekable();
         for qc in query_lower.chars() {
             loop {
                 match name_chars.next() {
@@ -143,40 +143,50 @@ impl PaletteCommand {
         true
     }
 
-    /// Calculate match score (higher = better match)
-    pub fn match_score(&self, query: &str) -> usize {
-        if query.is_empty() {
+    /// Calculate match score (higher = better match).
+    /// `query_lower` is the caller's pre-lowercased query.
+    pub fn match_score(&self, query_lower: &str) -> usize {
+        if query_lower.is_empty() {
             return 100;
         }
-        let query_lower = query.to_lowercase();
 
-        // Exact alias match = highest score
         for alias in self.aliases {
-            if alias.to_lowercase() == query_lower {
+            if alias.eq_ignore_ascii_case(query_lower) {
                 return 1000;
             }
         }
-
-        // Alias prefix match
         for alias in self.aliases {
-            if alias.to_lowercase().starts_with(&query_lower) {
+            if starts_with_ignore_ascii_case(alias, query_lower) {
                 return 500;
             }
         }
-
-        // Name starts with query
-        if self.name.to_lowercase().starts_with(&query_lower) {
+        if starts_with_ignore_ascii_case(self.name, query_lower) {
             return 300;
         }
-
-        // Name contains query
-        if self.name.to_lowercase().contains(&query_lower) {
+        if contains_ignore_ascii_case(self.name, query_lower) {
             return 200;
         }
-
-        // Fuzzy match score based on how compact the match is
         100
     }
+}
+
+fn starts_with_ignore_ascii_case(haystack: &str, needle_lower: &str) -> bool {
+    haystack.len() >= needle_lower.len()
+        && haystack.as_bytes()[..needle_lower.len()].eq_ignore_ascii_case(needle_lower.as_bytes())
+}
+
+fn contains_ignore_ascii_case(haystack: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle_lower.len() {
+        return false;
+    }
+    let needle_bytes = needle_lower.as_bytes();
+    haystack
+        .as_bytes()
+        .windows(needle_bytes.len())
+        .any(|w| w.eq_ignore_ascii_case(needle_bytes))
 }
 
 /// All available commands
@@ -278,6 +288,76 @@ pub struct SearchMatch {
     pub len: usize,
 }
 
+/// In-document search state (`/` then `n`/`N`).
+#[derive(Debug, Default)]
+pub struct DocSearchState {
+    pub query: String,
+    pub matches: Vec<SearchMatch>,
+    pub current_idx: Option<usize>,
+    /// Whether the input prompt is active (cursor visible).
+    pub active: bool,
+    /// True when search was opened from interactive mode (so it returns there).
+    pub from_interactive: bool,
+    /// If the current match falls inside a link, this is the index into
+    /// `links_in_view`.
+    pub selected_link_idx: Option<usize>,
+}
+
+/// Command palette state.
+#[derive(Debug)]
+pub struct CommandPaletteState {
+    pub query: String,
+    /// Indices into `PALETTE_COMMANDS`, ordered by match score.
+    pub filtered: Vec<usize>,
+    pub selected: usize,
+}
+
+impl Default for CommandPaletteState {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            filtered: (0..PALETTE_COMMANDS.len()).collect(),
+            selected: 0,
+        }
+    }
+}
+
+/// File picker state — files and directories listing, search, selection.
+#[derive(Debug, Default)]
+pub struct FilePickerState {
+    pub files: Vec<PathBuf>,
+    pub dirs: Vec<PathBuf>,
+    pub filtered_file_indices: Vec<usize>,
+    pub filtered_dir_indices: Vec<usize>,
+    /// Selected index into the combined dirs+files list.
+    pub selected: Option<usize>,
+    pub query: String,
+    /// Whether the search input is active (cursor visible).
+    pub active: bool,
+}
+
+/// Link picker state (`f` to open).
+#[derive(Debug, Default)]
+pub struct LinkPickerState {
+    pub filtered_indices: Vec<usize>,
+    pub selected: Option<usize>,
+    pub query: String,
+    pub active: bool,
+}
+
+/// Modal image viewer state.
+#[derive(Default)]
+pub struct ImageModalState {
+    pub path: Option<std::path::PathBuf>,
+    pub state: Option<ratatui_image::protocol::StatefulProtocol>,
+    pub gif_frames: Vec<crate::tui::image_cache::GifFrame>,
+    pub frame_protocols: Vec<ratatui_image::protocol::StatefulProtocol>,
+    pub frame_index: usize,
+    pub last_rendered_frame: Option<usize>,
+    pub last_frame_update: Option<Instant>,
+    pub animation_paused: bool,
+}
+
 /// A pending table cell edit that hasn't been saved to file yet
 #[derive(Debug, Clone)]
 pub struct PendingEdit {
@@ -326,6 +406,10 @@ pub struct App {
     pub theme_picker_selected: usize,
     pub theme_picker_original: Option<ThemeName>, // Original theme before picker opened (for cancel)
     previous_selection: Option<String>,           // Track previous selection to detect changes
+    /// True when the cached content_height/scrollbar may be stale and need
+    /// recomputation on the next `update_content_metrics`. Set by file
+    /// reload, raw-source toggle, etc.
+    metrics_dirty: bool,
 
     // Link following state
     pub mode: AppMode,
@@ -335,22 +419,13 @@ pub struct App {
     pub file_path_changed: bool,    // Flag to signal file watcher needs update
     pub suppress_file_watch: bool,  // Skip next file watch check (after internal save)
     pub links_in_view: Vec<Link>,   // Links in currently displayed content
-    pub filtered_link_indices: Vec<usize>, // Indices into links_in_view after filtering
-    pub selected_link_idx: Option<usize>, // Currently selected index in filtered list
-    pub link_search_query: String,  // Search query for filtering links
-    pub link_search_active: bool,   // Whether search input is active
+    pub link_picker: LinkPickerState,
 
     // File picker state
-    pub files_in_directory: Vec<PathBuf>, // All .md files in directory
-    pub dirs_in_directory: Vec<PathBuf>,  // Subdirectories in directory
-    pub filtered_file_indices: Vec<usize>, // Indices after filtering (files)
-    pub filtered_dir_indices: Vec<usize>, // Indices after filtering (dirs)
-    pub selected_file_idx: Option<usize>, // Selected index in combined list
-    pub file_search_query: String,        // Search query for filtering files
-    pub file_search_active: bool,         // Whether search input is active
-    pub startup_needs_file_picker: bool,  // True if started without file arg
+    pub file_picker: FilePickerState,
+    pub startup_needs_file_picker: bool, // True if started without file arg
     pub file_picker_dir: Option<PathBuf>, // Custom directory for file picker
-    pub show_hidden: bool,                // Whether to show hidden (dot) files and directories
+    pub show_hidden: bool,               // Whether to show hidden (dot) files and directories
 
     pub file_history: Vec<FileState>,   // Back navigation stack
     pub file_future: Vec<FileState>,    // Forward navigation stack (for undo back)
@@ -388,18 +463,11 @@ pub struct App {
     pub pending_file_create: Option<PathBuf>,
     pub pending_file_create_message: Option<String>,
 
-    // Document search state (for in-document / search with n/N navigation)
-    pub doc_search_query: String,
-    pub doc_search_matches: Vec<SearchMatch>,
-    pub doc_search_current_idx: Option<usize>,
-    pub doc_search_active: bool, // Whether search input is active
-    pub doc_search_from_interactive: bool, // Whether search was started from interactive mode
-    pub doc_search_selected_link_idx: Option<usize>, // Index into links_in_view if match is in a link
+    /// In-document search (/ + n/N).
+    pub doc_search: DocSearchState,
 
-    // Command palette state
-    pub command_query: String,
-    pub command_filtered: Vec<usize>, // Indices into PALETTE_COMMANDS
-    pub command_selected: usize,
+    /// Command palette (`:`).
+    pub command_palette: CommandPaletteState,
 
     // Customizable keybindings
     pub keybindings: Keybindings,
@@ -411,19 +479,14 @@ pub struct App {
     pub picker: Option<ratatui_image::picker::Picker>,
 
     // Cached image protocols keyed by resolved path (avoids re-decoding from disk every frame)
-    pub image_protocol_cache: HashMap<PathBuf, ratatui_image::protocol::StatefulProtocol>,
+    /// Decoded image protocols. Bounded LRU-ish cache: insertion-ordered, with
+    /// the oldest entries evicted when capacity is reached. Keeping recently
+    /// seen images survives navigation between sections so the user doesn't
+    /// pay the decode cost on every back-and-forth.
+    pub image_protocol_cache: IndexMap<PathBuf, ratatui_image::protocol::StatefulProtocol>,
 
-    // Image modal viewing state
-    pub viewing_image_path: Option<std::path::PathBuf>,
-    pub viewing_image_state: Option<ratatui_image::protocol::StatefulProtocol>,
-
-    // GIF animation state for modal
-    pub modal_gif_frames: Vec<crate::tui::image_cache::GifFrame>,
-    pub modal_frame_protocols: Vec<ratatui_image::protocol::StatefulProtocol>,
-    pub modal_frame_index: usize,
-    pub modal_last_rendered_frame: Option<usize>,
-    pub modal_last_frame_update: Option<Instant>,
-    pub modal_animation_paused: bool,
+    // Image modal viewing state (path, current frame, GIF playback).
+    pub image_modal: ImageModalState,
 
     // Native Kitty animation (for flicker-free GIF playback)
     pub kitty_animation: Option<KittyAnimation>,
@@ -550,6 +613,7 @@ impl App {
             theme_picker_selected: 0,
             theme_picker_original: None,
             previous_selection: None,
+            metrics_dirty: true,
 
             // Link following state
             mode: AppMode::Normal,
@@ -558,19 +622,10 @@ impl App {
             file_path_changed: false,
             suppress_file_watch: false,
             links_in_view: Vec::new(),
-            filtered_link_indices: Vec::new(),
-            selected_link_idx: None,
-            link_search_query: String::new(),
-            link_search_active: false,
+            link_picker: LinkPickerState::default(),
 
             // File picker state
-            files_in_directory: Vec::new(),
-            dirs_in_directory: Vec::new(),
-            filtered_file_indices: Vec::new(),
-            filtered_dir_indices: Vec::new(),
-            selected_file_idx: None,
-            file_search_query: String::new(),
-            file_search_active: false,
+            file_picker: FilePickerState::default(),
             startup_needs_file_picker: false,
             file_picker_dir: None,
             show_hidden: false,
@@ -611,17 +666,10 @@ impl App {
             pending_file_create_message: None,
 
             // Document search state
-            doc_search_query: String::new(),
-            doc_search_matches: Vec::new(),
-            doc_search_current_idx: None,
-            doc_search_active: false,
-            doc_search_from_interactive: false,
-            doc_search_selected_link_idx: None,
+            doc_search: DocSearchState::default(),
 
             // Command palette state
-            command_query: String::new(),
-            command_filtered: (0..PALETTE_COMMANDS.len()).collect(),
-            command_selected: 0,
+            command_palette: CommandPaletteState::default(),
 
             // Customizable keybindings (loaded from config)
             // Note: keybindings() called before config is moved into struct
@@ -639,19 +687,10 @@ impl App {
             },
 
             // Cached image protocols (populated after index_elements)
-            image_protocol_cache: HashMap::new(),
+            image_protocol_cache: IndexMap::new(),
 
-            // Image modal viewing state
-            viewing_image_path: None,
-            viewing_image_state: None,
-
-            // GIF animation state for modal
-            modal_gif_frames: Vec::new(),
-            modal_frame_protocols: Vec::new(),
-            modal_frame_index: 0,
-            modal_last_rendered_frame: None,
-            modal_last_frame_update: None,
-            modal_animation_paused: false,
+            // Image modal viewing state (path, GIF playback, etc.)
+            image_modal: ImageModalState::default(),
 
             // Native Kitty animation
             kitty_animation: None,
@@ -739,9 +778,11 @@ impl App {
 
     /// Populate the image protocol cache from indexed interactive elements.
     ///
-    /// Iterates all image elements, resolves paths, decodes images, and creates
-    /// stateful protocols. Called after every `index_elements()` to keep cache in sync.
+    /// Decodes any new images and creates stateful protocols, keeping
+    /// previously cached images so navigation back and forth doesn't re-decode.
+    /// Bounded by `IMAGE_CACHE_LIMIT`; oldest entries are evicted when full.
     pub fn populate_image_cache(&mut self) {
+        const IMAGE_CACHE_LIMIT: usize = 32;
         use std::collections::HashSet as ImgSet;
 
         if self.picker.is_none() || !self.images_enabled {
@@ -767,22 +808,13 @@ impl App {
             })
             .collect();
 
-        // Clear old cache entries not in current element set
-        let valid_paths: HashSet<PathBuf> = srcs
-            .iter()
-            .filter_map(|src| self.resolve_image_path(src).ok())
-            .collect();
-        self.image_protocol_cache
-            .retain(|k, _| valid_paths.contains(k));
-
-        // Populate cache for new images
+        // Decode any newly-seen images. Existing cache entries are preserved.
         for src in &srcs {
             let path = match self.resolve_image_path(src) {
                 Ok(p) => p,
                 Err(_) => continue,
             };
 
-            // Skip if already cached
             if self.image_protocol_cache.contains_key(&path) {
                 continue;
             }
@@ -799,6 +831,12 @@ impl App {
 
             let protocol = picker.new_resize_protocol(img_data);
             self.image_protocol_cache.insert(path, protocol);
+
+            // Evict oldest entries when over capacity (FIFO is a reasonable
+            // proxy for LRU here without bringing in a dedicated LRU crate).
+            while self.image_protocol_cache.len() > IMAGE_CACHE_LIMIT {
+                self.image_protocol_cache.shift_remove_index(0);
+            }
         }
     }
 
@@ -876,13 +914,13 @@ impl App {
                 // to avoid memory overhead of pre-computing all protocols.
                 let initial_protocol = picker.new_resize_protocol(frames[0].image.clone());
 
-                self.viewing_image_path = Some(path);
-                self.viewing_image_state = Some(initial_protocol);
-                self.modal_gif_frames = frames;
-                self.modal_frame_protocols.clear(); // Not used anymore
-                self.modal_frame_index = 0;
-                self.modal_last_rendered_frame = Some(0); // Mark first frame as rendered
-                self.modal_last_frame_update = Some(Instant::now());
+                self.image_modal.path = Some(path);
+                self.image_modal.state = Some(initial_protocol);
+                self.image_modal.gif_frames = frames;
+                self.image_modal.frame_protocols.clear(); // Not used anymore
+                self.image_modal.frame_index = 0;
+                self.image_modal.last_rendered_frame = Some(0); // Mark first frame as rendered
+                self.image_modal.last_frame_update = Some(Instant::now());
             }
         }
     }
@@ -892,43 +930,44 @@ impl App {
         // Delete Kitty animation if active
         self.stop_kitty_animation();
 
-        self.viewing_image_path = None;
-        self.viewing_image_state = None;
-        self.modal_gif_frames.clear();
-        self.modal_frame_protocols.clear();
-        self.modal_frame_index = 0;
-        self.modal_last_rendered_frame = None;
-        self.modal_last_frame_update = None;
-        self.modal_animation_paused = false;
+        self.image_modal.path = None;
+        self.image_modal.state = None;
+        self.image_modal.gif_frames.clear();
+        self.image_modal.frame_protocols.clear();
+        self.image_modal.frame_index = 0;
+        self.image_modal.last_rendered_frame = None;
+        self.image_modal.last_frame_update = None;
+        self.image_modal.animation_paused = false;
     }
 
     /// Go to previous frame in GIF animation
     pub fn modal_prev_frame(&mut self) {
-        if self.modal_gif_frames.is_empty() {
+        if self.image_modal.gif_frames.is_empty() {
             return;
         }
         // Stop Kitty animation - it doesn't support frame stepping, so fall back to software
         self.stop_kitty_animation();
         // Pause animation when manually stepping
-        self.modal_animation_paused = true;
-        let len = self.modal_gif_frames.len();
-        self.modal_frame_index = (self.modal_frame_index + len - 1) % len;
+        self.image_modal.animation_paused = true;
+        let len = self.image_modal.gif_frames.len();
+        self.image_modal.frame_index = (self.image_modal.frame_index + len - 1) % len;
         // Force re-render of the new frame
-        self.modal_last_rendered_frame = None;
+        self.image_modal.last_rendered_frame = None;
     }
 
     /// Go to next frame in GIF animation
     pub fn modal_next_frame(&mut self) {
-        if self.modal_gif_frames.is_empty() {
+        if self.image_modal.gif_frames.is_empty() {
             return;
         }
         // Stop Kitty animation - it doesn't support frame stepping, so fall back to software
         self.stop_kitty_animation();
         // Pause animation when manually stepping
-        self.modal_animation_paused = true;
-        self.modal_frame_index = (self.modal_frame_index + 1) % self.modal_gif_frames.len();
+        self.image_modal.animation_paused = true;
+        self.image_modal.frame_index =
+            (self.image_modal.frame_index + 1) % self.image_modal.gif_frames.len();
         // Force re-render of the new frame
-        self.modal_last_rendered_frame = None;
+        self.image_modal.last_rendered_frame = None;
     }
 
     /// Stop and delete Kitty animation, falling back to software rendering.
@@ -943,27 +982,27 @@ impl App {
 
     /// Toggle animation play/pause
     pub fn modal_toggle_animation(&mut self) {
-        self.modal_animation_paused = !self.modal_animation_paused;
+        self.image_modal.animation_paused = !self.image_modal.animation_paused;
 
         // Control Kitty animation if active
         if let Some(ref anim) = self.kitty_animation {
             let mut stdout = std::io::stdout();
-            if self.modal_animation_paused {
+            if self.image_modal.animation_paused {
                 let _ = kitty_animation::pause_animation(&mut stdout, anim);
             } else {
                 let _ = kitty_animation::resume_animation(&mut stdout, anim);
             }
         }
 
-        if !self.modal_animation_paused {
+        if !self.image_modal.animation_paused {
             // Reset the timer when resuming
-            self.modal_last_frame_update = Some(Instant::now());
+            self.image_modal.last_frame_update = Some(Instant::now());
         }
     }
 
     /// Check if image modal is open
     pub fn is_image_modal_open(&self) -> bool {
-        self.viewing_image_path.is_some()
+        self.image_modal.path.is_some()
     }
 
     /// Start Kitty native animation for GIF playback.
@@ -975,7 +1014,7 @@ impl App {
         // 2. We have multiple frames (GIF)
         // 3. Animation hasn't started yet
         if !self.use_kitty_animation
-            || self.modal_gif_frames.len() <= 1
+            || self.image_modal.gif_frames.len() <= 1
             || self.kitty_animation.is_some()
         {
             return false;
@@ -983,7 +1022,8 @@ impl App {
 
         // Prepare frames for Kitty animation
         let frames: Vec<(image::DynamicImage, u32)> = self
-            .modal_gif_frames
+            .image_modal
+            .gif_frames
             .iter()
             .map(|f| (f.image.clone(), f.delay_ms))
             .collect();
@@ -1020,14 +1060,14 @@ impl App {
 
         // Must be in image modal with multiple frames and not paused
         if !self.is_image_modal_open()
-            || self.modal_gif_frames.len() <= 1
-            || self.modal_animation_paused
+            || self.image_modal.gif_frames.len() <= 1
+            || self.image_modal.animation_paused
         {
             return None;
         }
 
-        let last_update = self.modal_last_frame_update?;
-        let current_frame = &self.modal_gif_frames[self.modal_frame_index];
+        let last_update = self.image_modal.last_frame_update?;
+        let current_frame = &self.image_modal.gif_frames[self.image_modal.frame_index];
         let frame_delay = std::time::Duration::from_millis(current_frame.delay_ms as u64);
         let elapsed = last_update.elapsed();
 
@@ -1076,7 +1116,7 @@ impl App {
                 }
             }
             AppMode::LinkFollow => {
-                if self.link_search_active {
+                if self.link_picker.active {
                     KeybindingMode::LinkSearch
                 } else {
                     KeybindingMode::LinkFollow
@@ -1093,7 +1133,7 @@ impl App {
             AppMode::DocSearch => KeybindingMode::DocSearch,
             AppMode::CommandPalette => KeybindingMode::CommandPalette,
             AppMode::FilePicker => {
-                if self.file_search_active {
+                if self.file_picker.active {
                     KeybindingMode::FileSearch
                 } else {
                     KeybindingMode::FilePicker
@@ -1250,7 +1290,7 @@ impl App {
             LinkSearch => match self.mode {
                 AppMode::LinkFollow => self.start_link_search(),
                 AppMode::FilePicker => {
-                    self.file_search_active = true;
+                    self.file_picker.active = true;
                 }
                 _ => {}
             },
@@ -1510,9 +1550,9 @@ impl App {
                 }
             }
             AppMode::LinkFollow => {
-                if self.link_search_active {
+                if self.link_picker.active {
                     self.stop_link_search();
-                } else if !self.link_search_query.is_empty() {
+                } else if !self.link_picker.query.is_empty() {
                     self.clear_link_search();
                 } else {
                     self.exit_link_follow_mode();
@@ -1524,7 +1564,7 @@ impl App {
                 self.show_search = false;
             }
             AppMode::DocSearch => {
-                if self.doc_search_active {
+                if self.doc_search.active {
                     self.cancel_doc_search();
                 } else {
                     self.clear_doc_search();
@@ -1544,19 +1584,19 @@ impl App {
                 self.show_help = false;
             }
             AppMode::FileSearch => {
-                self.file_search_active = false;
+                self.file_picker.active = false;
                 self.mode = AppMode::FilePicker;
             }
             AppMode::FilePicker => {
-                if self.file_search_active {
+                if self.file_picker.active {
                     // Exit search mode, but stay in file picker
-                    self.file_search_active = false;
-                    self.file_search_query.clear();
+                    self.file_picker.active = false;
+                    self.file_picker.query.clear();
                 } else {
                     // Exit file picker entirely
                     self.mode = AppMode::Normal;
-                    self.file_search_query.clear();
-                    self.file_search_active = false;
+                    self.file_picker.query.clear();
+                    self.file_picker.active = false;
                 }
             }
             AppMode::Normal
@@ -1705,6 +1745,9 @@ impl App {
     }
 
     /// Execute the pending navigation action
+    // Suggested guard collapse would call go_back/go_forward inside match guards
+    // (side effects in guards) — keep the explicit ifs.
+    #[allow(clippy::collapsible_match)]
     fn execute_pending_navigation(&mut self) {
         let nav = self.pending_navigation.take();
         self.mode = AppMode::Normal;
@@ -1741,9 +1784,9 @@ impl App {
         match self.mode {
             AppMode::Search => self.search_backspace(),
             AppMode::DocSearch => self.doc_search_backspace(),
-            AppMode::LinkFollow if self.link_search_active => self.link_search_pop(),
-            AppMode::FilePicker if self.file_search_active => {
-                if self.file_search_query.is_empty() {
+            AppMode::LinkFollow if self.link_picker.active => self.link_search_pop(),
+            AppMode::FilePicker if self.file_picker.active => {
+                if self.file_picker.query.is_empty() {
                     // Empty search query + Backspace => navigate to parent directory
                     self.file_picker_parent_dir();
                 } else {
@@ -1822,14 +1865,21 @@ impl App {
 
     /// Jump to link by index in filtered list
     fn jump_to_link(&mut self, idx: usize) {
-        if let Some(display_idx) = self.filtered_link_indices.iter().position(|&i| i == idx) {
-            self.selected_link_idx = Some(display_idx);
+        if let Some(display_idx) = self
+            .link_picker
+            .filtered_indices
+            .iter()
+            .position(|&i| i == idx)
+        {
+            self.link_picker.selected = Some(display_idx);
         }
     }
 
     /// Toggle between raw source view and rendered markdown view
     pub fn toggle_raw_source(&mut self) {
         self.show_raw_source = !self.show_raw_source;
+        // Raw vs rendered changes the line count of the displayed content.
+        self.metrics_dirty = true;
         let msg = if self.show_raw_source {
             "Raw source view enabled"
         } else {
@@ -2047,12 +2097,17 @@ impl App {
         false
     }
 
-    /// Update content height based on current selection and reset scroll if selection changed
+    /// Update content height based on current selection and reset scroll if selection changed.
+    ///
+    /// The expensive line-counting only runs when the selection or the
+    /// underlying content has changed (signalled by `metrics_dirty`). The
+    /// render loop calls this every frame; without gating, a large section
+    /// would be re-scanned 60+ times per second during animations.
     pub fn update_content_metrics(&mut self) {
         let current_selection = self.selected_heading_text().map(|s| s.to_string());
+        let selection_changed = current_selection != self.previous_selection;
 
-        // Check if selection changed
-        if current_selection != self.previous_selection {
+        if selection_changed {
             // Reset content scroll when selection changes
             self.content_scroll = 0;
             self.previous_selection = current_selection;
@@ -2066,12 +2121,26 @@ impl App {
             self.populate_image_cache();
         }
 
-        // Update content height based on current section
-        let content_text = self.current_section_content();
-        let content_lines = content_text.lines().count();
-        self.content_height = content_lines;
-        self.content_scroll_state =
-            ScrollbarState::new(content_lines).position(self.content_scroll as usize);
+        if selection_changed || self.metrics_dirty {
+            let content_text = self.current_section_content();
+            let content_lines = content_text.lines().count();
+            self.content_height = content_lines;
+            self.content_scroll_state =
+                ScrollbarState::new(content_lines).position(self.content_scroll as usize);
+            self.metrics_dirty = false;
+        } else {
+            // Cheap path: just keep the scrollbar position in sync with scroll.
+            self.content_scroll_state = self
+                .content_scroll_state
+                .position(self.content_scroll as usize);
+        }
+    }
+
+    /// Mark content metrics as needing recomputation. Call this whenever the
+    /// rendered section's source could have changed (file reload, raw-source
+    /// toggle, document edit).
+    pub fn mark_metrics_dirty(&mut self) {
+        self.metrics_dirty = true;
     }
 
     pub fn next(&mut self) {
@@ -2110,7 +2179,7 @@ impl App {
         if self.mode == AppMode::FilePicker {
             let total = self.file_picker_item_count();
             if total > 0 {
-                self.selected_file_idx = Some(0);
+                self.file_picker.selected = Some(0);
             }
         } else if self.focus == Focus::Outline && !self.outline_items.is_empty() {
             self.select_outline_index(0);
@@ -2124,7 +2193,7 @@ impl App {
         if self.mode == AppMode::FilePicker {
             let total = self.file_picker_item_count();
             if total > 0 {
-                self.selected_file_idx = Some(total - 1);
+                self.file_picker.selected = Some(total - 1);
             }
         } else if self.focus == Focus::Outline && !self.outline_items.is_empty() {
             let last = self.outline_items.len() - 1;
@@ -2226,20 +2295,20 @@ impl App {
 
             // Enter doc search with the same query
             self.mode = AppMode::DocSearch;
-            self.doc_search_active = was_active; // Preserve active state
-            self.doc_search_query = query;
-            self.doc_search_matches.clear();
-            self.doc_search_current_idx = None;
+            self.doc_search.active = was_active; // Preserve active state
+            self.doc_search.query = query;
+            self.doc_search.matches.clear();
+            self.doc_search.current_idx = None;
             self.update_doc_search_matches();
         } else if self.mode == AppMode::DocSearch {
-            if self.doc_search_active {
+            if self.doc_search.active {
                 // Still typing -> switch to outline search
-                let query = self.doc_search_query.clone();
+                let query = self.doc_search.query.clone();
                 self.mode = AppMode::Normal;
-                self.doc_search_active = false;
-                self.doc_search_query.clear();
-                self.doc_search_matches.clear();
-                self.doc_search_current_idx = None;
+                self.doc_search.active = false;
+                self.doc_search.query.clear();
+                self.doc_search.matches.clear();
+                self.doc_search.current_idx = None;
 
                 // Enter outline search with the same query
                 self.show_search = true;
@@ -2339,46 +2408,46 @@ impl App {
         }
 
         // If already in accepted doc search state, re-enter input mode (keep existing query)
-        if self.mode == AppMode::DocSearch && !self.doc_search_active {
-            self.doc_search_active = true;
+        if self.mode == AppMode::DocSearch && !self.doc_search.active {
+            self.doc_search.active = true;
             return;
         }
 
         // Remember if we came from interactive mode to restore it later
-        self.doc_search_from_interactive = self.mode == AppMode::Interactive;
+        self.doc_search.from_interactive = self.mode == AppMode::Interactive;
         self.mode = AppMode::DocSearch;
-        self.doc_search_active = true;
-        self.doc_search_query.clear();
-        self.doc_search_matches.clear();
-        self.doc_search_current_idx = None;
+        self.doc_search.active = true;
+        self.doc_search.query.clear();
+        self.doc_search.matches.clear();
+        self.doc_search.current_idx = None;
     }
 
     /// Add a character to the document search query
     pub fn doc_search_input(&mut self, c: char) {
         // Limit search query length
-        if self.doc_search_query.len() >= Self::MAX_SEARCH_LEN {
+        if self.doc_search.query.len() >= Self::MAX_SEARCH_LEN {
             return;
         }
         // Filter control characters
         if c.is_control() && c != '\t' {
             return;
         }
-        self.doc_search_query.push(c);
+        self.doc_search.query.push(c);
         self.update_doc_search_matches();
     }
 
     /// Remove the last character from the document search query
     pub fn doc_search_backspace(&mut self) {
-        self.doc_search_query.pop();
+        self.doc_search.query.pop();
         self.update_doc_search_matches();
     }
 
     /// Update search matches based on current query (supports fuzzy and exact matching)
     pub fn update_doc_search_matches(&mut self) {
-        self.doc_search_matches.clear();
+        self.doc_search.matches.clear();
 
-        if self.doc_search_query.is_empty() {
-            self.doc_search_current_idx = None;
+        if self.doc_search.query.is_empty() {
+            self.doc_search.current_idx = None;
             return;
         }
 
@@ -2388,7 +2457,7 @@ impl App {
         // Convert to plain text using parser (strips links, formatting, etc.)
         // This ensures search matches what's visible when rendered
         let plain_content = turbovault_parser::to_plain_text(&content);
-        let query = self.doc_search_query.to_lowercase();
+        let query = self.doc_search.query.to_lowercase();
 
         // Find all exact substring matches (case-insensitive)
         for (line_num, line) in plain_content.lines().enumerate() {
@@ -2397,7 +2466,7 @@ impl App {
             let mut search_start = 0;
             while let Some(pos) = line_lower[search_start..].find(&query) {
                 let col_start = search_start + pos;
-                self.doc_search_matches.push(SearchMatch {
+                self.doc_search.matches.push(SearchMatch {
                     line: line_num,
                     col_start,
                     len: query.len(),
@@ -2407,7 +2476,7 @@ impl App {
         }
 
         // Select first match if any exist
-        self.doc_search_current_idx = if self.doc_search_matches.is_empty() {
+        self.doc_search.current_idx = if self.doc_search.matches.is_empty() {
             None
         } else {
             Some(0)
@@ -2420,10 +2489,10 @@ impl App {
     /// Scroll to the current search match and detect if it's inside a link
     fn scroll_to_doc_search_match(&mut self) {
         // Reset link selection
-        self.doc_search_selected_link_idx = None;
+        self.doc_search.selected_link_idx = None;
 
-        if let Some(idx) = self.doc_search_current_idx
-            && let Some(m) = self.doc_search_matches.get(idx)
+        if let Some(idx) = self.doc_search.current_idx
+            && let Some(m) = self.doc_search.matches.get(idx)
         {
             let match_line = m.line as u16;
 
@@ -2466,7 +2535,7 @@ impl App {
 
         // Extract links and populate links_in_view for potential following
         self.links_in_view = extract_links(&content);
-        self.filtered_link_indices = (0..self.links_in_view.len()).collect();
+        self.link_picker.filtered_indices = (0..self.links_in_view.len()).collect();
 
         // Find if match overlaps with any link
         for (idx, link) in self.links_in_view.iter().enumerate() {
@@ -2478,8 +2547,8 @@ impl App {
 
             // Check if match overlaps with link region
             if byte_offset < link_end && match_end > link_start {
-                self.doc_search_selected_link_idx = Some(idx);
-                self.selected_link_idx = Some(idx); // Also set link mode selection
+                self.doc_search.selected_link_idx = Some(idx);
+                self.link_picker.selected = Some(idx); // Also set link mode selection
                 break;
             }
         }
@@ -2487,28 +2556,28 @@ impl App {
 
     /// Accept search and exit search input mode (keep matches for n/N navigation)
     pub fn accept_doc_search(&mut self) {
-        self.doc_search_active = false;
+        self.doc_search.active = false;
         // Keep mode as DocSearch for n/N navigation
         // If no matches, show status message
-        if self.doc_search_matches.is_empty() && !self.doc_search_query.is_empty() {
-            self.status_message = Some(format!("Pattern not found: {}", self.doc_search_query));
+        if self.doc_search.matches.is_empty() && !self.doc_search.query.is_empty() {
+            self.status_message = Some(format!("Pattern not found: {}", self.doc_search.query));
         }
     }
 
     /// Cancel search and return to previous mode (interactive or normal)
     pub fn cancel_doc_search(&mut self) {
         // Restore interactive mode if that's where we came from
-        if self.doc_search_from_interactive {
+        if self.doc_search.from_interactive {
             self.mode = AppMode::Interactive;
         } else {
             self.mode = AppMode::Normal;
         }
-        self.doc_search_active = false;
-        self.doc_search_from_interactive = false;
-        self.doc_search_query.clear();
-        self.doc_search_matches.clear();
-        self.doc_search_current_idx = None;
-        self.doc_search_selected_link_idx = None;
+        self.doc_search.active = false;
+        self.doc_search.from_interactive = false;
+        self.doc_search.query.clear();
+        self.doc_search.matches.clear();
+        self.doc_search.current_idx = None;
+        self.doc_search.selected_link_idx = None;
         // Sync to prevent update_content_metrics() from resetting scroll
         self.sync_previous_selection();
     }
@@ -2516,16 +2585,16 @@ impl App {
     /// Clear search highlighting and return to previous mode (interactive or normal)
     pub fn clear_doc_search(&mut self) {
         // Restore interactive mode if that's where we came from
-        if self.doc_search_from_interactive {
+        if self.doc_search.from_interactive {
             self.mode = AppMode::Interactive;
         } else {
             self.mode = AppMode::Normal;
         }
-        self.doc_search_from_interactive = false;
-        self.doc_search_query.clear();
-        self.doc_search_matches.clear();
-        self.doc_search_current_idx = None;
-        self.doc_search_selected_link_idx = None;
+        self.doc_search.from_interactive = false;
+        self.doc_search.query.clear();
+        self.doc_search.matches.clear();
+        self.doc_search.current_idx = None;
+        self.doc_search.selected_link_idx = None;
         // Sync to prevent update_content_metrics() from resetting scroll
         self.sync_previous_selection();
     }
@@ -2542,12 +2611,12 @@ impl App {
             return;
         }
 
-        if self.doc_search_matches.is_empty() {
+        if self.doc_search.matches.is_empty() {
             return;
         }
 
-        self.doc_search_current_idx = Some(match self.doc_search_current_idx {
-            Some(idx) => (idx + 1) % self.doc_search_matches.len(),
+        self.doc_search.current_idx = Some(match self.doc_search.current_idx {
+            Some(idx) => (idx + 1) % self.doc_search.matches.len(),
             None => 0,
         });
 
@@ -2567,12 +2636,12 @@ impl App {
             return;
         }
 
-        if self.doc_search_matches.is_empty() {
+        if self.doc_search.matches.is_empty() {
             return;
         }
 
-        let len = self.doc_search_matches.len();
-        self.doc_search_current_idx = Some(match self.doc_search_current_idx {
+        let len = self.doc_search.matches.len();
+        self.doc_search.current_idx = Some(match self.doc_search.current_idx {
             Some(idx) => (idx + len - 1) % len,
             None => len - 1,
         });
@@ -2582,19 +2651,19 @@ impl App {
 
     /// Get document search status text for status bar
     pub fn doc_search_status(&self) -> String {
-        if self.doc_search_matches.is_empty() {
-            if self.doc_search_query.is_empty() {
+        if self.doc_search.matches.is_empty() {
+            if self.doc_search.query.is_empty() {
                 "Search: ".to_string()
             } else {
-                format!("Search: {} (no matches)", self.doc_search_query)
+                format!("Search: {} (no matches)", self.doc_search.query)
             }
         } else {
-            let current = self.doc_search_current_idx.unwrap_or(0) + 1;
-            let total = self.doc_search_matches.len();
-            let base = format!("Search: {} ({}/{})", self.doc_search_query, current, total);
+            let current = self.doc_search.current_idx.unwrap_or(0) + 1;
+            let total = self.doc_search.matches.len();
+            let base = format!("Search: {} ({}/{})", self.doc_search.query, current, total);
 
             // Add link indicator if match is inside a link
-            if let Some(link_idx) = self.doc_search_selected_link_idx {
+            if let Some(link_idx) = self.doc_search.selected_link_idx {
                 if let Some(link) = self.links_in_view.get(link_idx) {
                     format!("{} → [{}] (Enter to follow)", base, link.text)
                 } else {
@@ -3111,71 +3180,78 @@ impl App {
     /// Open command palette (triggered by `:`)
     pub fn open_command_palette(&mut self) {
         self.mode = AppMode::CommandPalette;
-        self.command_query.clear();
-        self.command_filtered = (0..PALETTE_COMMANDS.len()).collect();
-        self.command_selected = 0;
+        self.command_palette.query.clear();
+        self.command_palette.filtered = (0..PALETTE_COMMANDS.len()).collect();
+        self.command_palette.selected = 0;
     }
 
     /// Add a character to command palette search
     pub fn command_palette_input(&mut self, c: char) {
-        if self.command_query.len() < 32 {
-            self.command_query.push(c);
+        if self.command_palette.query.len() < 32 {
+            self.command_palette.query.push(c);
             self.filter_commands();
         }
     }
 
     /// Remove last character from command palette search
     pub fn command_palette_backspace(&mut self) {
-        self.command_query.pop();
+        self.command_palette.query.pop();
         self.filter_commands();
     }
 
     /// Filter commands based on current query
     fn filter_commands(&mut self) {
-        // Filter matching commands
+        // Lowercase once, pass to each command — saves N allocations per
+        // keystroke where N = number of palette commands.
+        let query_lower = self.command_palette.query.to_lowercase();
         let mut matches: Vec<(usize, usize)> = PALETTE_COMMANDS
             .iter()
             .enumerate()
-            .filter(|(_, cmd)| cmd.matches(&self.command_query))
-            .map(|(idx, cmd)| (idx, cmd.match_score(&self.command_query)))
+            .filter(|(_, cmd)| cmd.matches(&query_lower))
+            .map(|(idx, cmd)| (idx, cmd.match_score(&query_lower)))
             .collect();
 
         // Sort by score (highest first)
-        matches.sort_by(|a, b| b.1.cmp(&a.1));
+        matches.sort_by_key(|m| std::cmp::Reverse(m.1));
 
-        self.command_filtered = matches.into_iter().map(|(idx, _)| idx).collect();
+        self.command_palette.filtered = matches.into_iter().map(|(idx, _)| idx).collect();
 
         // Reset selection if it's out of bounds
-        if self.command_selected >= self.command_filtered.len() {
-            self.command_selected = 0;
+        if self.command_palette.selected >= self.command_palette.filtered.len() {
+            self.command_palette.selected = 0;
         }
     }
 
     /// Move selection down in command palette
     pub fn command_palette_next(&mut self) {
-        if !self.command_filtered.is_empty() {
-            self.command_selected = (self.command_selected + 1) % self.command_filtered.len();
+        if !self.command_palette.filtered.is_empty() {
+            self.command_palette.selected =
+                (self.command_palette.selected + 1) % self.command_palette.filtered.len();
         }
     }
 
     /// Move selection up in command palette
     pub fn command_palette_prev(&mut self) {
-        if !self.command_filtered.is_empty() {
-            self.command_selected = if self.command_selected == 0 {
-                self.command_filtered.len() - 1
+        if !self.command_palette.filtered.is_empty() {
+            self.command_palette.selected = if self.command_palette.selected == 0 {
+                self.command_palette.filtered.len() - 1
             } else {
-                self.command_selected - 1
+                self.command_palette.selected - 1
             };
         }
     }
 
     /// Autocomplete command palette with selected command's alias
     pub fn command_palette_autocomplete(&mut self) {
-        if let Some(&cmd_idx) = self.command_filtered.get(self.command_selected) {
+        if let Some(&cmd_idx) = self
+            .command_palette
+            .filtered
+            .get(self.command_palette.selected)
+        {
             let cmd = &PALETTE_COMMANDS[cmd_idx];
             // Use the first alias (typically the shortest canonical form)
             if let Some(&alias) = cmd.aliases.first() {
-                self.command_query = alias.to_string();
+                self.command_palette.query = alias.to_string();
                 // Re-filter with the new query (will likely still match the same command)
                 self.filter_commands();
             }
@@ -3185,16 +3261,20 @@ impl App {
     /// Close command palette without executing
     pub fn close_command_palette(&mut self) {
         self.mode = AppMode::Normal;
-        self.command_query.clear();
+        self.command_palette.query.clear();
     }
 
     /// Execute selected command and return whether to quit
     pub fn execute_selected_command(&mut self) -> bool {
-        if let Some(&cmd_idx) = self.command_filtered.get(self.command_selected) {
+        if let Some(&cmd_idx) = self
+            .command_palette
+            .filtered
+            .get(self.command_palette.selected)
+        {
             let action = PALETTE_COMMANDS[cmd_idx].action;
-            let query = self.command_query.clone(); // Capture query for argument parsing
+            let query = self.command_palette.query.clone(); // Capture query for argument parsing
             self.mode = AppMode::Normal;
-            self.command_query.clear();
+            self.command_palette.query.clear();
             self.execute_command_action(action, &query)
         } else {
             self.mode = AppMode::Normal;
@@ -3304,8 +3384,9 @@ impl App {
 
     /// Get selected command for display
     pub fn selected_command(&self) -> Option<&'static PaletteCommand> {
-        self.command_filtered
-            .get(self.command_selected)
+        self.command_palette
+            .filtered
+            .get(self.command_palette.selected)
             .map(|&idx| &PALETTE_COMMANDS[idx])
     }
 
@@ -3534,18 +3615,18 @@ impl App {
         self.links_in_view = extract_links(&content);
 
         // Initialize filtered indices to show all links
-        self.filtered_link_indices = (0..self.links_in_view.len()).collect();
-        self.link_search_query.clear();
-        self.link_search_active = false;
+        self.link_picker.filtered_indices = (0..self.links_in_view.len()).collect();
+        self.link_picker.query.clear();
+        self.link_picker.active = false;
 
         // Always enter mode, even if no links (so user sees "no links" message)
         self.mode = AppMode::LinkFollow;
 
         // Select first link if any exist
-        if !self.filtered_link_indices.is_empty() {
-            self.selected_link_idx = Some(0);
+        if !self.link_picker.filtered_indices.is_empty() {
+            self.link_picker.selected = Some(0);
         } else {
-            self.selected_link_idx = None;
+            self.link_picker.selected = None;
         }
     }
 
@@ -3553,54 +3634,54 @@ impl App {
     pub fn exit_link_follow_mode(&mut self) {
         self.mode = AppMode::Normal;
         self.links_in_view.clear();
-        self.filtered_link_indices.clear();
-        self.selected_link_idx = None;
-        self.link_search_query.clear();
-        self.link_search_active = false;
+        self.link_picker.filtered_indices.clear();
+        self.link_picker.selected = None;
+        self.link_picker.query.clear();
+        self.link_picker.active = false;
         // Don't clear status message here - let it display for a moment
     }
 
     /// Start link search mode
     pub fn start_link_search(&mut self) {
         if self.mode == AppMode::LinkFollow {
-            self.link_search_active = true;
+            self.link_picker.active = true;
         }
     }
 
     /// Stop link search mode (but keep the filter)
     pub fn stop_link_search(&mut self) {
-        self.link_search_active = false;
+        self.link_picker.active = false;
     }
 
     /// Clear link search and show all links
     pub fn clear_link_search(&mut self) {
-        self.link_search_query.clear();
-        self.link_search_active = false;
+        self.link_picker.query.clear();
+        self.link_picker.active = false;
         self.update_link_filter();
     }
 
     /// Add a character to the link search query
     pub fn link_search_push(&mut self, c: char) {
-        self.link_search_query.push(c);
+        self.link_picker.query.push(c);
         self.update_link_filter();
     }
 
     /// Remove the last character from the link search query
     pub fn link_search_pop(&mut self) {
-        self.link_search_query.pop();
+        self.link_picker.query.pop();
         self.update_link_filter();
     }
 
     /// Update the filtered link indices based on the search query
     fn update_link_filter(&mut self) {
-        let query = self.link_search_query.to_lowercase();
+        let query = self.link_picker.query.to_lowercase();
 
         if query.is_empty() {
             // Show all links when no search query
-            self.filtered_link_indices = (0..self.links_in_view.len()).collect();
+            self.link_picker.filtered_indices = (0..self.links_in_view.len()).collect();
         } else {
             // Filter links by text or URL containing the query
-            self.filtered_link_indices = self
+            self.link_picker.filtered_indices = self
                 .links_in_view
                 .iter()
                 .enumerate()
@@ -3613,23 +3694,23 @@ impl App {
         }
 
         // Update selection to stay within filtered results
-        if self.filtered_link_indices.is_empty() {
-            self.selected_link_idx = None;
-        } else if let Some(idx) = self.selected_link_idx {
-            if idx >= self.filtered_link_indices.len() {
-                self.selected_link_idx = Some(0);
+        if self.link_picker.filtered_indices.is_empty() {
+            self.link_picker.selected = None;
+        } else if let Some(idx) = self.link_picker.selected {
+            if idx >= self.link_picker.filtered_indices.len() {
+                self.link_picker.selected = Some(0);
             }
         } else {
-            self.selected_link_idx = Some(0);
+            self.link_picker.selected = Some(0);
         }
     }
 
     /// Cycle to the next link (Tab in link follow mode)
     pub fn next_link(&mut self) {
-        if self.mode == AppMode::LinkFollow && !self.filtered_link_indices.is_empty() {
-            self.selected_link_idx = Some(match self.selected_link_idx {
+        if self.mode == AppMode::LinkFollow && !self.link_picker.filtered_indices.is_empty() {
+            self.link_picker.selected = Some(match self.link_picker.selected {
                 Some(idx) => {
-                    if idx >= self.filtered_link_indices.len() - 1 {
+                    if idx >= self.link_picker.filtered_indices.len() - 1 {
                         0 // Wrap to first
                     } else {
                         idx + 1
@@ -3642,11 +3723,11 @@ impl App {
 
     /// Cycle to the previous link (Shift+Tab in link follow mode)
     pub fn previous_link(&mut self) {
-        if self.mode == AppMode::LinkFollow && !self.filtered_link_indices.is_empty() {
-            self.selected_link_idx = Some(match self.selected_link_idx {
+        if self.mode == AppMode::LinkFollow && !self.link_picker.filtered_indices.is_empty() {
+            self.link_picker.selected = Some(match self.link_picker.selected {
                 Some(idx) => {
                     if idx == 0 {
-                        self.filtered_link_indices.len() - 1 // Wrap to last
+                        self.link_picker.filtered_indices.len() - 1 // Wrap to last
                     } else {
                         idx - 1
                     }
@@ -3677,13 +3758,13 @@ impl App {
 
                         // Reset link selection
                         if !self.links_in_view.is_empty() {
-                            self.selected_link_idx = Some(0);
+                            self.link_picker.selected = Some(0);
                             self.status_message = Some(format!(
                                 "✓ Jumped to parent ({} links found)",
                                 self.links_in_view.len()
                             ));
                         } else {
-                            self.selected_link_idx = None;
+                            self.link_picker.selected = None;
                             self.status_message = Some("⚠ Parent has no links".to_string());
                         }
 
@@ -3720,7 +3801,7 @@ impl App {
     /// Navigate file picker to the given directory, clearing search and resetting selection
     fn navigate_picker_to_dir(&mut self, dir: PathBuf) {
         self.file_picker_dir = Some(dir);
-        self.file_search_query.clear();
+        self.file_picker.query.clear();
         self.scan_markdown_files(); // update_file_filter() resets selected_file_idx
     }
 
@@ -3755,8 +3836,8 @@ impl App {
 
         files.sort();
         dirs.sort();
-        self.files_in_directory = files;
-        self.dirs_in_directory = dirs;
+        self.file_picker.files = files;
+        self.file_picker.dirs = dirs;
 
         self.update_file_filter();
     }
@@ -3777,42 +3858,45 @@ impl App {
                 .collect()
         }
 
-        if self.file_search_query.is_empty() {
-            self.filtered_file_indices = (0..self.files_in_directory.len()).collect();
-            self.filtered_dir_indices = (0..self.dirs_in_directory.len()).collect();
+        if self.file_picker.query.is_empty() {
+            self.file_picker.filtered_file_indices = (0..self.file_picker.files.len()).collect();
+            self.file_picker.filtered_dir_indices = (0..self.file_picker.dirs.len()).collect();
         } else {
-            let query_lower = self.file_search_query.to_lowercase();
-            self.filtered_file_indices = filter_by_name(&self.files_in_directory, &query_lower);
-            self.filtered_dir_indices = filter_by_name(&self.dirs_in_directory, &query_lower);
+            let query_lower = self.file_picker.query.to_lowercase();
+            self.file_picker.filtered_file_indices =
+                filter_by_name(&self.file_picker.files, &query_lower);
+            self.file_picker.filtered_dir_indices =
+                filter_by_name(&self.file_picker.dirs, &query_lower);
         }
 
         // Combined count: files + directories
-        let combined_count = self.filtered_file_indices.len() + self.filtered_dir_indices.len();
+        let combined_count = self.file_picker.filtered_file_indices.len()
+            + self.file_picker.filtered_dir_indices.len();
 
         // Reset selection if current is out of bounds
-        if let Some(sel) = self.selected_file_idx {
+        if let Some(sel) = self.file_picker.selected {
             if sel >= combined_count {
-                self.selected_file_idx = if combined_count == 0 { None } else { Some(0) };
+                self.file_picker.selected = if combined_count == 0 { None } else { Some(0) };
             }
         } else if combined_count > 0 {
-            self.selected_file_idx = Some(0);
+            self.file_picker.selected = Some(0);
         }
     }
 
     /// Get the total number of items in the file picker (files + dirs)
     pub fn file_picker_item_count(&self) -> usize {
-        self.filtered_file_indices.len() + self.filtered_dir_indices.len()
+        self.file_picker.filtered_file_indices.len() + self.file_picker.filtered_dir_indices.len()
     }
 
     /// Push character to file search query
     pub fn file_search_push(&mut self, c: char) {
-        self.file_search_query.push(c);
+        self.file_picker.query.push(c);
         self.update_file_filter();
     }
 
     /// Pop character from file search query
     pub fn file_search_pop(&mut self) {
-        self.file_search_query.pop();
+        self.file_picker.query.pop();
         self.update_file_filter();
     }
 
@@ -3820,10 +3904,10 @@ impl App {
     /// User can still toggle outline visibility with keybinding.
     pub fn auto_hide_outline_if_single_file(&mut self) {
         // Only scan if no data yet (avoids redundant scan after enter_file_picker)
-        if self.files_in_directory.is_empty() && self.dirs_in_directory.is_empty() {
+        if self.file_picker.files.is_empty() && self.file_picker.dirs.is_empty() {
             self.scan_markdown_files();
         }
-        if self.files_in_directory.len() <= 1 {
+        if self.file_picker.files.len() <= 1 {
             self.show_outline = false;
         }
     }
@@ -3842,13 +3926,14 @@ impl App {
 
         // Highlight current file if present
         if let Some(current_idx) = self
-            .files_in_directory
+            .file_picker
+            .files
             .iter()
             .position(|p| p == &self.current_file_path)
         {
-            self.selected_file_idx = Some(current_idx);
-        } else if !self.filtered_file_indices.is_empty() {
-            self.selected_file_idx = Some(0);
+            self.file_picker.selected = Some(current_idx);
+        } else if !self.file_picker.filtered_file_indices.is_empty() {
+            self.file_picker.selected = Some(0);
         }
 
         self.mode = AppMode::FilePicker;
@@ -3856,32 +3941,34 @@ impl App {
 
     /// Select file from picker and load it (or navigate into directory)
     pub fn select_file_from_picker(&mut self) -> Result<(), String> {
-        let selected_display_idx = self.selected_file_idx.ok_or("No file selected")?;
-        let file_count = self.filtered_file_indices.len();
+        let selected_display_idx = self.file_picker.selected.ok_or("No file selected")?;
+        let file_count = self.file_picker.filtered_file_indices.len();
 
         // Check if selection is in the directory range
         if selected_display_idx >= file_count {
             let dir_display_idx = selected_display_idx - file_count;
             let real_dir_idx = self
+                .file_picker
                 .filtered_dir_indices
                 .get(dir_display_idx)
                 .ok_or("Invalid directory selection")?;
-            let dir_path = self.dirs_in_directory[*real_dir_idx].clone();
+            let dir_path = self.file_picker.dirs[*real_dir_idx].clone();
             self.navigate_picker_to_dir(dir_path);
             return Ok(());
         }
 
         let real_idx = self
+            .file_picker
             .filtered_file_indices
             .get(selected_display_idx)
             .ok_or("Invalid selection")?;
-        let file_path = self.files_in_directory[*real_idx].clone();
+        let file_path = self.file_picker.files[*real_idx].clone();
 
         // Don't reload if it's already the current file
         if file_path == self.current_file_path {
             self.mode = AppMode::Normal;
-            self.file_search_query.clear();
-            self.file_search_active = false;
+            self.file_picker.query.clear();
+            self.file_picker.active = false;
             return Ok(());
         }
 
@@ -3911,8 +3998,8 @@ impl App {
 
         // Exit picker mode
         self.mode = AppMode::Normal;
-        self.file_search_query.clear();
-        self.file_search_active = false;
+        self.file_picker.query.clear();
+        self.file_picker.active = false;
 
         Ok(())
     }
@@ -3921,7 +4008,7 @@ impl App {
     pub fn next_file(&mut self) {
         let total = self.file_picker_item_count();
         if self.mode == AppMode::FilePicker && total > 0 {
-            self.selected_file_idx = Some(match self.selected_file_idx {
+            self.file_picker.selected = Some(match self.file_picker.selected {
                 Some(idx) => {
                     if idx >= total - 1 {
                         0 // Wrap to first
@@ -3938,7 +4025,7 @@ impl App {
     pub fn previous_file(&mut self) {
         let total = self.file_picker_item_count();
         if self.mode == AppMode::FilePicker && total > 0 {
-            self.selected_file_idx = Some(match self.selected_file_idx {
+            self.file_picker.selected = Some(match self.file_picker.selected {
                 Some(idx) => {
                     if idx == 0 {
                         total - 1 // Wrap to last
@@ -3953,8 +4040,9 @@ impl App {
 
     /// Get the currently selected link (from filtered list)
     pub fn get_selected_link(&self) -> Option<&Link> {
-        self.selected_link_idx
-            .and_then(|idx| self.filtered_link_indices.get(idx))
+        self.link_picker
+            .selected
+            .and_then(|idx| self.link_picker.filtered_indices.get(idx))
             .and_then(|&real_idx| self.links_in_view.get(real_idx))
     }
 
@@ -4354,6 +4442,8 @@ impl App {
 
         // Clear previous selection tracking
         self.previous_selection = None;
+        // Document changed — force a metrics recompute on the next render.
+        self.metrics_dirty = true;
 
         // Index interactive elements (links, images, etc.) even in normal mode
         // This allows inline images to render without entering interactive mode

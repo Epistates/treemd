@@ -31,12 +31,6 @@ unicode-width = "0.2"
 # Turbovault integration - OFM parsing with code-block awareness
 turbovault-parser = "1.4.0"
 
-# Tree data structure for heading hierarchy
-indextree = "4.8"
-
-# Terminal styling for CLI mode
-termimad = "0.34"
-
 # Serialization for JSON output
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -57,9 +51,6 @@ gif = "0.14"
 
 # Syntax highlighting
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "default-themes", "plist-load", "regex-onig"] }
-
-# Fuzzy search
-nucleo-matcher = "0.3"
 
 # Clipboard support
 arboard = { version = "3.6", features = ["wayland-data-control"] }

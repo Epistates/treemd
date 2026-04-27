@@ -148,14 +148,28 @@ pub fn parse_inline_html(html: &str) -> Vec<InlineElement> {
         });
     }
 
-    // Sort by position
-    matches.sort_by_key(|m| m.start);
+    // Sort by start position; on tie, prefer the longer match (outer tag)
+    // so nested inner matches are dropped instead of duplicating content.
+    matches.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+
+    // Drop any match whose range is contained in the previous accepted one —
+    // e.g. `<em>` inside `<b><em>x</em></b>` gets discarded so we don't emit
+    // both Strong("<em>x</em>") and Emphasis("x").
+    let mut filtered: Vec<TagMatch> = Vec::with_capacity(matches.len());
+    for m in matches {
+        if let Some(prev) = filtered.last()
+            && m.start < prev.end
+        {
+            continue; // nested or overlapping — skip
+        }
+        filtered.push(m);
+    }
 
     // Build elements
     let mut elements = Vec::new();
     let mut last_end = 0;
 
-    for tag_match in matches {
+    for tag_match in filtered {
         // Add any text before this tag
         if tag_match.start > last_end {
             let text = &html[last_end..tag_match.start];
@@ -330,5 +344,29 @@ mod tests {
         let elements = parse_inline_html("No HTML here");
         assert_eq!(elements.len(), 1);
         assert!(matches!(&elements[0], InlineElement::Text { value } if value == "No HTML here"));
+    }
+
+    #[test]
+    fn test_parse_inline_html_nested_tags_no_duplication() {
+        // Outer wins; inner tag is dropped so its content isn't emitted twice.
+        let elements = parse_inline_html("<b><em>nested</em></b>");
+        assert_eq!(
+            elements.len(),
+            1,
+            "nested tags should yield a single element, not two"
+        );
+        assert!(
+            matches!(&elements[0], InlineElement::Strong { value } if value == "<em>nested</em>")
+        );
+    }
+
+    #[test]
+    fn test_parse_inline_html_overlap_keeps_outer() {
+        let elements = parse_inline_html("Pre <strong>outer <em>inner</em> tail</strong> post");
+        // Should produce: text, strong, text — without a duplicate Emphasis arm.
+        assert_eq!(elements.len(), 3);
+        assert!(matches!(&elements[0], InlineElement::Text { value } if value == "Pre "));
+        assert!(matches!(&elements[1], InlineElement::Strong { value } if value.contains("inner")));
+        assert!(matches!(&elements[2], InlineElement::Text { value } if value == " post"));
     }
 }

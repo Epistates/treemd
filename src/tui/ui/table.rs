@@ -54,11 +54,9 @@ fn calculate_column_widths(headers: &[String], rows: &[Vec<String>]) -> Vec<usiz
             }
         }
 
-        if cell_count > 0 {
+        if let Some(avg_width) = total_width.checked_div(cell_count) {
             // Use weighted average: blend of average and max
-            // This prevents one outlier from dominating but ensures content fits
-            let avg_width = total_width / cell_count;
-            // Weight: 70% average, 30% max - balances fairness with readability
+            // 70% average, 30% max — balances fairness with readability
             col_widths[i] = (avg_width * 7 + max_width * 3) / 10;
         }
 

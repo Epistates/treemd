@@ -332,13 +332,9 @@ impl<'a> Engine<'a> {
                 }
                 return Ok(current);
             }
-            "_index" => {
-                // Internal index handling
-                if args.len() >= 2 {
-                    let values = self.eval_expr(&args[0])?;
-                    // Simplified - just return values for now
-                    return Ok(values);
-                }
+            "_index" if args.len() >= 2 => {
+                // Internal index handling — simplified, just return first arg's values
+                return self.eval_expr(&args[0]);
             }
             _ => {}
         }

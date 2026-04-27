@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use ratatui::style::{Color, Modifier, Style};
@@ -9,9 +12,16 @@ use syntect::util::LinesWithEndings;
 
 const DEFAULT_CODE_THEME: &str = "base16-ocean.dark";
 
+/// Soft cap on cached entries before the cache resets. Each entry is a small
+/// `Vec<Line>` so 256 covers virtually any document while bounding memory.
+const CACHE_LIMIT: usize = 256;
+
 pub struct SyntaxHighlighter {
     syntax_set: SyntaxSet,
     theme: Theme,
+    /// Cached highlight results keyed by `hash((content, language))`.
+    /// `RefCell` because highlight_code takes `&self` and is called from render.
+    cache: RefCell<HashMap<u64, Vec<Line<'static>>>>,
 }
 
 impl SyntaxHighlighter {
@@ -50,13 +60,25 @@ impl SyntaxHighlighter {
             .cloned()
             .expect("syntect default themes must contain base16-ocean.dark");
 
-        Self { syntax_set, theme }
+        Self {
+            syntax_set,
+            theme,
+            cache: RefCell::new(HashMap::new()),
+        }
     }
 
+    /// Highlight `code` as `language`. Result is memoized — repeat calls with
+    /// the same `(code, language)` pair return cloned cached lines without
+    /// re-invoking syntect.
     pub fn highlight_code(&self, code: &str, language: &str) -> Vec<Line<'static>> {
-        // Replace tabs with spaces to avoid terminal rendering artifacts during scrolling
-        // Tabs can cause inconsistent display widths across different terminals
-        let code = code.replace('\t', "    ");
+        let key = cache_key(code, language);
+
+        if let Some(cached) = self.cache.borrow().get(&key) {
+            return cached.clone();
+        }
+
+        // Replace tabs with spaces once at cache-miss time, not every render.
+        let code_owned = code.replace('\t', "    ");
 
         let syntax = self
             .syntax_set
@@ -66,7 +88,7 @@ impl SyntaxHighlighter {
         let mut highlighter = HighlightLines::new(syntax, &self.theme);
         let mut lines = Vec::new();
 
-        for line in LinesWithEndings::from(&code) {
+        for line in LinesWithEndings::from(&code_owned) {
             let ranges = highlighter
                 .highlight_line(line, &self.syntax_set)
                 .unwrap_or_default();
@@ -104,15 +126,20 @@ impl SyntaxHighlighter {
             lines.push(Line::from(spans));
         }
 
+        // Bounded cache: clear when full. Simpler than LRU and adequate here
+        // because highlighting is the cold path; cache hits dominate.
+        let mut cache = self.cache.borrow_mut();
+        if cache.len() >= CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, lines.clone());
         lines
     }
+}
 
-    pub fn detect_language(info_string: &str) -> String {
-        // Extract language from info string (e.g., "rust" from "```rust")
-        info_string
-            .split_whitespace()
-            .next()
-            .unwrap_or("text")
-            .to_lowercase()
-    }
+fn cache_key(code: &str, language: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut hasher);
+    language.hash(&mut hasher);
+    hasher.finish()
 }

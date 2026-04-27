@@ -267,8 +267,13 @@ fn main() -> Result<()> {
         // Initialize terminal with explicit error handling
         // When stdin is piped, we use /dev/tty for input (handled by tui::tty module)
         use crossterm::ExecutableCommand;
+        use crossterm::event::EnableMouseCapture;
         use crossterm::terminal::EnterAlternateScreen;
         use std::io::stdout;
+
+        // Install panic hook before entering raw mode so the terminal is
+        // restored if anything below panics.
+        treemd::tui::tty::install_panic_hook();
 
         // Manually initialize to get better error messages
         // Use our custom enable_raw_mode that handles piped stdin
@@ -280,6 +285,10 @@ fn main() -> Result<()> {
         stdout().execute(EnterAlternateScreen).inspect_err(|_| {
             treemd::tui::tty::disable_raw_mode().ok();
         })?;
+
+        // Mouse capture: best-effort. Some terminals don't support it; that's
+        // fine — keyboard navigation still works.
+        let _ = stdout().execute(EnableMouseCapture);
 
         let backend = ratatui::backend::CrosstermBackend::new(stdout());
         let mut terminal = ratatui::Terminal::new(backend).inspect_err(|_| {
@@ -322,7 +331,9 @@ fn main() -> Result<()> {
         let result = treemd::tui::run(&mut terminal, app);
 
         // Cleanup terminal state
+        use crossterm::event::DisableMouseCapture;
         use crossterm::terminal::LeaveAlternateScreen;
+        stdout().execute(DisableMouseCapture).ok();
         stdout().execute(LeaveAlternateScreen).ok();
         treemd::tui::tty::disable_raw_mode().ok();
 

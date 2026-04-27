@@ -3,7 +3,6 @@
 //! This module defines the core data structures for representing
 //! markdown documents and their heading hierarchy.
 
-use indextree::{Arena, NodeId};
 use serde::Serialize;
 
 /// A markdown document with its content and structure.
@@ -13,6 +12,9 @@ use serde::Serialize;
 pub struct Document {
     pub content: String,
     pub headings: Vec<Heading>,
+    /// Lowercased heading text, parallel to `headings`. Used for
+    /// case-insensitive search without re-allocating per comparison.
+    heading_text_lc: Vec<String>,
 }
 
 /// A heading in a markdown document.
@@ -40,41 +42,66 @@ pub struct HeadingNode {
 
 impl Document {
     pub fn new(content: String, headings: Vec<Heading>) -> Self {
-        Self { content, headings }
+        let heading_text_lc = headings.iter().map(|h| h.text.to_lowercase()).collect();
+        Self {
+            content,
+            headings,
+            heading_text_lc,
+        }
     }
 
-    /// Build a hierarchical tree from flat heading list
+    /// Build a hierarchical tree from the flat heading list.
+    ///
+    /// Walks the headings once with an explicit stack of `(level, &mut Vec<HeadingNode>)`
+    /// pointers; child arrays are filled in place. No intermediate arena, no
+    /// extra clones beyond the one Heading copy each node owns.
     pub fn build_tree(&self) -> Vec<HeadingNode> {
-        let mut arena = Arena::new();
-        let mut stack: Vec<(usize, NodeId)> = Vec::new();
-        let mut roots = Vec::new();
+        // Build into raw indices first so we can mutate parent nodes safely.
+        let mut roots: Vec<HeadingNode> = Vec::new();
+        // `stack` stores indices describing how to navigate from the root
+        // down to the current parent: each entry is the index into the
+        // parent's `children` Vec. Walking the path on demand avoids
+        // borrow-checker issues from holding mutable references on the stack.
+        let mut path: Vec<(usize, usize)> = Vec::new(); // (level, child_idx)
 
         for heading in &self.headings {
-            let node_id = arena.new_node(heading.clone());
+            let node = HeadingNode {
+                heading: heading.clone(),
+                children: Vec::new(),
+            };
 
-            // Pop stack until we find a parent (heading with level < current)
-            while let Some(&(parent_level, _)) = stack.last() {
+            // Pop until current heading is deeper than top of stack.
+            while let Some(&(parent_level, _)) = path.last() {
                 if parent_level < heading.level {
                     break;
                 }
-                stack.pop();
+                path.pop();
             }
 
-            // Attach to parent or mark as root
-            if let Some(&(_, parent_id)) = stack.last() {
-                parent_id.append(node_id, &mut arena);
+            // Walk down the path to the parent's children Vec, push, and
+            // record the new node's index for descendants.
+            if path.is_empty() {
+                roots.push(node);
+                let idx = roots.len() - 1;
+                path.push((heading.level, idx));
             } else {
-                roots.push(node_id);
+                let mut cursor: &mut Vec<HeadingNode> = &mut roots;
+                let last = path.len() - 1;
+                for (i, &(_, child_idx)) in path.iter().enumerate() {
+                    if i == last {
+                        cursor[child_idx].children.push(node);
+                        let new_idx = cursor[child_idx].children.len() - 1;
+                        let parent_level = heading.level;
+                        path.push((parent_level, new_idx));
+                        break;
+                    } else {
+                        cursor = &mut cursor[child_idx].children;
+                    }
+                }
             }
-
-            stack.push((heading.level, node_id));
         }
 
-        // Convert arena to tree structure
         roots
-            .into_iter()
-            .map(|root_id| build_heading_node(root_id, &arena))
-            .collect()
     }
 
     /// Get headings at a specific level
@@ -85,9 +112,10 @@ impl Document {
     /// Find heading by text (case-insensitive)
     pub fn find_heading(&self, text: &str) -> Option<&Heading> {
         let search = text.to_lowercase();
-        self.headings
+        self.heading_text_lc
             .iter()
-            .find(|h| h.text.to_lowercase() == search)
+            .position(|lc| *lc == search)
+            .map(|i| &self.headings[i])
     }
 
     /// Get all headings matching a filter
@@ -95,7 +123,9 @@ impl Document {
         let search = filter.to_lowercase();
         self.headings
             .iter()
-            .filter(|h| h.text.to_lowercase().contains(&search))
+            .zip(self.heading_text_lc.iter())
+            .filter(|(_, lc)| lc.contains(&search))
+            .map(|(h, _)| h)
             .collect()
     }
 
@@ -104,10 +134,8 @@ impl Document {
     /// Uses stored byte offsets for fast, accurate extraction without string searching.
     pub fn extract_section(&self, heading_text: &str) -> Option<String> {
         // Find the heading (O(n) scan of headings list)
-        let heading_idx = self
-            .headings
-            .iter()
-            .position(|h| h.text.to_lowercase() == heading_text.to_lowercase())?;
+        let search = heading_text.to_lowercase();
+        let heading_idx = self.heading_text_lc.iter().position(|lc| *lc == search)?;
 
         let heading = &self.headings[heading_idx];
 
@@ -133,16 +161,6 @@ impl Document {
         // Extract section content
         Some(self.content[content_start..end].trim().to_string())
     }
-}
-
-fn build_heading_node(node_id: NodeId, arena: &Arena<Heading>) -> HeadingNode {
-    let heading = arena[node_id].get().clone();
-    let children = node_id
-        .children(arena)
-        .map(|child_id| build_heading_node(child_id, arena))
-        .collect();
-
-    HeadingNode { heading, children }
 }
 
 impl HeadingNode {

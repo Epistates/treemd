@@ -764,7 +764,7 @@ impl InteractiveState {
             } else {
                 format!(
                     "{}/{}",
-                    self.current_index.unwrap() + 1,
+                    self.current_index.unwrap_or(0) + 1,
                     self.elements.len()
                 )
             };
