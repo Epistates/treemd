@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.11] - 2026-04-28
+
+### Fixed
+
+- **Toggle details no-op after section navigation** - In interactive mode, pressing Enter on certain `<details>` blocks reported "✓ Toggled details" but produced no visible change. `InteractiveState::element_states` is keyed only by `ElementId { block_idx, sub_idx }`, so a previous section's `Table` state at a given `block_idx` silently blocked a fresh `Details` from initializing at the same key (the indexer used `HashMap::entry().or_insert()`, a no-op when present). `toggle_details` then matched no `Details` variant and silently failed. Indexer now overwrites stale wrong-variant entries while preserving same-section toggle state. Regression test added.
+- **`--filter` and `--level` ignored in `--tree` mode** - CLI now honors both flags when rendering the tree output (c3c3fcd)
+- **`--at-line` not wired up; `-s` mismatched formatted headings** - `--at-line` resolves to the enclosing heading; section selection (`-s`) now matches headings that contain inline formatting (36c4e60)
+
+### Changed
+
+- **Upgraded all dependencies to latest** - Refreshed `clap_complete` 4.6.2 → 4.6.3, `mermaid-rs-renderer` 0.2.1 → 0.2.2, `turbovault-parser` 1.4.0 → 1.4.1, `turbovault-core` 1.4.0 → 1.4.1, `open` 5.3.3 → 5.3.4, plus transitive refreshes (`plist`, `wasm-bindgen`, `tokio`, `libc`, `js-sys`, `cc`, etc.)
+
+### Tests
+
+- Added end-to-end CLI integration suite covering `--tree`, `--list`, `--filter`, `--level`, `--at-line`, and `-s` (471d9d5)
+- Added coverage for JSON output builder and config loading (ef250da)
+- Added coverage for document tree/search and palette command matching (f185c4b)
+
+### Known Issues
+
+- Inline backticks render as plain text instead of styled inline code in tables, headings, and blockquotes ([#51](https://github.com/Epistates/treemd/issues/51)). Fix in flight via [#53](https://github.com/Epistates/treemd/pull/53), pending companion changes in `turbovault-parser`.
+
 ## [0.5.10] - 2026-04-16
 
 ### Added
