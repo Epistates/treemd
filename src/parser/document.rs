@@ -248,12 +248,7 @@ mod tests {
         //   ## D
         let d = doc(
             "",
-            vec![
-                h(1, "A", 0),
-                h(2, "B", 1),
-                h(3, "C", 2),
-                h(2, "D", 3),
-            ],
+            vec![h(1, "A", 0), h(2, "B", 1), h(3, "C", 2), h(2, "D", 3)],
         );
         let tree = d.build_tree();
         assert_eq!(tree.len(), 1);
@@ -456,12 +451,7 @@ mod tests {
         let b = content.find("## B").unwrap();
         let d = doc(
             content,
-            vec![
-                h(1, "Top", top),
-                h(2, "A", a),
-                h(3, "A1", a1),
-                h(2, "B", b),
-            ],
+            vec![h(1, "Top", top), h(2, "A", a), h(3, "A1", a1), h(2, "B", b)],
         );
         let section = d.extract_section("A").expect("found");
         assert!(section.contains("a-body"));

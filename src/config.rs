@@ -438,8 +438,14 @@ mod tests {
     fn color_named_known_values() {
         assert_eq!(ColorValue::Named("red".into()).to_color(), Some(Color::Red));
         assert_eq!(ColorValue::Named("RED".into()).to_color(), Some(Color::Red));
-        assert_eq!(ColorValue::Named("Gray".into()).to_color(), Some(Color::Gray));
-        assert_eq!(ColorValue::Named("grey".into()).to_color(), Some(Color::Gray));
+        assert_eq!(
+            ColorValue::Named("Gray".into()).to_color(),
+            Some(Color::Gray)
+        );
+        assert_eq!(
+            ColorValue::Named("grey".into()).to_color(),
+            Some(Color::Gray)
+        );
         assert_eq!(
             ColorValue::Named("LightCyan".into()).to_color(),
             Some(Color::LightCyan)
@@ -598,10 +604,7 @@ heading_1 = { rgb = [10, 20, 30] }
 
     #[test]
     fn save_then_load_round_trip() {
-        let dir = std::env::temp_dir().join(format!(
-            "treemd-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("treemd-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
 
@@ -622,10 +625,7 @@ heading_1 = { rgb = [10, 20, 30] }
 
     #[test]
     fn load_from_path_invalid_toml_falls_back_to_default() {
-        let dir = std::env::temp_dir().join(format!(
-            "treemd-test-bad-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("treemd-test-bad-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         std::fs::write(&path, "this is not valid = = = toml [[[").unwrap();

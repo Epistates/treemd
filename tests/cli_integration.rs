@@ -140,12 +140,7 @@ fn list_plain_emits_all_headings() {
     assert_eq!(code, 0);
     // Exactly one line per heading in the fixture (5 of them).
     let lines: Vec<_> = stdout.lines().collect();
-    assert_eq!(
-        lines.len(),
-        5,
-        "expected 5 heading lines, got: {:?}",
-        lines
-    );
+    assert_eq!(lines.len(), 5, "expected 5 heading lines, got: {:?}", lines);
     assert!(lines[0].starts_with("# Title"));
     assert!(lines[1].starts_with("## Installation"));
     assert!(lines[2].starts_with("## Usage"));
@@ -213,7 +208,10 @@ fn tree_with_filter_narrows_tree() {
     assert!(stdout.contains("Installation"));
     assert!(!stdout.contains("Title"), "non-matching headings leaked");
     assert!(!stdout.contains("Usage"), "non-matching headings leaked");
-    assert!(!stdout.contains("Conclusion"), "non-matching headings leaked");
+    assert!(
+        !stdout.contains("Conclusion"),
+        "non-matching headings leaked"
+    );
 }
 
 #[test]
@@ -318,11 +316,7 @@ fn at_line_finds_enclosing_heading() {
         + 1;
     // A line *inside* the Usage section — should resolve to "## Usage".
     let target = usage_line + 1;
-    let (stdout, stderr, code) = run(&[
-        "--at-line",
-        &target.to_string(),
-        f.to_str().unwrap(),
-    ]);
+    let (stdout, stderr, code) = run(&["--at-line", &target.to_string(), f.to_str().unwrap()]);
     assert_eq!(code, 0, "stderr: {stderr}");
     assert_eq!(stdout.trim(), "## Usage");
 }
@@ -335,11 +329,7 @@ fn at_line_on_heading_line_returns_that_heading() {
         .position(|l| l.starts_with("## Installation"))
         .expect("Installation heading present")
         + 1;
-    let (stdout, _, code) = run(&[
-        "--at-line",
-        &install_line.to_string(),
-        f.to_str().unwrap(),
-    ]);
+    let (stdout, _, code) = run(&["--at-line", &install_line.to_string(), f.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert_eq!(stdout.trim(), "## Installation");
 }

@@ -216,7 +216,10 @@ mod tests {
         let doc = parse_markdown("# X\n");
         let p = std::path::Path::new("/tmp/example.md");
         let out = build_json_output(&doc, Some(p));
-        assert_eq!(out.document.metadata.source.as_deref(), Some("/tmp/example.md"));
+        assert_eq!(
+            out.document.metadata.source.as_deref(),
+            Some("/tmp/example.md")
+        );
     }
 
     #[test]
@@ -228,7 +231,10 @@ mod tests {
         let out = build_json_output(&doc, None);
         let a = &out.document.sections[0];
         assert!(a.content.raw.contains("A-body"));
-        assert!(!a.content.raw.contains("A1-body"), "child body leaked into parent raw");
+        assert!(
+            !a.content.raw.contains("A1-body"),
+            "child body leaked into parent raw"
+        );
         assert_eq!(a.children[0].content.raw.trim(), "A1-body");
     }
 
