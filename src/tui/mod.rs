@@ -3,7 +3,7 @@ mod help_text;
 mod image_cache;
 mod interactive;
 mod kitty_animation;
-#[cfg(feature = "mermaid")]
+#[cfg(all(feature = "mermaid", unix))]
 mod mermaid;
 mod syntax;
 pub mod terminal_compat;

@@ -261,13 +261,13 @@ impl InteractiveState {
                                         sub_idx: Some(nested_base + CODE_BLOCK_OFFSET),
                                     };
 
-                                    #[cfg(feature = "mermaid")]
+                                    #[cfg(all(feature = "mermaid", unix))]
                                     let code_lines = if language.as_deref() == Some("mermaid") {
                                         1 + MERMAID_PLACEHOLDER_LINES
                                     } else {
                                         2 + content.lines().count()
                                     };
-                                    #[cfg(not(feature = "mermaid"))]
+                                    #[cfg(not(all(feature = "mermaid", unix)))]
                                     let code_lines = 2 + content.lines().count();
 
                                     self.elements.push(InteractiveElement {
@@ -545,13 +545,13 @@ impl InteractiveState {
                                         sub_idx: Some(nested_base + CODE_BLOCK_OFFSET),
                                     };
 
-                                    #[cfg(feature = "mermaid")]
+                                    #[cfg(all(feature = "mermaid", unix))]
                                     let lines = if language.as_deref() == Some("mermaid") {
                                         1 + MERMAID_PLACEHOLDER_LINES
                                     } else {
                                         2 + content.lines().count()
                                     };
-                                    #[cfg(not(feature = "mermaid"))]
+                                    #[cfg(not(all(feature = "mermaid", unix)))]
                                     let lines = 2 + content.lines().count();
 
                                     self.elements.push(InteractiveElement {
@@ -634,13 +634,13 @@ impl InteractiveState {
                     };
 
                     // Mermaid blocks use placeholder lines; regular code uses fences + content
-                    #[cfg(feature = "mermaid")]
+                    #[cfg(all(feature = "mermaid", unix))]
                     let lines = if language.as_deref() == Some("mermaid") {
                         1 + MERMAID_PLACEHOLDER_LINES // header + blank lines
                     } else {
                         2 + content.lines().count() // +2 for fences
                     };
-                    #[cfg(not(feature = "mermaid"))]
+                    #[cfg(not(all(feature = "mermaid", unix)))]
                     let lines = 2 + content.lines().count();
 
                     self.elements.push(InteractiveElement {
@@ -1198,7 +1198,7 @@ fn count_single_block_lines(block: &Block) -> usize {
         Block::Code {
             language, content, ..
         } => {
-            #[cfg(feature = "mermaid")]
+            #[cfg(all(feature = "mermaid", unix))]
             if language.as_deref() == Some("mermaid") {
                 return 1 + MERMAID_PLACEHOLDER_LINES;
             }

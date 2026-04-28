@@ -462,7 +462,7 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     render_inline_images(frame, app, area);
 
     // Render mermaid diagrams as image overlays
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     render_mermaid_images(frame, app, area);
 
     // Render scrollbar
@@ -611,7 +611,7 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-#[cfg(feature = "mermaid")]
+#[cfg(all(feature = "mermaid", unix))]
 fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
     use crate::tui::app::App as MermaidApp;
     use crate::tui::interactive::{ElementType, MERMAID_PLACEHOLDER_LINES};
@@ -1532,9 +1532,9 @@ fn render_markdown_enhanced(
             } => {
                 let lang_str = language.as_deref().unwrap_or("");
 
-                #[cfg(feature = "mermaid")]
+                #[cfg(all(feature = "mermaid", unix))]
                 let is_mermaid = lang_str == "mermaid";
-                #[cfg(not(feature = "mermaid"))]
+                #[cfg(not(all(feature = "mermaid", unix)))]
                 let is_mermaid = false;
 
                 if is_mermaid {
@@ -1574,7 +1574,7 @@ fn render_markdown_enhanced(
                         theme.code_fence_style(),
                     ));
 
-                    #[cfg(not(feature = "mermaid"))]
+                    #[cfg(not(all(feature = "mermaid", unix)))]
                     if lang_str == "mermaid" {
                         fence_spans.push(Span::styled(
                             " (enable 'mermaid' feature to render)",

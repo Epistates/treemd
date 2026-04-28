@@ -10,7 +10,9 @@ use crate::tui::theme::{Theme, ThemeName};
 use crossterm::event::{KeyCode, KeyModifiers};
 use indexmap::IndexMap;
 use ratatui::widgets::{ListState, ScrollbarState};
-use std::collections::{HashMap, HashSet};
+#[cfg(all(feature = "mermaid", unix))]
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -496,11 +498,11 @@ pub struct App {
     pub images_enabled: bool,
 
     // Mermaid diagram rendering cache: source hash → rendered protocol
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_protocol_cache: HashMap<u64, ratatui_image::protocol::StatefulProtocol>,
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_render_errors: HashMap<u64, String>,
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_last_render_width: u32,
 
     // LaTeX detection state
@@ -700,11 +702,11 @@ impl App {
             images_enabled,
 
             // Mermaid diagram cache
-            #[cfg(feature = "mermaid")]
+            #[cfg(all(feature = "mermaid", unix))]
             mermaid_protocol_cache: HashMap::new(),
-            #[cfg(feature = "mermaid")]
+            #[cfg(all(feature = "mermaid", unix))]
             mermaid_render_errors: HashMap::new(),
-            #[cfg(feature = "mermaid")]
+            #[cfg(all(feature = "mermaid", unix))]
             mermaid_last_render_width: 0,
 
             // LaTeX detection
@@ -842,7 +844,7 @@ impl App {
 
     /// Render a mermaid diagram and cache the result as a StatefulProtocol.
     /// Returns true if a cached protocol is available (either fresh or from prior render).
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     pub fn render_mermaid_if_needed(&mut self, source: &str, width: u16) -> bool {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -887,7 +889,7 @@ impl App {
     }
 
     /// Get the hash for a mermaid source string.
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     pub fn mermaid_source_hash(source: &str) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
