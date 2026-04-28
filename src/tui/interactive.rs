@@ -194,10 +194,18 @@ impl InteractiveState {
                         line_range: (start_line, start_line + lines),
                     });
 
-                    // Initialize state if not exists
-                    self.element_states
-                        .entry(id)
-                        .or_insert(ElementState::Details { expanded: false });
+                    // Initialize state if not exists, replacing any stale entry
+                    // from a previous section that mapped this `block_idx` to a
+                    // non-Details variant (e.g., Table). Without this, a stale
+                    // `Table` state silently blocks `toggle_details` since it
+                    // only matches `Details {..}`.
+                    if !matches!(
+                        self.element_states.get(&id),
+                        Some(ElementState::Details { .. })
+                    ) {
+                        self.element_states
+                            .insert(id, ElementState::Details { expanded: false });
+                    }
 
                     current_line += 1; // Details summary line
 
@@ -230,12 +238,18 @@ impl InteractiveState {
                                         ),
                                     });
 
-                                    self.element_states.entry(nested_id).or_insert(
-                                        ElementState::Table {
-                                            selected_row: 0,
-                                            selected_col: 0,
-                                        },
-                                    );
+                                    if !matches!(
+                                        self.element_states.get(&nested_id),
+                                        Some(ElementState::Table { .. })
+                                    ) {
+                                        self.element_states.insert(
+                                            nested_id,
+                                            ElementState::Table {
+                                                selected_row: 0,
+                                                selected_col: 0,
+                                            },
+                                        );
+                                    }
 
                                     current_line += table_lines;
                                 }
@@ -570,12 +584,18 @@ impl InteractiveState {
                                         line_range: (nested_start_line, nested_start_line + lines),
                                     });
 
-                                    self.element_states
-                                        .entry(id)
-                                        .or_insert(ElementState::Table {
-                                            selected_row: 0,
-                                            selected_col: 0,
-                                        });
+                                    if !matches!(
+                                        self.element_states.get(&id),
+                                        Some(ElementState::Table { .. })
+                                    ) {
+                                        self.element_states.insert(
+                                            id,
+                                            ElementState::Table {
+                                                selected_row: 0,
+                                                selected_col: 0,
+                                            },
+                                        );
+                                    }
 
                                     current_line += lines;
                                 }
@@ -653,13 +673,19 @@ impl InteractiveState {
                         line_range: (current_line, current_line + lines),
                     });
 
-                    // Initialize table state
-                    self.element_states
-                        .entry(id)
-                        .or_insert(ElementState::Table {
-                            selected_row: 0,
-                            selected_col: 0,
-                        });
+                    // Initialize table state, replacing any stale wrong-variant entry.
+                    if !matches!(
+                        self.element_states.get(&id),
+                        Some(ElementState::Table { .. })
+                    ) {
+                        self.element_states.insert(
+                            id,
+                            ElementState::Table {
+                                selected_row: 0,
+                                selected_col: 0,
+                            },
+                        );
+                    }
 
                     current_line += lines;
                 }
@@ -1297,6 +1323,48 @@ fn main() {}
             link_count, 4,
             "Should find 4 links (including nested), found {}",
             link_count
+        );
+    }
+
+    #[test]
+    fn reindex_replaces_stale_wrong_variant_state() {
+        // Regression: when navigating between sections, element_states is keyed
+        // only by ElementId (block_idx, sub_idx). A previous section's Table at
+        // block_idx=N would silently block a Details inserted at the same key
+        // in the new section, since `or_insert` is a no-op when the key exists.
+        // toggle_details would then no-op (variant mismatch) while the activate
+        // handler still reported "Toggled details".
+        let mut state = InteractiveState::new();
+
+        // Section A: a table at block_idx 0.
+        let table_md = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+        state.index_elements(&parse_content(table_md, 0));
+        let table_id = ElementId {
+            block_idx: 0,
+            sub_idx: None,
+        };
+        assert!(matches!(
+            state.element_states.get(&table_id),
+            Some(ElementState::Table { .. })
+        ));
+
+        // Section B: a Details at the same block_idx.
+        let details_md = "<details>\n<summary>S</summary>\n\nbody\n\n</details>\n";
+        state.index_elements(&parse_content(details_md, 0));
+
+        assert!(
+            matches!(
+                state.element_states.get(&table_id),
+                Some(ElementState::Details { expanded: false })
+            ),
+            "stale Table state should have been replaced with fresh Details, got {:?}",
+            state.element_states.get(&table_id)
+        );
+
+        state.toggle_details(table_id);
+        assert!(
+            state.is_details_expanded(table_id),
+            "toggle_details should flip the freshly-inserted Details state"
         );
     }
 }
