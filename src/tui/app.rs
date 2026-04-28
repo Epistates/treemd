@@ -3902,18 +3902,6 @@ impl App {
         self.update_file_filter();
     }
 
-    /// Auto-hide outline when only 0-1 markdown files in directory.
-    /// User can still toggle outline visibility with keybinding.
-    pub fn auto_hide_outline_if_single_file(&mut self) {
-        // Only scan if no data yet (avoids redundant scan after enter_file_picker)
-        if self.file_picker.files.is_empty() && self.file_picker.dirs.is_empty() {
-            self.scan_markdown_files();
-        }
-        if self.file_picker.files.len() <= 1 {
-            self.show_outline = false;
-        }
-    }
-
     /// Navigate to parent directory in file picker
     pub fn file_picker_parent_dir(&mut self) {
         let current_dir = self.effective_picker_dir();
