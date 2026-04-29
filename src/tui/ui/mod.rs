@@ -173,16 +173,16 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     // Get the current query and display state
     let (query, is_active, match_info) = if is_doc_search {
-        let info = if !app.doc_search_matches.is_empty() {
-            let current = app.doc_search_current_idx.unwrap_or(0) + 1;
-            let total = app.doc_search_matches.len();
+        let info = if !app.doc_search.matches.is_empty() {
+            let current = app.doc_search.current_idx.unwrap_or(0) + 1;
+            let total = app.doc_search.matches.len();
             format!(" [{}/{}]", current, total)
-        } else if !app.doc_search_query.is_empty() {
+        } else if !app.doc_search.query.is_empty() {
             " [no matches]".to_string()
         } else {
             String::new()
         };
-        (&app.doc_search_query, app.doc_search_active, info)
+        (&app.doc_search.query, app.doc_search.active, info)
     } else {
         // Outline search
         (&app.search_query, app.outline_search_active, String::new())
@@ -428,12 +428,12 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Apply search highlighting only for document/content search mode
     // Outline search (s) only filters headings, it doesn't highlight content
-    if app.mode == AppMode::DocSearch && !app.doc_search_query.is_empty() {
+    if app.mode == AppMode::DocSearch && !app.doc_search.query.is_empty() {
         rendered_text = apply_search_highlighting(
             rendered_text,
-            &app.doc_search_query,
-            app.doc_search_current_idx,
-            app.doc_search_matches.len(),
+            &app.doc_search.query,
+            app.doc_search.current_idx,
+            app.doc_search.matches.len(),
             &theme,
         );
     }
@@ -472,7 +472,7 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     render_inline_images(frame, app, area);
 
     // Render mermaid diagrams as image overlays
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     render_mermaid_images(frame, app, area);
 
     // Render scrollbar
@@ -498,7 +498,7 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
     use ratatui_image::{FilterType, Resize, StatefulImage};
 
     // Don't render inline when viewing modal
-    if app.viewing_image_path.is_some() {
+    if app.image_modal.path.is_some() {
         return;
     }
 
@@ -621,13 +621,13 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-#[cfg(feature = "mermaid")]
+#[cfg(all(feature = "mermaid", unix))]
 fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
     use crate::tui::app::App as MermaidApp;
     use crate::tui::interactive::{ElementType, mermaid_placeholder_lines};
     use ratatui_image::{Resize, StatefulImage};
 
-    if app.viewing_image_path.is_some() || !app.images_enabled {
+    if app.image_modal.path.is_some() || !app.images_enabled {
         return;
     }
 
@@ -817,7 +817,7 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     use std::time::Duration;
 
     // Must have frames available
-    if !app.is_image_modal_open() || app.modal_gif_frames.is_empty() {
+    if !app.is_image_modal_open() || app.image_modal.gif_frames.is_empty() {
         return;
     }
 
@@ -826,7 +826,7 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme_foreground = app.theme.foreground;
     let theme_heading_1 = app.theme.heading_1;
 
-    let is_multi_frame = app.modal_gif_frames.len() > 1;
+    let is_multi_frame = app.image_modal.gif_frames.len() > 1;
 
     // Calculate modal area - centered on screen with padding
     let modal_width = (area.width * 80) / 100;
@@ -857,7 +857,7 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     if is_multi_frame
         && !app.has_kitty_animation()
         && app.use_kitty_animation
-        && !app.modal_animation_paused
+        && !app.image_modal.animation_paused
     {
         // Start animation at center of inner area
         let image_col = inner_area.x + inner_area.width / 4;
@@ -869,34 +869,38 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     let kitty_animating = app.has_kitty_animation();
 
     // For software animation (non-Kitty terminals), handle frame timing
-    let is_animating = is_multi_frame && !app.modal_animation_paused && !kitty_animating;
+    let is_animating = is_multi_frame && !app.image_modal.animation_paused && !kitty_animating;
 
     // When animating (software or Kitty), avoid overwriting the image area
     let avoid_image_area = is_animating || kitty_animating;
 
-    if is_animating && let Some(last_update) = app.modal_last_frame_update {
-        let current_frame = &app.modal_gif_frames[app.modal_frame_index];
+    if is_animating && let Some(last_update) = app.image_modal.last_frame_update {
+        let current_frame = &app.image_modal.gif_frames[app.image_modal.frame_index];
         let frame_delay = Duration::from_millis(current_frame.delay_ms as u64);
 
         if last_update.elapsed() >= frame_delay {
-            app.modal_frame_index = (app.modal_frame_index + 1) % app.modal_gif_frames.len();
-            app.modal_last_frame_update = Some(std::time::Instant::now());
+            app.image_modal.frame_index =
+                (app.image_modal.frame_index + 1) % app.image_modal.gif_frames.len();
+            app.image_modal.last_frame_update = Some(std::time::Instant::now());
         }
     }
 
     // Only create a new protocol when frame actually changes (software animation only).
     // Skip this entirely when Kitty handles animation.
     if !kitty_animating {
-        let needs_new_protocol = app.modal_last_rendered_frame != Some(app.modal_frame_index);
+        let needs_new_protocol =
+            app.image_modal.last_rendered_frame != Some(app.image_modal.frame_index);
         if needs_new_protocol && let Some(picker) = &mut app.picker {
-            let current_img = app.modal_gif_frames[app.modal_frame_index].image.clone();
-            app.viewing_image_state = Some(picker.new_resize_protocol(current_img));
-            app.modal_last_rendered_frame = Some(app.modal_frame_index);
+            let current_img = app.image_modal.gif_frames[app.image_modal.frame_index]
+                .image
+                .clone();
+            app.image_modal.state = Some(picker.new_resize_protocol(current_img));
+            app.image_modal.last_rendered_frame = Some(app.image_modal.frame_index);
         }
     }
 
     // Get the active protocol for sizing (even Kitty needs this for layout)
-    if let Some(protocol_state) = &mut app.viewing_image_state {
+    if let Some(protocol_state) = &mut app.image_modal.state {
         // Calculate image area
         let resize = Resize::Scale(Some(FilterType::Triangle));
 
@@ -1027,7 +1031,7 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
 
         // Build title with frame info and controls for GIFs
         let title = if is_multi_frame {
-            let state = if app.modal_animation_paused {
+            let state = if app.image_modal.animation_paused {
                 "⏸"
             } else {
                 "▶"
@@ -1037,8 +1041,8 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
             format!(
                 " {} {}/{} {} | ←/→:step Space:play/pause q:close ",
                 mode,
-                app.modal_frame_index + 1,
-                app.modal_gif_frames.len(),
+                app.image_modal.frame_index + 1,
+                app.image_modal.gif_frames.len(),
                 state
             )
         } else {
@@ -1201,12 +1205,13 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     } else if app.mode == AppMode::LinkFollow {
         // Link follow mode status
         let link_count = app.links_in_view.len();
-        let selected = app.selected_link_idx.map(|i| i + 1).unwrap_or(0);
+        let selected = app.link_picker.selected.map(|i| i + 1).unwrap_or(0);
 
         let link_info = if link_count > 0 {
             // Show current link details
             let current_link = app
-                .selected_link_idx
+                .link_picker
+                .selected
                 .and_then(|idx| app.links_in_view.get(idx));
 
             if let Some(link) = current_link {
@@ -1249,11 +1254,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             Focus::Outline => {
                 let selected_idx = app.outline_state.selected().unwrap_or(0);
                 let total = app.outline_items.len();
-                let percentage = if total > 0 {
-                    (selected_idx + 1) * 100 / total
-                } else {
-                    0
-                };
+                let percentage = ((selected_idx + 1) * 100).checked_div(total).unwrap_or(0);
                 (
                     "Outline",
                     format!("{}/{} ({}%)", selected_idx + 1, total, percentage),
@@ -1265,11 +1266,10 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 let content_height = app.content_height;
                 let viewport = app.content_viewport_height as usize;
                 let bottom_line = (scroll_pos + viewport).min(content_height);
-                let percentage = if content_height > 0 {
-                    (bottom_line * 100 / content_height).min(100)
-                } else {
-                    0
-                };
+                let percentage = (bottom_line * 100)
+                    .checked_div(content_height)
+                    .unwrap_or(0)
+                    .min(100);
                 (
                     "Content",
                     format!("Line {} ({}%)", scroll_pos + 1, percentage),
@@ -1588,9 +1588,9 @@ fn render_markdown_enhanced(
             } => {
                 let lang_str = language.as_deref().unwrap_or("");
 
-                #[cfg(feature = "mermaid")]
+                #[cfg(all(feature = "mermaid", unix))]
                 let is_mermaid = lang_str == "mermaid";
-                #[cfg(not(feature = "mermaid"))]
+                #[cfg(not(all(feature = "mermaid", unix)))]
                 let is_mermaid = false;
 
                 if is_mermaid {
@@ -1638,7 +1638,7 @@ fn render_markdown_enhanced(
                         theme.code_fence_style(),
                     ));
 
-                    #[cfg(not(feature = "mermaid"))]
+                    #[cfg(not(all(feature = "mermaid", unix)))]
                     if lang_str == "mermaid" {
                         fence_spans.push(Span::styled(
                             " (enable 'mermaid' feature to render)",

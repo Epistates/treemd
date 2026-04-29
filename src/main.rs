@@ -213,7 +213,7 @@ fn main() -> Result<()> {
         && !args.tree
         && !args.count
         && args.section.is_none()
-        && args.command.is_none()
+        && args.at_line.is_none()
         && !args.setup_completions
     {
         // Load configuration
@@ -267,8 +267,13 @@ fn main() -> Result<()> {
         // Initialize terminal with explicit error handling
         // When stdin is piped, we use /dev/tty for input (handled by tui::tty module)
         use crossterm::ExecutableCommand;
+        use crossterm::event::EnableMouseCapture;
         use crossterm::terminal::EnterAlternateScreen;
         use std::io::stdout;
+
+        // Install panic hook before entering raw mode so the terminal is
+        // restored if anything below panics.
+        treemd::tui::tty::install_panic_hook();
 
         // Manually initialize to get better error messages
         // Use our custom enable_raw_mode that handles piped stdin
@@ -280,6 +285,10 @@ fn main() -> Result<()> {
         stdout().execute(EnterAlternateScreen).inspect_err(|_| {
             treemd::tui::tty::disable_raw_mode().ok();
         })?;
+
+        // Mouse capture: best-effort. Some terminals don't support it; that's
+        // fine — keyboard navigation still works.
+        let _ = stdout().execute(EnableMouseCapture);
 
         let backend = ratatui::backend::CrosstermBackend::new(stdout());
         let mut terminal = ratatui::Terminal::new(backend).inspect_err(|_| {
@@ -322,7 +331,9 @@ fn main() -> Result<()> {
         let result = treemd::tui::run(&mut terminal, app);
 
         // Cleanup terminal state
+        use crossterm::event::DisableMouseCapture;
         use crossterm::terminal::LeaveAlternateScreen;
+        stdout().execute(DisableMouseCapture).ok();
         stdout().execute(LeaveAlternateScreen).ok();
         treemd::tui::tty::disable_raw_mode().ok();
 
@@ -344,15 +355,59 @@ fn handle_cli_mode(args: &Cli, doc: &Document) {
         doc.headings.iter().collect()
     };
 
+    // --at-line takes precedence over the other flag-based modes.
+    if let Some(line) = args.at_line {
+        print_heading_at_line(doc, line);
+        return;
+    }
+
     // Handle different modes
     if args.count {
         print_heading_counts(doc);
     } else if args.tree {
-        print_tree(doc, &args.output);
+        print_tree(doc, &args.output, &headings);
     } else if let Some(ref section_name) = args.section {
         extract_section(doc, section_name);
     } else if args.list {
         print_headings(&headings, &args.output, doc);
+    }
+}
+
+/// Print the heading at or immediately before `target_line` (1-indexed).
+///
+/// Used by the `at-line` subcommand. Walks the heading list once, counting
+/// newlines between consecutive offsets so the whole call is O(content_len)
+/// rather than O(headings * content_len).
+fn print_heading_at_line(doc: &Document, target_line: usize) {
+    if target_line == 0 {
+        eprintln!("Error: line number must be >= 1");
+        process::exit(1);
+    }
+
+    let mut best: Option<&parser::Heading> = None;
+    let mut prev_line = 1usize;
+    let mut prev_offset = 0usize;
+
+    for h in &doc.headings {
+        let h_line = prev_line + doc.content[prev_offset..h.offset].matches('\n').count();
+        if h_line <= target_line {
+            best = Some(h);
+        } else {
+            break;
+        }
+        prev_line = h_line;
+        prev_offset = h.offset;
+    }
+
+    match best {
+        Some(h) => {
+            let prefix = "#".repeat(h.level);
+            println!("{} {}", prefix, h.text);
+        }
+        None => {
+            eprintln!("No heading at or before line {}", target_line);
+            process::exit(1);
+        }
     }
 }
 
@@ -378,8 +433,19 @@ fn print_headings(headings: &[&parser::Heading], format: &OutputFormat, doc: &Do
     }
 }
 
-fn print_tree(doc: &Document, format: &OutputFormat) {
-    let tree = doc.build_tree();
+fn print_tree(doc: &Document, format: &OutputFormat, headings: &[&parser::Heading]) {
+    // Build the tree from the (possibly filtered) heading subset so that
+    // --tree --filter / --tree --level honor the docstring. When no filter
+    // is in play, `headings` is the full list and we get the same tree as
+    // doc.build_tree().
+    let tree = if headings.len() == doc.headings.len() {
+        doc.build_tree()
+    } else {
+        let owned: Vec<parser::Heading> = headings.iter().map(|&h| h.clone()).collect();
+        // build_tree only inspects self.headings, so empty content is fine.
+        Document::new(String::new(), owned).build_tree()
+    };
+
     let config = treemd::Config::load();
     let compact = config.is_compact_tree();
 
@@ -391,9 +457,10 @@ fn print_tree(doc: &Document, format: &OutputFormat) {
             }
         }
         OutputFormat::Json => {
-            // For JSON, we'll serialize the flat headings list
-            // (Tree serialization would need custom implementation)
-            let json = serde_json::to_string_pretty(&doc.headings)
+            // For JSON, serialize the (filtered) flat headings list.
+            // Tree serialization would need custom implementation.
+            let owned: Vec<parser::Heading> = headings.iter().map(|&h| h.clone()).collect();
+            let json = serde_json::to_string_pretty(&owned)
                 .expect("JSON serialization of headings should not fail");
             println!("{}", json);
         }
@@ -426,29 +493,19 @@ fn extract_section(doc: &Document, section_name: &str) {
         }
     };
 
-    // Find the section in content
-    // This is a simple implementation - could be improved
-    let search = format!("{} {}", "#".repeat(heading.level), heading.text);
-    if let Some(start) = doc.content.find(&search) {
-        // Find next heading at same or higher level
-        let after = &doc.content[start..];
-        let section_level = heading.level;
+    // Use stored byte offsets instead of string-searching the rendered heading.
+    // String search is wrong when the heading source has inline markdown
+    // (e.g. `## **Bold** Section`) since heading.text is the stripped form.
+    let start = heading.offset;
+    let level = heading.level;
+    let end = doc
+        .headings
+        .iter()
+        .find(|h| h.offset > start && h.level <= level)
+        .map(|h| h.offset)
+        .unwrap_or(doc.content.len());
 
-        // Find end of section
-        let end_pos = doc
-            .headings
-            .iter()
-            .skip_while(|h| h.text != heading.text)
-            .skip(1)
-            .find(|h| h.level <= section_level)
-            .and_then(|next_heading| {
-                let search = format!("{} {}", "#".repeat(next_heading.level), next_heading.text);
-                after.find(&search)
-            })
-            .unwrap_or(after.len());
-
-        println!("{}", &after[..end_pos].trim());
-    }
+    println!("{}", doc.content[start..end].trim());
 }
 
 fn handle_query_mode(doc: &Document, query_str: &str, output_format: Option<&str>) -> Result<()> {

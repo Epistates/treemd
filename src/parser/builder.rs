@@ -120,3 +120,143 @@ fn calculate_max_depth(tree: &[HeadingNode]) -> usize {
 fn count_words(content: &str) -> usize {
     content.split_whitespace().count()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::parse_markdown;
+
+    // ---------- find_next_heading (code-block awareness) ----------
+
+    #[test]
+    fn find_next_heading_stops_at_first_heading() {
+        let content = "para one\nmore text\n## Subsection\nbody\n";
+        let end = find_next_heading(content);
+        assert_eq!(&content[..end], "para one\nmore text\n");
+    }
+
+    #[test]
+    fn find_next_heading_no_heading_returns_full_len() {
+        let content = "just a paragraph\nwith two lines\n";
+        assert_eq!(find_next_heading(content), content.len());
+    }
+
+    #[test]
+    fn find_next_heading_ignores_heading_inside_code_block() {
+        // The `# fake heading` inside ``` must NOT terminate the section.
+        let content = "intro\n\n```rust\n# fake heading\nlet x = 1;\n```\n\n## real heading\n";
+        let end = find_next_heading(content);
+        // Should land at the real heading's line, not the fake one.
+        assert!(content[..end].contains("# fake heading"));
+        assert!(!content[..end].contains("## real heading"));
+    }
+
+    #[test]
+    fn find_next_heading_ignores_indented_code_fences() {
+        // turbovault treats `  ```` as a code fence (trim_start before checking).
+        let content = "intro\n  ```\n# fake\n  ```\n## real\n";
+        let end = find_next_heading(content);
+        assert!(content[..end].contains("# fake"));
+        assert!(!content[..end].contains("## real"));
+    }
+
+    // ---------- count_words ----------
+
+    #[test]
+    fn count_words_basic() {
+        assert_eq!(count_words(""), 0);
+        assert_eq!(count_words("one"), 1);
+        assert_eq!(count_words("one two three"), 3);
+        assert_eq!(count_words("  leading and  trailing  "), 3);
+        assert_eq!(count_words("with\nnewlines\nand\ttabs"), 4);
+    }
+
+    // ---------- calculate_max_depth ----------
+
+    #[test]
+    fn calculate_max_depth_empty_is_zero() {
+        assert_eq!(calculate_max_depth(&[]), 0);
+    }
+
+    #[test]
+    fn calculate_max_depth_counts_deepest_branch() {
+        // Build a tree manually:
+        // A
+        //  ├── B
+        //  └── C
+        //       └── D
+        let tree = parse_markdown("# A\n## B\n## C\n### D\n").build_tree();
+        // Depth: A(1) → C(2) → D(3) = 3.
+        assert_eq!(calculate_max_depth(&tree), 3);
+    }
+
+    // ---------- build_json_output (end-to-end) ----------
+
+    #[test]
+    fn build_json_output_metadata_and_shape() {
+        let md = "# Top\nintro\n\n## Sub\nsub body\nmore\n";
+        let doc = parse_markdown(md);
+        let out = build_json_output(&doc, None);
+
+        assert!(out.document.metadata.source.is_none());
+        assert_eq!(out.document.metadata.heading_count, 2);
+        assert_eq!(out.document.metadata.max_depth, 2);
+        assert!(out.document.metadata.word_count > 0);
+
+        assert_eq!(out.document.sections.len(), 1);
+        let top = &out.document.sections[0];
+        assert_eq!(top.title, "Top");
+        assert_eq!(top.level, 1);
+        assert_eq!(top.children.len(), 1);
+        assert_eq!(top.children[0].title, "Sub");
+    }
+
+    #[test]
+    fn build_json_output_records_source_path() {
+        let doc = parse_markdown("# X\n");
+        let p = std::path::Path::new("/tmp/example.md");
+        let out = build_json_output(&doc, Some(p));
+        assert_eq!(
+            out.document.metadata.source.as_deref(),
+            Some("/tmp/example.md")
+        );
+    }
+
+    #[test]
+    fn build_json_output_section_raw_excludes_children() {
+        // Section "A" raw content should NOT include child "A1" body —
+        // children are emitted separately via the children array.
+        let md = "# A\nA-body\n\n## A1\nA1-body\n";
+        let doc = parse_markdown(md);
+        let out = build_json_output(&doc, None);
+        let a = &out.document.sections[0];
+        assert!(a.content.raw.contains("A-body"));
+        assert!(
+            !a.content.raw.contains("A1-body"),
+            "child body leaked into parent raw"
+        );
+        assert_eq!(a.children[0].content.raw.trim(), "A1-body");
+    }
+
+    #[test]
+    fn build_json_output_slugifies_titles() {
+        let doc = parse_markdown("# Hello, World!\n");
+        let out = build_json_output(&doc, None);
+        let s = &out.document.sections[0];
+        assert_eq!(s.title, "Hello, World!");
+        // Just sanity-check the slug is lowercase and has no spaces/punct.
+        assert!(!s.slug.contains(' '));
+        assert!(!s.slug.contains(','));
+        assert_eq!(s.slug, s.id);
+    }
+
+    #[test]
+    fn build_json_output_position_line_is_1_indexed() {
+        // First heading on line 1 → reported line of the *content* should be > 1
+        // (build_section returns line + 1 for the section content start).
+        let md = "# Top\nbody\n";
+        let doc = parse_markdown(md);
+        let out = build_json_output(&doc, None);
+        assert!(out.document.sections[0].position.line >= 2);
+    }
+}

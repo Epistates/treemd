@@ -427,3 +427,234 @@ impl Config {
             .map(|parent| parent.join("code-themes"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------- ColorValue::to_color ----------
+
+    #[test]
+    fn color_named_known_values() {
+        assert_eq!(ColorValue::Named("red".into()).to_color(), Some(Color::Red));
+        assert_eq!(ColorValue::Named("RED".into()).to_color(), Some(Color::Red));
+        assert_eq!(
+            ColorValue::Named("Gray".into()).to_color(),
+            Some(Color::Gray)
+        );
+        assert_eq!(
+            ColorValue::Named("grey".into()).to_color(),
+            Some(Color::Gray)
+        );
+        assert_eq!(
+            ColorValue::Named("LightCyan".into()).to_color(),
+            Some(Color::LightCyan)
+        );
+    }
+
+    #[test]
+    fn color_named_unknown_returns_none() {
+        assert_eq!(ColorValue::Named("chartreuse".into()).to_color(), None);
+        assert_eq!(ColorValue::Named("".into()).to_color(), None);
+    }
+
+    #[test]
+    fn color_rgb_and_indexed() {
+        assert_eq!(
+            ColorValue::Rgb { rgb: [10, 20, 30] }.to_color(),
+            Some(Color::Rgb(10, 20, 30))
+        );
+        assert_eq!(
+            ColorValue::Indexed { indexed: 235 }.to_color(),
+            Some(Color::Indexed(235))
+        );
+    }
+
+    // ---------- Defaults ----------
+
+    #[test]
+    fn config_default_is_sane() {
+        let c = Config::default();
+        assert_eq!(c.ui.theme, "OceanDark");
+        assert_eq!(c.ui.code_theme, "base16-ocean.dark");
+        assert_eq!(c.ui.outline_width, 30);
+        assert_eq!(c.ui.tree_style, "compact");
+        assert_eq!(c.terminal.color_mode, "auto");
+        assert!(!c.terminal.warned_terminal_app);
+        assert!(c.images.enabled);
+        assert!(c.content.hide_frontmatter);
+        assert!(c.content.hide_latex);
+        assert!(c.path.is_none());
+    }
+
+    #[test]
+    fn is_compact_tree_reflects_style() {
+        let mut c = Config::default();
+        assert!(c.is_compact_tree());
+        c.ui.tree_style = "spaced".to_string();
+        assert!(!c.is_compact_tree());
+    }
+
+    #[test]
+    fn theme_name_known_values() {
+        let mut c = Config::default();
+        for (raw, expected) in [
+            ("OceanDark", ThemeName::OceanDark),
+            ("Nord", ThemeName::Nord),
+            ("Dracula", ThemeName::Dracula),
+            ("Solarized", ThemeName::Solarized),
+            ("Monokai", ThemeName::Monokai),
+            ("Gruvbox", ThemeName::Gruvbox),
+            ("TokyoNight", ThemeName::TokyoNight),
+            ("CatppuccinMocha", ThemeName::CatppuccinMocha),
+        ] {
+            c.ui.theme = raw.into();
+            assert_eq!(c.theme_name(), expected, "theme={raw}");
+        }
+    }
+
+    #[test]
+    fn theme_name_unknown_falls_back_to_oceandark() {
+        let mut c = Config::default();
+        c.ui.theme = "Nonexistent".into();
+        assert_eq!(c.theme_name(), ThemeName::OceanDark);
+    }
+
+    // ---------- TOML round-trip ----------
+
+    #[test]
+    fn config_round_trips_through_toml() {
+        let mut c = Config::default();
+        c.ui.theme = "Nord".into();
+        c.ui.outline_width = 42;
+        c.theme.heading_1 = Some(ColorValue::Named("Cyan".into()));
+        c.theme.background = Some(ColorValue::Rgb { rgb: [1, 2, 3] });
+        c.theme.foreground = Some(ColorValue::Indexed { indexed: 7 });
+
+        let s = toml::to_string_pretty(&c).expect("serialize");
+        let parsed: Config = toml::from_str(&s).expect("parse back");
+
+        assert_eq!(parsed.ui.theme, "Nord");
+        assert_eq!(parsed.ui.outline_width, 42);
+        assert!(matches!(
+            parsed.theme.heading_1,
+            Some(ColorValue::Named(ref n)) if n == "Cyan"
+        ));
+        assert!(matches!(
+            parsed.theme.background,
+            Some(ColorValue::Rgb { rgb: [1, 2, 3] })
+        ));
+        assert!(matches!(
+            parsed.theme.foreground,
+            Some(ColorValue::Indexed { indexed: 7 })
+        ));
+    }
+
+    #[test]
+    fn config_partial_toml_uses_defaults_for_missing_fields() {
+        // Only set ui.theme — everything else should fall back to Default::default().
+        let s = "[ui]\ntheme = \"Dracula\"\n";
+        let c: Config = toml::from_str(s).expect("parse");
+        assert_eq!(c.ui.theme, "Dracula");
+        assert_eq!(c.ui.outline_width, 30); // default
+        assert_eq!(c.terminal.color_mode, "auto"); // default
+        assert!(c.content.hide_frontmatter); // default
+    }
+
+    #[test]
+    fn config_color_value_untagged_parses_three_forms() {
+        // Named
+        let s = r#"[theme]
+heading_1 = "Red"
+"#;
+        let c: Config = toml::from_str(s).expect("named");
+        assert!(matches!(c.theme.heading_1, Some(ColorValue::Named(_))));
+
+        // Indexed
+        let s = r#"[theme]
+heading_1 = { indexed = 200 }
+"#;
+        let c: Config = toml::from_str(s).expect("indexed");
+        assert!(matches!(
+            c.theme.heading_1,
+            Some(ColorValue::Indexed { indexed: 200 })
+        ));
+
+        // RGB
+        let s = r#"[theme]
+heading_1 = { rgb = [10, 20, 30] }
+"#;
+        let c: Config = toml::from_str(s).expect("rgb");
+        assert!(matches!(
+            c.theme.heading_1,
+            Some(ColorValue::Rgb { rgb: [10, 20, 30] })
+        ));
+    }
+
+    // ---------- load_from_path & save round-trip ----------
+
+    #[test]
+    fn load_from_path_missing_file_returns_default() {
+        let p = std::env::temp_dir().join("treemd-nonexistent-xyz-987654.toml");
+        assert!(!p.exists());
+        let c = Config::load_from_path(&p);
+        // Compare to Default by checking a couple of fields.
+        assert_eq!(c.ui.theme, Config::default().ui.theme);
+    }
+
+    #[test]
+    fn save_then_load_round_trip() {
+        let dir = std::env::temp_dir().join(format!("treemd-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+
+        let mut c = Config::default();
+        c.ui.theme = "Gruvbox".into();
+        c.ui.outline_width = 55;
+        c.path = Some(path.clone());
+        c.save().expect("save");
+
+        let loaded = Config::load_from_path(&path);
+        assert_eq!(loaded.ui.theme, "Gruvbox");
+        assert_eq!(loaded.ui.outline_width, 55);
+
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn load_from_path_invalid_toml_falls_back_to_default() {
+        let dir = std::env::temp_dir().join(format!("treemd-test-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "this is not valid = = = toml [[[").unwrap();
+
+        // Suppress the eprintln in the test output by just checking the result.
+        let c = Config::load_from_path(&path);
+        assert_eq!(c.ui.theme, Config::default().ui.theme);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    // ---------- code_theme_dir_path ----------
+
+    #[test]
+    fn code_theme_dir_path_no_path_returns_none() {
+        let c = Config::default();
+        assert!(c.code_theme_dir_path().is_none());
+    }
+
+    #[test]
+    fn code_theme_dir_path_uses_config_parent() {
+        let c = Config {
+            path: Some(PathBuf::from("/etc/treemd/config.toml")),
+            ..Default::default()
+        };
+        assert_eq!(
+            c.code_theme_dir_path(),
+            Some(PathBuf::from("/etc/treemd/code-themes"))
+        );
+    }
+}

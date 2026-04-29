@@ -76,12 +76,12 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Clear, popup_area);
 
     // Build header with search info
-    let header_text = if app.link_search_active || !app.link_search_query.is_empty() {
+    let header_text = if app.link_picker.active || !app.link_picker.query.is_empty() {
         format!(
             "Links ({}/{}) - /: search, Enter: follow, Esc: {}",
-            app.filtered_link_indices.len(),
+            app.link_picker.filtered_indices.len(),
             app.links_in_view.len(),
-            if app.link_search_active {
+            if app.link_picker.active {
                 "stop search"
             } else {
                 "cancel"
@@ -103,8 +103,8 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
     )])];
 
     // Show search bar if active or has query
-    if app.link_search_active || !app.link_search_query.is_empty() {
-        let search_style = if app.link_search_active {
+    if app.link_picker.active || !app.link_picker.query.is_empty() {
+        let search_style = if app.link_picker.active {
             Style::default()
                 .fg(theme.modal_selected_fg())
                 .add_modifier(Modifier::BOLD)
@@ -112,10 +112,10 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme.modal_description())
         };
 
-        let cursor = if app.link_search_active { "▌" } else { "" };
+        let cursor = if app.link_picker.active { "▌" } else { "" };
         lines.push(Line::from(vec![
             Span::styled("Search: ", Style::default().fg(theme.modal_key_fg())),
-            Span::styled(format!("{}{}", app.link_search_query, cursor), search_style),
+            Span::styled(format!("{}{}", app.link_picker.query, cursor), search_style),
         ]));
     }
 
@@ -125,9 +125,9 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
     let mut selected_line_start: u16 = 0;
 
     // Iterate over filtered links
-    for (display_idx, &real_idx) in app.filtered_link_indices.iter().enumerate() {
+    for (display_idx, &real_idx) in app.link_picker.filtered_indices.iter().enumerate() {
         let link = &app.links_in_view[real_idx];
-        let is_selected = app.selected_link_idx == Some(display_idx);
+        let is_selected = app.link_picker.selected == Some(display_idx);
 
         // Track line position for selected item
         if is_selected {
@@ -200,13 +200,13 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         // Add blank line between links
-        if display_idx < app.filtered_link_indices.len() - 1 {
+        if display_idx < app.link_picker.filtered_indices.len() - 1 {
             lines.push(Line::from(""));
         }
     }
 
     // Show "no matches" message if filter has no results
-    if app.filtered_link_indices.is_empty() && !app.links_in_view.is_empty() {
+    if app.link_picker.filtered_indices.is_empty() && !app.links_in_view.is_empty() {
         lines.push(Line::from(vec![Span::styled(
             "No links match your search",
             Style::default()
@@ -217,7 +217,7 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     // Add footer
     lines.push(Line::from(""));
-    let footer_text = if app.link_search_active {
+    let footer_text = if app.link_picker.active {
         "Type to filter • Enter: select • Esc: stop search • Backspace: delete"
     } else {
         "Tab/j/k: Navigate • /: Search • 1-9: Jump • p: Parent • Enter: Follow • Esc: Cancel"
@@ -714,14 +714,17 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
         // Search input
         Line::from(vec![
             Span::styled(": ", Style::default().fg(theme.modal_key_fg())),
-            Span::styled(&app.command_query, Style::default().fg(theme.modal_text())),
+            Span::styled(
+                &app.command_palette.query,
+                Style::default().fg(theme.modal_text()),
+            ),
             Span::styled(" ", Style::default().bg(Color::White)), // Cursor (reverse-video for gapless rendering)
         ]),
         Line::from(""),
     ];
 
     // Show filtered commands
-    if app.command_filtered.is_empty() {
+    if app.command_palette.filtered.is_empty() {
         lines.push(Line::from(vec![Span::styled(
             "  No matching commands",
             Style::default()
@@ -729,9 +732,9 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
                 .add_modifier(Modifier::ITALIC),
         )]));
     } else {
-        for (display_idx, &cmd_idx) in app.command_filtered.iter().enumerate() {
+        for (display_idx, &cmd_idx) in app.command_palette.filtered.iter().enumerate() {
             let cmd = &PALETTE_COMMANDS[cmd_idx];
-            let is_selected = display_idx == app.command_selected;
+            let is_selected = display_idx == app.command_palette.selected;
 
             let prefix = if is_selected { "▸ " } else { "  " };
             let style = if is_selected {
@@ -802,8 +805,8 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     // Clear background
     frame.render_widget(Clear, popup_area);
 
-    let file_count = app.filtered_file_indices.len();
-    let dir_count = app.filtered_dir_indices.len();
+    let file_count = app.file_picker.filtered_file_indices.len();
+    let dir_count = app.file_picker.filtered_dir_indices.len();
     let total_items = app.file_picker_item_count();
 
     // Build header with search info
@@ -814,14 +817,14 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or(".")
         .to_string();
 
-    let header_text = if app.file_search_active || !app.file_search_query.is_empty() {
+    let header_text = if app.file_picker.active || !app.file_picker.query.is_empty() {
         format!(
             "{}: {}/{} files, {} dirs - Enter: open, Esc: {}",
             dir_label,
             file_count,
-            app.files_in_directory.len(),
+            app.file_picker.files.len(),
             dir_count,
-            if app.file_search_active {
+            if app.file_picker.active {
                 "stop search"
             } else {
                 "cancel"
@@ -831,8 +834,8 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
         format!(
             "{}: {} files, {} dirs",
             dir_label,
-            app.files_in_directory.len(),
-            app.dirs_in_directory.len()
+            app.file_picker.files.len(),
+            app.file_picker.dirs.len()
         )
     };
 
@@ -844,8 +847,8 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     )])];
 
     // Show search bar if active or has query
-    if app.file_search_active || !app.file_search_query.is_empty() {
-        let search_style = if app.file_search_active {
+    if app.file_picker.active || !app.file_picker.query.is_empty() {
+        let search_style = if app.file_picker.active {
             Style::default()
                 .fg(theme.modal_selected_fg())
                 .add_modifier(Modifier::BOLD)
@@ -853,10 +856,10 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme.modal_description())
         };
 
-        let cursor = if app.file_search_active { "▌" } else { "" };
+        let cursor = if app.file_picker.active { "▌" } else { "" };
         lines.push(Line::from(vec![
             Span::styled("Filter: ", Style::default().fg(theme.modal_key_fg())),
-            Span::styled(format!("{}{}", app.file_search_query, cursor), search_style),
+            Span::styled(format!("{}{}", app.file_picker.query, cursor), search_style),
         ]));
     }
 
@@ -865,9 +868,9 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     let mut selected_line_start: u16 = 0;
 
     // Iterate over filtered files
-    for (display_idx, &real_idx) in app.filtered_file_indices.iter().enumerate() {
-        let file_path = &app.files_in_directory[real_idx];
-        let is_selected = app.selected_file_idx == Some(display_idx);
+    for (display_idx, &real_idx) in app.file_picker.filtered_file_indices.iter().enumerate() {
+        let file_path = &app.file_picker.files[real_idx];
+        let is_selected = app.file_picker.selected == Some(display_idx);
         let is_current = file_path == &app.current_file_path;
 
         if is_selected {
@@ -929,7 +932,9 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Separator between files and directories
-    if !app.filtered_file_indices.is_empty() && !app.filtered_dir_indices.is_empty() {
+    if !app.file_picker.filtered_file_indices.is_empty()
+        && !app.file_picker.filtered_dir_indices.is_empty()
+    {
         lines.push(Line::from(vec![Span::styled(
             "── Directories ──",
             Style::default()
@@ -939,10 +944,11 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Iterate over filtered directories
-    for (dir_display_idx, &real_dir_idx) in app.filtered_dir_indices.iter().enumerate() {
+    for (dir_display_idx, &real_dir_idx) in app.file_picker.filtered_dir_indices.iter().enumerate()
+    {
         let combined_idx = file_count + dir_display_idx;
-        let dir_path = &app.dirs_in_directory[real_dir_idx];
-        let is_selected = app.selected_file_idx == Some(combined_idx);
+        let dir_path = &app.file_picker.dirs[real_dir_idx];
+        let is_selected = app.file_picker.selected == Some(combined_idx);
 
         if is_selected {
             selected_line_start = lines.len() as u16;
@@ -980,8 +986,7 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Show "no matches" message
-    if total_items == 0 && (!app.files_in_directory.is_empty() || !app.dirs_in_directory.is_empty())
-    {
+    if total_items == 0 && (!app.file_picker.files.is_empty() || !app.file_picker.dirs.is_empty()) {
         lines.push(Line::from(vec![Span::styled(
             "No items match your search",
             Style::default()
@@ -999,7 +1004,7 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     // Footer
     lines.push(Line::from(""));
-    let footer_text = if app.file_search_active {
+    let footer_text = if app.file_picker.active {
         "Type to filter • Enter: select • Esc: stop search • Backspace: delete"
     } else {
         "j/k: Navigate • /: Filter • Enter: Open • Backspace: Parent dir • h: Hidden • Esc: Cancel"
@@ -1013,7 +1018,7 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     let total_lines = lines.len();
     let inner_height = popup_area.height.saturating_sub(2) as usize;
-    let header_lines = if app.file_search_active || !app.file_search_query.is_empty() {
+    let header_lines = if app.file_picker.active || !app.file_picker.query.is_empty() {
         3
     } else {
         2
