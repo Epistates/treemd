@@ -505,13 +505,13 @@ pub struct App {
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_last_render_width: u32,
     /// Pixel dimensions (width, height) of each rendered mermaid image, keyed by source hash.
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_image_dims: HashMap<u64, (u32, u32)>,
     /// Terminal row count for each rendered mermaid image, derived from pixel height / font height.
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_placeholder_rows: HashMap<u64, usize>,
     /// Set when new mermaid dims are stored; triggers a re-index on the next frame.
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_needs_reindex: bool,
 
     // LaTeX detection state
@@ -717,11 +717,11 @@ impl App {
             mermaid_render_errors: HashMap::new(),
             #[cfg(all(feature = "mermaid", unix))]
             mermaid_last_render_width: 0,
-            #[cfg(feature = "mermaid")]
+            #[cfg(all(feature = "mermaid", unix))]
             mermaid_image_dims: HashMap::new(),
-            #[cfg(feature = "mermaid")]
+            #[cfg(all(feature = "mermaid", unix))]
             mermaid_placeholder_rows: HashMap::new(),
-            #[cfg(feature = "mermaid")]
+            #[cfg(all(feature = "mermaid", unix))]
             mermaid_needs_reindex: false,
 
             // LaTeX detection
@@ -898,7 +898,7 @@ impl App {
                         let (_, h) = picker.font_size();
                         if h < 1 { 16u32 } else { h as u32 }
                     };
-                    let rows = ((dims.1 + font_h - 1) / font_h) as usize;
+                    let rows = dims.1.div_ceil(font_h) as usize;
                     let protocol = picker.new_resize_protocol(img);
                     self.mermaid_protocol_cache.insert(hash, protocol);
                     self.mermaid_image_dims.insert(hash, dims);
@@ -920,7 +920,7 @@ impl App {
     /// Called once per frame (before rendering). On the frame after a mermaid diagram is first
     /// rendered, this replaces the heuristic placeholder sizes with the real image heights so
     /// the blank-line reservation matches the displayed image.
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     pub fn reindex_mermaid_if_needed(&mut self) {
         if !self.mermaid_needs_reindex {
             return;
@@ -937,11 +937,11 @@ impl App {
     ///
     /// Centralises the cfg-gated map extraction so callers don't repeat the pattern.
     pub(crate) fn index_interactive_elements(&mut self, blocks: &[crate::parser::output::Block]) {
-        #[cfg(feature = "mermaid")]
+        #[cfg(all(feature = "mermaid", unix))]
         let rows = self.mermaid_placeholder_rows.clone();
-        #[cfg(not(feature = "mermaid"))]
-        let rows: HashMap<u64, usize> = HashMap::new();
-        self.interactive_state.index_elements(&blocks, &rows);
+        #[cfg(not(all(feature = "mermaid", unix)))]
+        let rows: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+        self.interactive_state.index_elements(blocks, &rows);
     }
 
     /// Get the hash for a mermaid source string.

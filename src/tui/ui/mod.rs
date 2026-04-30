@@ -25,7 +25,7 @@ use util::{detect_checkbox_in_text, filter_content};
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     // Re-index interactive elements if mermaid image dimensions arrived last frame.
-    #[cfg(feature = "mermaid")]
+    #[cfg(all(feature = "mermaid", unix))]
     app.reindex_mermaid_if_needed();
 
     // Update content metrics before rendering to ensure content height and scroll are correct
@@ -410,9 +410,9 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
         // Calculate available width for tables (content area minus borders and padding)
         let content_width = area.width.saturating_sub(2); // 2 for left/right borders
 
-        #[cfg(feature = "mermaid")]
+        #[cfg(all(feature = "mermaid", unix))]
         let mermaid_rows_ref = &app.mermaid_placeholder_rows;
-        #[cfg(not(feature = "mermaid"))]
+        #[cfg(not(all(feature = "mermaid", unix)))]
         let mermaid_rows_ref = &std::collections::HashMap::new();
 
         render_markdown_enhanced(
@@ -747,7 +747,7 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
                             let disp_w_px = (img_w as f64 * ratio).round() as u32;
                             // Round up to cell boundary
                             let disp_w_cols =
-                                ((disp_w_px + font_size.0 - 1) / font_size.0) as u16;
+                                disp_w_px.div_ceil(font_size.0) as u16;
                             let disp_w_cols = disp_w_cols.min(inner.width);
                             let x_offset = (inner.width.saturating_sub(disp_w_cols)) / 2;
                             (inner.x + x_offset, disp_w_cols)
@@ -1611,12 +1611,18 @@ fn render_markdown_enhanced(
                     // Reserve blank lines for the image overlay.
                     // Use pixel-accurate row count once the image has been rendered;
                     // fall back to the source-line heuristic on first load.
-                    use crate::tui::app::App as MermaidApp;
                     use crate::tui::interactive::mermaid_placeholder_lines;
+                    #[cfg(all(feature = "mermaid", unix))]
+                    use crate::tui::app::App as MermaidApp;
                     let placeholder_rows = {
-                        let hash = MermaidApp::mermaid_source_hash(content);
-                        mermaid_placeholder_rows.get(&hash).copied()
-                            .unwrap_or_else(|| mermaid_placeholder_lines(content))
+                        #[cfg(all(feature = "mermaid", unix))]
+                        {
+                            let hash = MermaidApp::mermaid_source_hash(content);
+                            mermaid_placeholder_rows.get(&hash).copied()
+                                .unwrap_or_else(|| mermaid_placeholder_lines(content))
+                        }
+                        #[cfg(not(all(feature = "mermaid", unix)))]
+                        mermaid_placeholder_lines(content)
                     };
                     for _ in 0..placeholder_rows {
                         lines.push(Line::from(vec![]));

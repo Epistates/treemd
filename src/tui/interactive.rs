@@ -40,7 +40,7 @@ pub const PARAGRAPH_IMAGE_PLACEHOLDER_LINES: usize = 13;
 pub const PARAGRAPH_WITH_IMAGE_TOTAL_LINES: usize = 1 + PARAGRAPH_IMAGE_PLACEHOLDER_LINES; // 14
 
 /// Compute the hash key for a mermaid source string (mirrors App::mermaid_source_hash).
-#[cfg(feature = "mermaid")]
+#[cfg(all(feature = "mermaid", unix))]
 fn mermaid_hash(source: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -86,7 +86,7 @@ pub fn mermaid_placeholder_lines(source: &str) -> usize {
         })
         .count();
     // ~5 terminal rows per meaningful source line; min 25, max 120
-    (node_lines * 5).max(25).min(120)
+    (node_lines * 5).clamp(25, 120)
 }
 
 // Sub-index encoding constants for nested elements within details blocks
@@ -209,7 +209,7 @@ impl InteractiveState {
         let mut current_line = 0;
 
         // Resolve placeholder rows: use cached pixel-based value if available, else heuristic.
-        #[cfg(feature = "mermaid")]
+        #[cfg(all(feature = "mermaid", unix))]
         let mermaid_rows_for = |source: &str| -> usize {
             let hash = mermaid_hash(source);
             mermaid_rows.get(&hash).copied().unwrap_or_else(|| mermaid_placeholder_lines(source))
@@ -1395,7 +1395,7 @@ fn main() {}
 
         // Section A: a table at block_idx 0.
         let table_md = "| a | b |\n|---|---|\n| 1 | 2 |\n";
-        state.index_elements(&parse_content(table_md, 0));
+        state.index_elements(&parse_content(table_md, 0), &std::collections::HashMap::new());
         let table_id = ElementId {
             block_idx: 0,
             sub_idx: None,
@@ -1407,7 +1407,7 @@ fn main() {}
 
         // Section B: a Details at the same block_idx.
         let details_md = "<details>\n<summary>S</summary>\n\nbody\n\n</details>\n";
-        state.index_elements(&parse_content(details_md, 0));
+        state.index_elements(&parse_content(details_md, 0), &std::collections::HashMap::new());
 
         assert!(
             matches!(

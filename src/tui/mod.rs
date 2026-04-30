@@ -113,7 +113,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
             // If mermaid image dims arrived during this frame, schedule an immediate
             // second draw so the corrected placeholder sizes take effect without
             // requiring a keypress.
-            #[cfg(feature = "mermaid")]
+            #[cfg(all(feature = "mermaid", unix))]
             if app.mermaid_needs_reindex {
                 needs_redraw = true;
                 continue;
