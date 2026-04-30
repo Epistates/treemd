@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::ui::util::{align_text, wrap_text};
+use crate::tui::ui::format_inline_markdown;
 
 /// Context for rendering a table row
 pub struct TableRenderContext<'a> {
@@ -352,7 +353,6 @@ pub fn render_table_row(
 
             // Get the text for this specific line of the cell, or empty string
             let line_text = wrapped_cell.get(line_idx).cloned().unwrap_or_default();
-            let cell_text = align_text(&line_text, width, alignment);
 
             // Determine if this specific cell is selected
             let is_selected = ctx.selected_cell == Some((ctx.row_num, i));
@@ -370,7 +370,38 @@ pub fn render_table_row(
                 ctx.theme.text_style()
             };
 
-            spans.push(Span::styled(cell_text, style));
+            if !is_selected && line_text.contains('`') {
+                // Render inline code spans with theme styling
+                let formatted = format_inline_markdown(&line_text, ctx.theme);
+                let rendered_width: usize = formatted.iter().map(|s| s.content.width()).sum();
+                let padding_total = width.saturating_sub(rendered_width);
+                let (lead, trail) = match alignment {
+                    Alignment::Right => (padding_total, 0),
+                    Alignment::Center => {
+                        let half = padding_total / 2;
+                        (half, padding_total - half)
+                    }
+                    _ => (0, padding_total),
+                };
+                if lead > 0 {
+                    spans.push(Span::styled(" ".repeat(lead), style));
+                }
+                for span in formatted {
+                    // Plain text spans: apply row/header style; styled spans (code etc.) keep their style
+                    let effective_style = if span.style == ratatui::style::Style::default() {
+                        style
+                    } else {
+                        span.style
+                    };
+                    spans.push(Span::styled(span.content.into_owned(), effective_style));
+                }
+                if trail > 0 {
+                    spans.push(Span::styled(" ".repeat(trail), style));
+                }
+            } else {
+                let cell_text = align_text(&line_text, width, alignment);
+                spans.push(Span::styled(cell_text, style));
+            }
             spans.push(Span::styled(
                 "│",
                 Style::default().fg(ctx.theme.table_border),

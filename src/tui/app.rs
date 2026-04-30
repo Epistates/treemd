@@ -504,6 +504,15 @@ pub struct App {
     pub mermaid_render_errors: HashMap<u64, String>,
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_last_render_width: u32,
+    /// Pixel dimensions (width, height) of each rendered mermaid image, keyed by source hash.
+    #[cfg(all(feature = "mermaid", unix))]
+    pub mermaid_image_dims: HashMap<u64, (u32, u32)>,
+    /// Terminal row count for each rendered mermaid image, derived from pixel height / font height.
+    #[cfg(all(feature = "mermaid", unix))]
+    pub mermaid_placeholder_rows: HashMap<u64, usize>,
+    /// Set when new mermaid dims are stored; triggers a re-index on the next frame.
+    #[cfg(all(feature = "mermaid", unix))]
+    pub mermaid_needs_reindex: bool,
 
     // LaTeX detection state
     pub latex_detected: bool,
@@ -708,6 +717,12 @@ impl App {
             mermaid_render_errors: HashMap::new(),
             #[cfg(all(feature = "mermaid", unix))]
             mermaid_last_render_width: 0,
+            #[cfg(all(feature = "mermaid", unix))]
+            mermaid_image_dims: HashMap::new(),
+            #[cfg(all(feature = "mermaid", unix))]
+            mermaid_placeholder_rows: HashMap::new(),
+            #[cfg(all(feature = "mermaid", unix))]
+            mermaid_needs_reindex: false,
 
             // LaTeX detection
             latex_detected: false,
@@ -862,6 +877,9 @@ impl App {
         if target_px != self.mermaid_last_render_width {
             self.mermaid_protocol_cache.clear();
             self.mermaid_render_errors.clear();
+            self.mermaid_image_dims.clear();
+            self.mermaid_placeholder_rows.clear();
+            self.mermaid_needs_reindex = false;
             self.mermaid_last_render_width = target_px;
         }
 
@@ -874,9 +892,18 @@ impl App {
         }
         match crate::tui::mermaid::render_mermaid_to_image(source, target_px) {
             Ok(img) => {
+                let dims = (img.width(), img.height());
                 if let Some(picker) = self.picker.as_mut() {
+                    let font_h = {
+                        let (_, h) = picker.font_size();
+                        if h < 1 { 16u32 } else { h as u32 }
+                    };
+                    let rows = dims.1.div_ceil(font_h) as usize;
                     let protocol = picker.new_resize_protocol(img);
                     self.mermaid_protocol_cache.insert(hash, protocol);
+                    self.mermaid_image_dims.insert(hash, dims);
+                    self.mermaid_placeholder_rows.insert(hash, rows.max(1));
+                    self.mermaid_needs_reindex = true;
                     return true;
                 }
                 false
@@ -886,6 +913,35 @@ impl App {
                 false
             }
         }
+    }
+
+    /// Re-index interactive elements using pixel-accurate placeholder rows if new dims arrived.
+    ///
+    /// Called once per frame (before rendering). On the frame after a mermaid diagram is first
+    /// rendered, this replaces the heuristic placeholder sizes with the real image heights so
+    /// the blank-line reservation matches the displayed image.
+    #[cfg(all(feature = "mermaid", unix))]
+    pub fn reindex_mermaid_if_needed(&mut self) {
+        if !self.mermaid_needs_reindex {
+            return;
+        }
+        self.mermaid_needs_reindex = false;
+        let content_text = self.current_section_content();
+        use crate::parser::content::parse_content;
+        let blocks = parse_content(&content_text, 0);
+        let rows = self.mermaid_placeholder_rows.clone();
+        self.interactive_state.index_elements(&blocks, &rows);
+    }
+
+    /// Index interactive elements, passing the mermaid placeholder-rows cache when available.
+    ///
+    /// Centralises the cfg-gated map extraction so callers don't repeat the pattern.
+    pub(crate) fn index_interactive_elements(&mut self, blocks: &[crate::parser::output::Block]) {
+        #[cfg(all(feature = "mermaid", unix))]
+        let rows = self.mermaid_placeholder_rows.clone();
+        #[cfg(not(all(feature = "mermaid", unix)))]
+        let rows: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+        self.interactive_state.index_elements(blocks, &rows);
     }
 
     /// Get the hash for a mermaid source string.
@@ -2119,7 +2175,7 @@ impl App {
 
             use crate::parser::content::parse_content;
             let blocks = parse_content(&content_text, 0);
-            self.interactive_state.index_elements(&blocks);
+            self.index_interactive_elements(&blocks);
             self.populate_image_cache();
         }
 
@@ -4440,7 +4496,7 @@ impl App {
         let content = self.document.content.clone();
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
-        self.interactive_state.index_elements(&blocks);
+        self.index_interactive_elements(&blocks);
         self.populate_image_cache();
 
         // Detect LaTeX content for status hint
@@ -4570,7 +4626,7 @@ impl App {
         let blocks = parse_content(&content, 0);
 
         // Index interactive elements
-        self.interactive_state.index_elements(&blocks);
+        self.index_interactive_elements(&blocks);
         self.populate_image_cache();
 
         // Enter interactive mode at current scroll position (preserve user's view)
@@ -4720,7 +4776,7 @@ impl App {
 
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
-        self.interactive_state.index_elements(&blocks);
+        self.index_interactive_elements(&blocks);
         self.populate_image_cache();
     }
 

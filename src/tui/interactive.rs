@@ -39,8 +39,55 @@ pub const BLOCK_IMAGE_TOTAL_LINES: usize = 1 + IMAGE_PLACEHOLDER_LINES; // 17
 pub const PARAGRAPH_IMAGE_PLACEHOLDER_LINES: usize = 13;
 pub const PARAGRAPH_WITH_IMAGE_TOTAL_LINES: usize = 1 + PARAGRAPH_IMAGE_PLACEHOLDER_LINES; // 14
 
-/// Placeholder lines reserved for mermaid diagram rendering.
-pub const MERMAID_PLACEHOLDER_LINES: usize = 22;
+/// Compute the hash key for a mermaid source string (mirrors App::mermaid_source_hash).
+#[cfg(all(feature = "mermaid", unix))]
+fn mermaid_hash(source: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Estimate placeholder lines for a mermaid diagram based on its source content.
+///
+/// Counts significant lines (nodes, edges, labels) and multiplies by a per-line
+/// row estimate. Clamped to a sensible min/max so simple diagrams don't waste
+/// space and very complex ones still fit.
+pub fn mermaid_placeholder_lines(source: &str) -> usize {
+    let node_lines = source
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            if t.is_empty() || t.starts_with("%%") {
+                return false;
+            }
+            let first = t.split_whitespace().next().unwrap_or("");
+            !matches!(
+                first,
+                "graph"
+                    | "flowchart"
+                    | "sequenceDiagram"
+                    | "classDiagram"
+                    | "stateDiagram"
+                    | "stateDiagram-v2"
+                    | "gantt"
+                    | "pie"
+                    | "gitGraph"
+                    | "erDiagram"
+                    | "journey"
+                    | "mindmap"
+                    | "timeline"
+                    | "xychart-beta"
+                    | "block-beta"
+                    | "packet-beta"
+                    | "sankey-beta"
+                    | "quadrantChart"
+            )
+        })
+        .count();
+    // ~5 terminal rows per meaningful source line; min 25, max 120
+    (node_lines * 5).clamp(25, 120)
+}
 
 // Sub-index encoding constants for nested elements within details blocks
 /// Base offset for elements nested inside details blocks
@@ -157,9 +204,16 @@ impl InteractiveState {
     ///
     /// WikiLinks are preprocessed into standard markdown links with `wikilink:` URL prefix,
     /// so they are detected during Block parsing along with regular links.
-    pub fn index_elements(&mut self, blocks: &[Block]) {
+    pub fn index_elements(&mut self, blocks: &[Block], mermaid_rows: &std::collections::HashMap<u64, usize>) {
         self.elements.clear();
         let mut current_line = 0;
+
+        // Resolve placeholder rows: use cached pixel-based value if available, else heuristic.
+        #[cfg(all(feature = "mermaid", unix))]
+        let mermaid_rows_for = |source: &str| -> usize {
+            let hash = mermaid_hash(source);
+            mermaid_rows.get(&hash).copied().unwrap_or_else(|| mermaid_placeholder_lines(source))
+        };
 
         for (block_idx, block) in blocks.iter().enumerate() {
             let start_line = current_line;
@@ -180,7 +234,7 @@ impl InteractiveState {
 
                     // Count lines for this details block
                     let lines = 1 + if is_expanded {
-                        count_block_lines(nested)
+                        count_block_lines(nested, mermaid_rows)
                     } else {
                         0
                     };
@@ -263,7 +317,7 @@ impl InteractiveState {
 
                                     #[cfg(all(feature = "mermaid", unix))]
                                     let code_lines = if language.as_deref() == Some("mermaid") {
-                                        1 + MERMAID_PLACEHOLDER_LINES
+                                        1 + mermaid_rows_for(content)
                                     } else {
                                         2 + content.lines().count()
                                     };
@@ -361,7 +415,7 @@ impl InteractiveState {
                                 }
                                 _ => {
                                     // Other block types - just count lines
-                                    current_line += count_single_block_lines(nested_block);
+                                    current_line += count_single_block_lines(nested_block, mermaid_rows);
                                 }
                             }
                         }
@@ -547,7 +601,7 @@ impl InteractiveState {
 
                                     #[cfg(all(feature = "mermaid", unix))]
                                     let lines = if language.as_deref() == Some("mermaid") {
-                                        1 + MERMAID_PLACEHOLDER_LINES
+                                        1 + mermaid_rows_for(content)
                                     } else {
                                         2 + content.lines().count()
                                     };
@@ -619,7 +673,7 @@ impl InteractiveState {
                                 }
                                 _ => {
                                     // Non-interactive nested blocks
-                                    current_line += count_single_block_lines(nested_block);
+                                    current_line += count_single_block_lines(nested_block, mermaid_rows);
                                 }
                             }
                         }
@@ -636,7 +690,7 @@ impl InteractiveState {
                     // Mermaid blocks use placeholder lines; regular code uses fences + content
                     #[cfg(all(feature = "mermaid", unix))]
                     let lines = if language.as_deref() == Some("mermaid") {
-                        1 + MERMAID_PLACEHOLDER_LINES // header + blank lines
+                        1 + mermaid_rows_for(content) // header + blank lines
                     } else {
                         2 + content.lines().count() // +2 for fences
                     };
@@ -709,7 +763,7 @@ impl InteractiveState {
                 }
                 _ => {
                     // Non-interactive blocks (still count lines)
-                    current_line += count_single_block_lines(block);
+                    current_line += count_single_block_lines(block, mermaid_rows);
                 }
             }
 
@@ -1177,12 +1231,12 @@ impl Default for InteractiveState {
 }
 
 /// Count lines for nested blocks
-fn count_block_lines(blocks: &[Block]) -> usize {
-    blocks.iter().map(count_single_block_lines).sum()
+fn count_block_lines(blocks: &[Block], mermaid_rows: &std::collections::HashMap<u64, usize>) -> usize {
+    blocks.iter().map(|b| count_single_block_lines(b, mermaid_rows)).sum()
 }
 
 /// Count lines for a single block
-fn count_single_block_lines(block: &Block) -> usize {
+fn count_single_block_lines(block: &Block, mermaid_rows: &std::collections::HashMap<u64, usize>) -> usize {
     match block {
         Block::Heading { .. } => 1,
         Block::Paragraph { inline, .. } => {
@@ -1200,17 +1254,20 @@ fn count_single_block_lines(block: &Block) -> usize {
         } => {
             #[cfg(all(feature = "mermaid", unix))]
             if language.as_deref() == Some("mermaid") {
-                return 1 + MERMAID_PLACEHOLDER_LINES;
+                let hash = mermaid_hash(content);
+                let rows = mermaid_rows.get(&hash).copied()
+                    .unwrap_or_else(|| mermaid_placeholder_lines(content));
+                return 1 + rows;
             }
             let _ = language;
             2 + content.lines().count()
         }
         Block::List { items, .. } => items.len(),
-        Block::Blockquote { blocks, .. } => count_block_lines(blocks),
+        Block::Blockquote { blocks, .. } => count_block_lines(blocks, mermaid_rows),
         Block::Table { rows, .. } => 3 + rows.len(),
         Block::Image { .. } => BLOCK_IMAGE_TOTAL_LINES,
         Block::HorizontalRule => 1,
-        Block::Details { blocks, .. } => 1 + count_block_lines(blocks),
+        Block::Details { blocks, .. } => 1 + count_block_lines(blocks, mermaid_rows),
     }
 }
 
@@ -1241,7 +1298,7 @@ mod interactive_tests {
 
         let blocks = parse_content(markdown, 0);
         let mut state = InteractiveState::new();
-        state.index_elements(&blocks);
+        state.index_elements(&blocks, &std::collections::HashMap::new());
 
         // Should find: 2 nested code blocks + 1 table = 3 interactive elements
         assert_eq!(
@@ -1286,7 +1343,7 @@ fn main() {}
 
         let blocks = parse_content(markdown, 0);
         let mut state = InteractiveState::new();
-        state.index_elements(&blocks);
+        state.index_elements(&blocks, &std::collections::HashMap::new());
 
         // Should find: 1 link + 2 checkboxes + 1 code block + 1 table = 5 elements
         assert!(
@@ -1309,7 +1366,7 @@ fn main() {}
 
         let blocks = parse_content(markdown, 0);
         let mut state = InteractiveState::new();
-        state.index_elements(&blocks);
+        state.index_elements(&blocks, &std::collections::HashMap::new());
 
         // Count link elements
         let link_count = state
@@ -1338,7 +1395,7 @@ fn main() {}
 
         // Section A: a table at block_idx 0.
         let table_md = "| a | b |\n|---|---|\n| 1 | 2 |\n";
-        state.index_elements(&parse_content(table_md, 0));
+        state.index_elements(&parse_content(table_md, 0), &std::collections::HashMap::new());
         let table_id = ElementId {
             block_idx: 0,
             sub_idx: None,
@@ -1350,7 +1407,7 @@ fn main() {}
 
         // Section B: a Details at the same block_idx.
         let details_md = "<details>\n<summary>S</summary>\n\nbody\n\n</details>\n";
-        state.index_elements(&parse_content(details_md, 0));
+        state.index_elements(&parse_content(details_md, 0), &std::collections::HashMap::new());
 
         assert!(
             matches!(
