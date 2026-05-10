@@ -9,8 +9,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-use crate::tui::ui::util::{align_text, wrap_text};
 use crate::tui::ui::format_inline_markdown;
+use crate::tui::ui::util::{align_text, wrap_text};
 
 /// Context for rendering a table row
 pub struct TableRenderContext<'a> {

@@ -204,7 +204,11 @@ impl InteractiveState {
     ///
     /// WikiLinks are preprocessed into standard markdown links with `wikilink:` URL prefix,
     /// so they are detected during Block parsing along with regular links.
-    pub fn index_elements(&mut self, blocks: &[Block], mermaid_rows: &std::collections::HashMap<u64, usize>) {
+    pub fn index_elements(
+        &mut self,
+        blocks: &[Block],
+        mermaid_rows: &std::collections::HashMap<u64, usize>,
+    ) {
         self.elements.clear();
         let mut current_line = 0;
 
@@ -212,7 +216,10 @@ impl InteractiveState {
         #[cfg(all(feature = "mermaid", unix))]
         let mermaid_rows_for = |source: &str| -> usize {
             let hash = mermaid_hash(source);
-            mermaid_rows.get(&hash).copied().unwrap_or_else(|| mermaid_placeholder_lines(source))
+            mermaid_rows
+                .get(&hash)
+                .copied()
+                .unwrap_or_else(|| mermaid_placeholder_lines(source))
         };
 
         for (block_idx, block) in blocks.iter().enumerate() {
@@ -415,7 +422,8 @@ impl InteractiveState {
                                 }
                                 _ => {
                                     // Other block types - just count lines
-                                    current_line += count_single_block_lines(nested_block, mermaid_rows);
+                                    current_line +=
+                                        count_single_block_lines(nested_block, mermaid_rows);
                                 }
                             }
                         }
@@ -673,7 +681,8 @@ impl InteractiveState {
                                 }
                                 _ => {
                                     // Non-interactive nested blocks
-                                    current_line += count_single_block_lines(nested_block, mermaid_rows);
+                                    current_line +=
+                                        count_single_block_lines(nested_block, mermaid_rows);
                                 }
                             }
                         }
@@ -1231,12 +1240,21 @@ impl Default for InteractiveState {
 }
 
 /// Count lines for nested blocks
-fn count_block_lines(blocks: &[Block], mermaid_rows: &std::collections::HashMap<u64, usize>) -> usize {
-    blocks.iter().map(|b| count_single_block_lines(b, mermaid_rows)).sum()
+fn count_block_lines(
+    blocks: &[Block],
+    mermaid_rows: &std::collections::HashMap<u64, usize>,
+) -> usize {
+    blocks
+        .iter()
+        .map(|b| count_single_block_lines(b, mermaid_rows))
+        .sum()
 }
 
 /// Count lines for a single block
-fn count_single_block_lines(block: &Block, mermaid_rows: &std::collections::HashMap<u64, usize>) -> usize {
+fn count_single_block_lines(
+    block: &Block,
+    mermaid_rows: &std::collections::HashMap<u64, usize>,
+) -> usize {
     match block {
         Block::Heading { .. } => 1,
         Block::Paragraph { inline, .. } => {
@@ -1255,7 +1273,9 @@ fn count_single_block_lines(block: &Block, mermaid_rows: &std::collections::Hash
             #[cfg(all(feature = "mermaid", unix))]
             if language.as_deref() == Some("mermaid") {
                 let hash = mermaid_hash(content);
-                let rows = mermaid_rows.get(&hash).copied()
+                let rows = mermaid_rows
+                    .get(&hash)
+                    .copied()
                     .unwrap_or_else(|| mermaid_placeholder_lines(content));
                 return 1 + rows;
             }
@@ -1395,7 +1415,10 @@ fn main() {}
 
         // Section A: a table at block_idx 0.
         let table_md = "| a | b |\n|---|---|\n| 1 | 2 |\n";
-        state.index_elements(&parse_content(table_md, 0), &std::collections::HashMap::new());
+        state.index_elements(
+            &parse_content(table_md, 0),
+            &std::collections::HashMap::new(),
+        );
         let table_id = ElementId {
             block_idx: 0,
             sub_idx: None,
@@ -1407,7 +1430,10 @@ fn main() {}
 
         // Section B: a Details at the same block_idx.
         let details_md = "<details>\n<summary>S</summary>\n\nbody\n\n</details>\n";
-        state.index_elements(&parse_content(details_md, 0), &std::collections::HashMap::new());
+        state.index_elements(
+            &parse_content(details_md, 0),
+            &std::collections::HashMap::new(),
+        );
 
         assert!(
             matches!(

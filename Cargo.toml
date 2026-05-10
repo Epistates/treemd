@@ -29,7 +29,7 @@ clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 unicode-width = "0.2"
 
 # Turbovault integration - OFM parsing with code-block awareness
-turbovault-parser = "1.4.0"
+turbovault-parser = "1.5.0"
 
 # Serialization for JSON output
 serde = { version = "1.0", features = ["derive"] }

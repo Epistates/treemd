@@ -641,13 +641,10 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
     let image_width = inner.width.max(20);
 
     // Font cell size in pixels, used for centering calculations
-    let font_size = app
-        .picker
-        .as_ref()
-        .map_or((8u32, 16u32), |p| {
-            let (fw, fh) = p.font_size();
-            (fw as u32, fh as u32)
-        });
+    let font_size = app.picker.as_ref().map_or((8u32, 16u32), |p| {
+        let (fw, fh) = p.font_size();
+        (fw as u32, fh as u32)
+    });
 
     let selected_code_id = if app.mode == crate::tui::app::AppMode::Interactive {
         app.interactive_state.current_element().and_then(|elem| {
@@ -721,7 +718,9 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
         // actually fits in the viewport right now.
         let max_image_height = {
             let hash = MermaidApp::mermaid_source_hash(source);
-            app.mermaid_placeholder_rows.get(&hash).copied()
+            app.mermaid_placeholder_rows
+                .get(&hash)
+                .copied()
                 .unwrap_or_else(|| mermaid_placeholder_lines(source))
         } as u16;
         let stable_height = max_image_height.min(inner.height);
@@ -746,8 +745,7 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
                             let ratio = w_ratio.min(h_ratio);
                             let disp_w_px = (img_w as f64 * ratio).round() as u32;
                             // Round up to cell boundary
-                            let disp_w_cols =
-                                disp_w_px.div_ceil(font_size.0) as u16;
+                            let disp_w_cols = disp_w_px.div_ceil(font_size.0) as u16;
                             let disp_w_cols = disp_w_cols.min(inner.width);
                             let x_offset = (inner.width.saturating_sub(disp_w_cols)) / 2;
                             (inner.x + x_offset, disp_w_cols)
@@ -1611,14 +1609,16 @@ fn render_markdown_enhanced(
                     // Reserve blank lines for the image overlay.
                     // Use pixel-accurate row count once the image has been rendered;
                     // fall back to the source-line heuristic on first load.
-                    use crate::tui::interactive::mermaid_placeholder_lines;
                     #[cfg(all(feature = "mermaid", unix))]
                     use crate::tui::app::App as MermaidApp;
+                    use crate::tui::interactive::mermaid_placeholder_lines;
                     let placeholder_rows = {
                         #[cfg(all(feature = "mermaid", unix))]
                         {
                             let hash = MermaidApp::mermaid_source_hash(content);
-                            mermaid_placeholder_rows.get(&hash).copied()
+                            mermaid_placeholder_rows
+                                .get(&hash)
+                                .copied()
                                 .unwrap_or_else(|| mermaid_placeholder_lines(content))
                         }
                         #[cfg(not(all(feature = "mermaid", unix)))]
