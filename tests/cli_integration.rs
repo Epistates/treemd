@@ -379,3 +379,26 @@ fn section_with_inline_markdown_in_heading() {
     );
     assert!(!stdout.contains("body-of-next"));
 }
+
+// ------------------------------------------------------------------
+// --normal flag is accepted (TUI mode cannot be tested without a TTY,
+// but we verify the flag parses correctly alongside CLI flags)
+// ------------------------------------------------------------------
+
+#[test]
+fn normal_flag_accepted_with_list() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["--normal", "-l", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("# Title"));
+}
+
+#[test]
+fn normal_flag_in_help_output() {
+    let (stdout, _, code) = run(&["--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("--normal"),
+        "help should mention --normal flag"
+    );
+}

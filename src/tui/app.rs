@@ -426,6 +426,7 @@ pub struct App {
     // File picker state
     pub file_picker: FilePickerState,
     pub startup_needs_file_picker: bool, // True if started without file arg
+    pub force_normal_mode: bool,          // Start in normal/outline mode
     pub file_picker_dir: Option<PathBuf>, // Custom directory for file picker
     pub show_hidden: bool,               // Whether to show hidden (dot) files and directories
 
@@ -638,6 +639,7 @@ impl App {
             // File picker state
             file_picker: FilePickerState::default(),
             startup_needs_file_picker: false,
+            force_normal_mode: false,
             file_picker_dir: None,
             show_hidden: false,
 
@@ -4638,6 +4640,10 @@ impl App {
 
     /// Enter interactive mode - build element index and enter mode
     pub fn enter_interactive_mode(&mut self) {
+        if self.force_normal_mode {
+            self.force_normal_mode = false;
+            return;
+        }
         // Exit raw source view if active (interactive elements aren't visible in raw mode)
         if self.show_raw_source {
             self.show_raw_source = false;
