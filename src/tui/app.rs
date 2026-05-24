@@ -536,6 +536,10 @@ pub struct OutlineItem {
     pub text: String,
     pub expanded: bool,
     pub has_children: bool, // Track if this heading has children in the tree
+    /// Byte offset of the heading in `Document::content`. Uniquely identifies
+    /// the heading even when multiple headings share the same text.
+    /// `None` for the synthetic document-overview item.
+    pub offset: Option<usize>,
 }
 
 impl App {
@@ -561,6 +565,7 @@ impl App {
                     text: DOCUMENT_OVERVIEW.to_string(),
                     expanded: true,
                     has_children: !outline_items.is_empty(),
+                    offset: None,
                 },
             );
         }
@@ -2121,6 +2126,7 @@ impl App {
                     text: DOCUMENT_OVERVIEW.to_string(),
                     expanded: true,
                     has_children: !self.outline_items.is_empty(),
+                    offset: None,
                 },
             );
         }
@@ -2146,6 +2152,7 @@ impl App {
                 text: node.heading.text.clone(),
                 expanded,
                 has_children,
+                offset: Some(node.heading.offset),
             });
 
             // Only show children if this node is expanded
@@ -2456,6 +2463,7 @@ impl App {
                         text: DOCUMENT_OVERVIEW.to_string(),
                         expanded: true,
                         has_children: !self.tree.is_empty(),
+                        offset: None,
                     },
                 );
             }
@@ -3498,10 +3506,19 @@ impl App {
             .map(|item| item.text.as_str())
     }
 
+    /// Byte offset of the currently selected heading in `Document::content`.
+    /// `None` if nothing is selected or the selection is the synthetic document overview.
+    pub fn selected_heading_offset(&self) -> Option<usize> {
+        self.outline_state
+            .selected()
+            .and_then(|i| self.outline_items.get(i))
+            .and_then(|item| item.offset)
+    }
+
     /// Get the content for the currently selected section, or the full document if no heading is selected.
     fn current_section_content(&self) -> String {
-        self.selected_heading_text()
-            .and_then(|text| self.document.extract_section(text))
+        self.selected_heading_offset()
+            .and_then(|off| self.document.extract_section_at_offset(off))
             .unwrap_or_else(|| self.document.content.clone())
     }
 
@@ -3516,15 +3533,12 @@ impl App {
             return Some(1); // Return line 1 for document overview
         }
 
-        // Find the heading in the document by text
-        let heading = self
-            .document
-            .headings
-            .iter()
-            .find(|h| h.text == selected_text)?;
+        // Use the outline item's stored offset (uniquely identifies the heading
+        // even when multiple headings share the same text).
+        let heading_offset = self.selected_heading_offset()?;
 
         // Convert byte offset to line number (1-indexed)
-        let offset = heading.offset.min(self.document.content.len());
+        let offset = heading_offset.min(self.document.content.len());
         let before = &self.document.content[..offset];
         let line = before.chars().filter(|&c| c == '\n').count() + 1;
         Some(line as u32)
@@ -3636,8 +3650,11 @@ impl App {
 
     pub fn copy_content(&mut self) {
         // Copy the currently selected section's content
-        if let Some(heading_text) = self.selected_heading_text() {
-            if let Some(section) = self.document.extract_section(heading_text) {
+        if self.selected_heading_text().is_some() {
+            if let Some(section) = self
+                .selected_heading_offset()
+                .and_then(|off| self.document.extract_section_at_offset(off))
+            {
                 // Use persistent clipboard for Linux X11 compatibility
                 if let Some(clipboard) = &mut self.clipboard {
                     match clipboard.set_text(section) {
@@ -5201,11 +5218,7 @@ impl App {
                     .count();
 
                 // Use heading offset to find section start (avoids unreliable string search)
-                let section_start = self
-                    .selected_heading_text()
-                    .and_then(|text| self.document.find_heading(text))
-                    .map(|h| h.offset)
-                    .unwrap_or(0);
+                let section_start = self.selected_heading_offset().unwrap_or(0);
                 let content_before_section =
                     &self.document.content[..section_start.min(self.document.content.len())];
 

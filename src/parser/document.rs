@@ -132,12 +132,31 @@ impl Document {
     /// Extract the content of a section by heading text.
     ///
     /// Uses stored byte offsets for fast, accurate extraction without string searching.
+    /// When the document contains duplicate heading text (e.g. multiple "Input" headings),
+    /// this returns the section for the *first* match. Use [`extract_section_at_offset`]
+    /// to disambiguate by position.
+    ///
+    /// [`extract_section_at_offset`]: Self::extract_section_at_offset
     pub fn extract_section(&self, heading_text: &str) -> Option<String> {
         // Find the heading (O(n) scan of headings list)
         let search = heading_text.to_lowercase();
         let heading_idx = self.heading_text_lc.iter().position(|lc| *lc == search)?;
+        self.extract_section_by_index(heading_idx)
+    }
 
-        let heading = &self.headings[heading_idx];
+    /// Extract the content of the section whose heading starts at the given byte offset.
+    ///
+    /// Unlike [`extract_section`], this disambiguates duplicate heading texts because
+    /// each heading has a unique offset in the source.
+    ///
+    /// [`extract_section`]: Self::extract_section
+    pub fn extract_section_at_offset(&self, offset: usize) -> Option<String> {
+        let heading_idx = self.headings.iter().position(|h| h.offset == offset)?;
+        self.extract_section_by_index(heading_idx)
+    }
+
+    fn extract_section_by_index(&self, heading_idx: usize) -> Option<String> {
+        let heading = self.headings.get(heading_idx)?;
 
         // Start from the heading's stored byte offset
         let start = heading.offset;
@@ -158,7 +177,6 @@ impl Document {
             .map(|h| h.offset)
             .unwrap_or(self.content.len());
 
-        // Extract section content
         Some(self.content[content_start..end].trim().to_string())
     }
 }
@@ -458,6 +476,35 @@ mod tests {
         assert!(section.contains("A1"), "deeper subsection stays in A");
         assert!(section.contains("a1-body"));
         assert!(!section.contains("b-body"));
+    }
+
+    #[test]
+    fn extract_section_at_offset_disambiguates_duplicates() {
+        // Two "### Input" sections with the same text but different content —
+        // looking them up by offset must return the correct one.
+        let content =
+            "## query/1\n\n### Input\nhow many sessions\n\n## query/2\n\n### Input\nwhat tools\n";
+        let q1 = content.find("## query/1").unwrap();
+        let in1 = content.find("### Input").unwrap();
+        let q2 = content.find("## query/2").unwrap();
+        let in2 = content[in1 + 1..].find("### Input").unwrap() + in1 + 1;
+        let d = doc(
+            content,
+            vec![
+                h(2, "query/1", q1),
+                h(3, "Input", in1),
+                h(2, "query/2", q2),
+                h(3, "Input", in2),
+            ],
+        );
+
+        let first = d.extract_section_at_offset(in1).expect("first Input");
+        assert!(first.contains("how many sessions"));
+        assert!(!first.contains("what tools"));
+
+        let second = d.extract_section_at_offset(in2).expect("second Input");
+        assert!(second.contains("what tools"));
+        assert!(!second.contains("how many sessions"));
     }
 
     #[test]
