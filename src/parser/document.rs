@@ -38,6 +38,7 @@ pub struct Heading {
 pub struct HeadingNode {
     pub heading: Heading,
     pub children: Vec<HeadingNode>,
+    pub index: usize,
 }
 
 impl Document {
@@ -64,10 +65,11 @@ impl Document {
         // borrow-checker issues from holding mutable references on the stack.
         let mut path: Vec<(usize, usize)> = Vec::new(); // (level, child_idx)
 
-        for heading in &self.headings {
+        for (idx, heading) in self.headings.iter().enumerate() {
             let node = HeadingNode {
                 heading: heading.clone(),
                 children: Vec::new(),
+                index: idx,
             };
 
             // Pop until current heading is deeper than top of stack.
@@ -136,8 +138,12 @@ impl Document {
         // Find the heading (O(n) scan of headings list)
         let search = heading_text.to_lowercase();
         let heading_idx = self.heading_text_lc.iter().position(|lc| *lc == search)?;
+        self.extract_section_at_index(heading_idx)
+    }
 
-        let heading = &self.headings[heading_idx];
+    /// Extract the content of a section by heading index.
+    pub fn extract_section_at_index(&self, heading_idx: usize) -> Option<String> {
+        let heading = self.headings.get(heading_idx)?;
 
         // Start from the heading's stored byte offset
         let start = heading.offset;
@@ -464,5 +470,60 @@ mod tests {
     fn extract_section_missing_returns_none() {
         let d = doc("# A\n", vec![h(1, "A", 0)]);
         assert!(d.extract_section("missing").is_none());
+    }
+
+    // ---------- extract_section_at_index ----------
+
+    #[test]
+    fn extract_section_at_index_duplicate_sub_headings() {
+        let content = "# heading\nfirst body\n\n## sub heading\nfirst sub\n\n# heading 2\nsecond body\n\n## sub heading\nsecond sub\n";
+        let h1 = content.find("# heading\n").unwrap();
+        let s1 = content.find("## sub heading\nfirst").unwrap();
+        let h2 = content.find("# heading 2").unwrap();
+        let s2 = content.find("## sub heading\nsecond").unwrap();
+        let d = doc(
+            content,
+            vec![
+                h(1, "heading", h1),
+                h(2, "sub heading", s1),
+                h(1, "heading 2", h2),
+                h(2, "sub heading", s2),
+            ],
+        );
+
+        let first = d.extract_section_at_index(1).unwrap();
+        assert!(first.contains("first sub"));
+        assert!(!first.contains("second sub"));
+
+        let second = d.extract_section_at_index(3).unwrap();
+        assert!(second.contains("second sub"));
+        assert!(!second.contains("first sub"));
+    }
+
+    #[test]
+    fn extract_section_at_index_duplicate_at_eof() {
+        let content =
+            "# First\nFirst body.\n\n# Second\nMiddle.\n\n# First\nLast body.\nEOF line.\n";
+        let f1 = content.find("# First\nFirst").unwrap();
+        let sec = content.find("# Second").unwrap();
+        let f2 = content.find("# First\nLast").unwrap();
+        let d = doc(
+            content,
+            vec![h(1, "First", f1), h(1, "Second", sec), h(1, "First", f2)],
+        );
+
+        let first = d.extract_section_at_index(0).unwrap();
+        assert!(first.contains("First body"));
+        assert!(!first.contains("Last body"));
+
+        let last = d.extract_section_at_index(2).unwrap();
+        assert!(last.contains("Last body"));
+        assert!(!last.contains("First body"));
+    }
+
+    #[test]
+    fn extract_section_at_index_out_of_bounds() {
+        let d = doc("# A\n", vec![h(1, "A", 0)]);
+        assert!(d.extract_section_at_index(999).is_none());
     }
 }

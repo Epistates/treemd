@@ -347,8 +347,8 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     // Get content for selected section and determine title
     let (content_text, title) = if let Some(heading_text) = app.selected_heading_text() {
         let content = app
-            .document
-            .extract_section(heading_text)
+            .selected_heading_index()
+            .and_then(|idx| app.document.extract_section_at_index(idx))
             .unwrap_or_else(|| app.document.content.clone());
 
         // Build title with various indicators

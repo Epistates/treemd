@@ -407,7 +407,7 @@ pub struct App {
     pub show_theme_picker: bool,
     pub theme_picker_selected: usize,
     pub theme_picker_original: Option<ThemeName>, // Original theme before picker opened (for cancel)
-    previous_selection: Option<String>,           // Track previous selection to detect changes
+    previous_selection: Option<Option<usize>>,    // Heading index for change detection
     /// True when the cached content_height/scrollbar may be stale and need
     /// recomputation on the next `update_content_metrics`. Set by file
     /// reload, raw-source toggle, etc.
@@ -536,6 +536,7 @@ pub struct OutlineItem {
     pub text: String,
     pub expanded: bool,
     pub has_children: bool, // Track if this heading has children in the tree
+    pub heading_index: Option<usize>, // Index into Document::headings
 }
 
 impl App {
@@ -561,6 +562,7 @@ impl App {
                     text: DOCUMENT_OVERVIEW.to_string(),
                     expanded: true,
                     has_children: !outline_items.is_empty(),
+                    heading_index: None,
                 },
             );
         }
@@ -2040,8 +2042,8 @@ impl App {
     }
 
     /// Check if a heading's section contains open todos (- [ ])
-    fn heading_has_open_todos(&self, heading_text: &str) -> bool {
-        if let Some(content) = self.document.extract_section(heading_text) {
+    fn heading_has_open_todos(&self, heading_index: usize) -> bool {
+        if let Some(content) = self.document.extract_section_at_index(heading_index) {
             // Check for unchecked todo pattern: - [ ] or * [ ]
             content.contains("- [ ]") || content.contains("* [ ]")
         } else {
@@ -2052,7 +2054,7 @@ impl App {
     /// Check if a heading or any of its descendants have open todos
     fn heading_tree_has_open_todos(&self, node: &HeadingNode) -> bool {
         // Check this heading's direct content
-        if self.heading_has_open_todos(&node.heading.text) {
+        if self.heading_has_open_todos(node.index) {
             return true;
         }
         // Recursively check children
@@ -2121,6 +2123,7 @@ impl App {
                     text: DOCUMENT_OVERVIEW.to_string(),
                     expanded: true,
                     has_children: !self.outline_items.is_empty(),
+                    heading_index: None,
                 },
             );
         }
@@ -2146,6 +2149,7 @@ impl App {
                 text: node.heading.text.clone(),
                 expanded,
                 has_children,
+                heading_index: Some(node.index),
             });
 
             // Only show children if this node is expanded
@@ -2180,6 +2184,16 @@ impl App {
         false
     }
 
+    fn select_by_heading_index(&mut self, heading_index: usize) -> bool {
+        for (idx, item) in self.outline_items.iter().enumerate() {
+            if item.heading_index == Some(heading_index) {
+                self.select_outline_index(idx);
+                return true;
+            }
+        }
+        false
+    }
+
     /// Update content height based on current selection and reset scroll if selection changed.
     ///
     /// The expensive line-counting only runs when the selection or the
@@ -2187,7 +2201,11 @@ impl App {
     /// render loop calls this every frame; without gating, a large section
     /// would be re-scanned 60+ times per second during animations.
     pub fn update_content_metrics(&mut self) {
-        let current_selection = self.selected_heading_text().map(|s| s.to_string());
+        let current_selection = self.outline_state.selected().map(|i| {
+            self.outline_items
+                .get(i)
+                .and_then(|item| item.heading_index)
+        });
         let selection_changed = current_selection != self.previous_selection;
 
         if selection_changed {
@@ -2429,7 +2447,8 @@ impl App {
     }
 
     pub fn filter_outline(&mut self) {
-        // Save current selection text
+        // Save current selection
+        let current_idx = self.selected_heading_index();
         let current_selection = self.selected_heading_text().map(|s| s.to_string());
 
         if self.search_query.is_empty() {
@@ -2456,6 +2475,7 @@ impl App {
                         text: DOCUMENT_OVERVIEW.to_string(),
                         expanded: true,
                         has_children: !self.tree.is_empty(),
+                        heading_index: None,
                     },
                 );
             }
@@ -2463,11 +2483,8 @@ impl App {
 
         // Try to restore previous selection, otherwise select first item
         if !self.outline_items.is_empty() {
-            let restored = if let Some(text) = current_selection {
-                self.select_by_text(&text)
-            } else {
-                false
-            };
+            let restored = current_idx.is_some_and(|i| self.select_by_heading_index(i))
+                || current_selection.is_some_and(|t| self.select_by_text(&t));
 
             if !restored {
                 self.outline_state.select(Some(0));
@@ -2837,6 +2854,7 @@ impl App {
             && self.outline_items[i].has_children
         {
             let heading_text = self.outline_items[i].text.clone();
+            let heading_idx = self.outline_items[i].heading_index;
 
             // Toggle the collapsed state
             if self.collapsed_headings.contains(&heading_text) {
@@ -2848,9 +2866,9 @@ impl App {
             // Rebuild the flattened list with overview entry
             self.rebuild_outline_items();
 
-            // Restore selection by text (not by index)
-            if !self.select_by_text(&heading_text) {
-                // If heading not found (shouldn't happen), clamp to valid index
+            let restored = heading_idx.is_some_and(|i| self.select_by_heading_index(i))
+                || self.select_by_text(&heading_text);
+            if !restored {
                 let safe_idx = i.min(self.outline_items.len().saturating_sub(1));
                 self.outline_state.select(Some(safe_idx));
                 self.outline_scroll_state =
@@ -2866,6 +2884,7 @@ impl App {
             && self.outline_items[i].has_children
         {
             let heading_text = self.outline_items[i].text.clone();
+            let heading_idx = self.outline_items[i].heading_index;
 
             // Remove from collapsed set to expand
             self.collapsed_headings.remove(&heading_text);
@@ -2873,8 +2892,9 @@ impl App {
             // Rebuild the flattened list with overview entry
             self.rebuild_outline_items();
 
-            // Restore selection by text (not by index)
-            if !self.select_by_text(&heading_text) {
+            let restored = heading_idx.is_some_and(|i| self.select_by_heading_index(i))
+                || self.select_by_text(&heading_text);
+            if !restored {
                 // If heading not found (shouldn't happen), clamp to valid index
                 let safe_idx = i.min(self.outline_items.len().saturating_sub(1));
                 self.outline_state.select(Some(safe_idx));
@@ -2891,6 +2911,7 @@ impl App {
         {
             let current_level = self.outline_items[i].level;
             let current_text = self.outline_items[i].text.clone();
+            let current_heading_idx = self.outline_items[i].heading_index;
 
             // If current heading has children, collapse it
             if self.outline_items[i].has_children {
@@ -2899,8 +2920,9 @@ impl App {
                 // Rebuild the flattened list with overview entry
                 self.rebuild_outline_items();
 
-                // Restore selection by text
-                if !self.select_by_text(&current_text) {
+                let restored = current_heading_idx.is_some_and(|i| self.select_by_heading_index(i))
+                    || self.select_by_text(&current_text);
+                if !restored {
                     let safe_idx = i.min(self.outline_items.len().saturating_sub(1));
                     self.outline_state.select(Some(safe_idx));
                     self.outline_scroll_state =
@@ -2910,10 +2932,12 @@ impl App {
                 // If no children, find parent and collapse it
                 // Look backwards for first heading with lower level
                 let mut parent_text: Option<String> = None;
+                let mut parent_heading_idx: Option<usize> = None;
                 for idx in (0..i).rev() {
                     if self.outline_items[idx].level < current_level {
                         // Found parent
                         parent_text = Some(self.outline_items[idx].text.clone());
+                        parent_heading_idx = self.outline_items[idx].heading_index;
                         break;
                     }
                 }
@@ -2925,14 +2949,13 @@ impl App {
                     // Rebuild and move selection to parent
                     self.rebuild_outline_items();
 
-                    // Select the parent by text
-                    if !self.select_by_text(&parent) {
-                        // Fallback: select first item if parent not found
-                        if !self.outline_items.is_empty() {
-                            self.outline_state.select(Some(0));
-                            self.outline_scroll_state =
-                                ScrollbarState::new(self.outline_items.len()).position(0);
-                        }
+                    let restored = parent_heading_idx
+                        .is_some_and(|i| self.select_by_heading_index(i))
+                        || self.select_by_text(&parent);
+                    if !restored && !self.outline_items.is_empty() {
+                        self.outline_state.select(Some(0));
+                        self.outline_scroll_state =
+                            ScrollbarState::new(self.outline_items.len()).position(0);
                     }
                 }
                 // No parent found, do nothing
@@ -2954,19 +2977,16 @@ impl App {
         }
 
         // Rebuild outline and preserve selection
+        let selected_offset = self.selected_heading_index();
         let selected_text = self.selected_heading_text().map(|s| s.to_string());
         self.rebuild_outline_items();
 
         // Try to restore selection, or select first item
-        if let Some(text) = selected_text
-            && !self.select_by_text(&text)
-        {
-            // Selection collapsed away, select first item
-            if !self.outline_items.is_empty() {
-                self.outline_state.select(Some(0));
-                self.outline_scroll_state =
-                    ScrollbarState::new(self.outline_items.len()).position(0);
-            }
+        let restored = selected_offset.is_some_and(|o| self.select_by_heading_index(o))
+            || selected_text.is_some_and(|t| self.select_by_text(&t));
+        if !restored && !self.outline_items.is_empty() {
+            self.outline_state.select(Some(0));
+            self.outline_scroll_state = ScrollbarState::new(self.outline_items.len()).position(0);
         }
 
         let count = self.collapsed_headings.len();
@@ -2991,10 +3011,13 @@ impl App {
         self.collapsed_headings.clear();
 
         // Rebuild outline and preserve selection
+        let selected_offset = self.selected_heading_index();
         let selected_text = self.selected_heading_text().map(|s| s.to_string());
         self.rebuild_outline_items();
 
-        if let Some(text) = selected_text {
+        if !(selected_offset.is_some_and(|o| self.select_by_heading_index(o)))
+            && let Some(text) = selected_text
+        {
             self.select_by_text(&text);
         }
 
@@ -3016,18 +3039,15 @@ impl App {
         }
 
         // Rebuild outline and preserve selection
+        let selected_offset = self.selected_heading_index();
         let selected_text = self.selected_heading_text().map(|s| s.to_string());
         self.rebuild_outline_items();
 
-        if let Some(text) = selected_text
-            && !self.select_by_text(&text)
-        {
-            // Selection collapsed away, select first item
-            if !self.outline_items.is_empty() {
-                self.outline_state.select(Some(0));
-                self.outline_scroll_state =
-                    ScrollbarState::new(self.outline_items.len()).position(0);
-            }
+        let restored = selected_offset.is_some_and(|o| self.select_by_heading_index(o))
+            || selected_text.is_some_and(|t| self.select_by_text(&t));
+        if !restored && !self.outline_items.is_empty() {
+            self.outline_state.select(Some(0));
+            self.outline_scroll_state = ScrollbarState::new(self.outline_items.len()).position(0);
         }
 
         self.set_status_message(&format!("Collapsed {} h{} headings", count, level));
@@ -3073,10 +3093,13 @@ impl App {
         }
 
         // Rebuild outline and preserve selection
+        let selected_offset = self.selected_heading_index();
         let selected_text = self.selected_heading_text().map(|s| s.to_string());
         self.rebuild_outline_items();
 
-        if let Some(text) = selected_text {
+        if !(selected_offset.is_some_and(|o| self.select_by_heading_index(o)))
+            && let Some(text) = selected_text
+        {
             self.select_by_text(&text);
         }
 
@@ -3151,20 +3174,14 @@ impl App {
         self.filter_by_todos = !self.filter_by_todos;
 
         // Rebuild outline with/without filter
+        let selected_offset = self.selected_heading_index();
         let selected_text = self.selected_heading_text().map(|s| s.to_string());
         self.rebuild_outline_items();
 
         // Try to restore selection
-        if let Some(text) = selected_text {
-            if !self.select_by_text(&text) {
-                // Selection no longer visible, select first item
-                if !self.outline_items.is_empty() {
-                    self.outline_state.select(Some(0));
-                    self.outline_scroll_state =
-                        ScrollbarState::new(self.outline_items.len()).position(0);
-                }
-            }
-        } else if !self.outline_items.is_empty() {
+        let restored = selected_offset.is_some_and(|o| self.select_by_heading_index(o))
+            || selected_text.is_some_and(|t| self.select_by_text(&t));
+        if !restored && !self.outline_items.is_empty() {
             self.outline_state.select(Some(0));
             self.outline_scroll_state = ScrollbarState::new(self.outline_items.len()).position(0);
         }
@@ -3498,10 +3515,17 @@ impl App {
             .map(|item| item.text.as_str())
     }
 
+    pub fn selected_heading_index(&self) -> Option<usize> {
+        self.outline_state
+            .selected()
+            .and_then(|i| self.outline_items.get(i))
+            .and_then(|item| item.heading_index)
+    }
+
     /// Get the content for the currently selected section, or the full document if no heading is selected.
     fn current_section_content(&self) -> String {
-        self.selected_heading_text()
-            .and_then(|text| self.document.extract_section(text))
+        self.selected_heading_index()
+            .and_then(|idx| self.document.extract_section_at_index(idx))
             .unwrap_or_else(|| self.document.content.clone())
     }
 
@@ -3516,14 +3540,7 @@ impl App {
             return Some(1); // Return line 1 for document overview
         }
 
-        // Find the heading in the document by text
-        let heading = self
-            .document
-            .headings
-            .iter()
-            .find(|h| h.text == selected_text)?;
-
-        // Convert byte offset to line number (1-indexed)
+        let heading = self.document.headings.get(self.selected_heading_index()?)?;
         let offset = heading.offset.min(self.document.content.len());
         let before = &self.document.content[..offset];
         let line = before.chars().filter(|&c| c == '\n').count() + 1;
@@ -3552,7 +3569,11 @@ impl App {
 
     /// Sync previous_selection to current selection (prevents spurious scroll resets)
     pub fn sync_previous_selection(&mut self) {
-        self.previous_selection = self.selected_heading_text().map(|s| s.to_string());
+        self.previous_selection = self.outline_state.selected().map(|i| {
+            self.outline_items
+                .get(i)
+                .and_then(|item| item.heading_index)
+        });
     }
 
     pub fn toggle_theme_picker(&mut self) {
@@ -3635,27 +3656,18 @@ impl App {
     }
 
     pub fn copy_content(&mut self) {
-        // Copy the currently selected section's content
-        if let Some(heading_text) = self.selected_heading_text() {
-            if let Some(section) = self.document.extract_section(heading_text) {
-                // Use persistent clipboard for Linux X11 compatibility
-                if let Some(clipboard) = &mut self.clipboard {
-                    match clipboard.set_text(section) {
-                        Ok(_) => {
-                            self.status_message = Some("✓ Section copied to clipboard".to_string());
-                        }
-                        Err(e) => {
-                            self.status_message = Some(format!("✗ Clipboard error: {}", e));
-                        }
-                    }
-                } else {
-                    self.status_message = Some("✗ Clipboard not available".to_string());
+        let content = self.current_section_content();
+        if let Some(clipboard) = &mut self.clipboard {
+            match clipboard.set_text(content) {
+                Ok(_) => {
+                    self.status_message = Some("✓ Section copied to clipboard".to_string());
                 }
-            } else {
-                self.status_message = Some("✗ Could not extract section".to_string());
+                Err(e) => {
+                    self.status_message = Some(format!("✗ Clipboard error: {}", e));
+                }
             }
         } else {
-            self.status_message = Some("✗ No heading selected".to_string());
+            self.status_message = Some("✗ Clipboard not available".to_string());
         }
     }
 
@@ -4886,7 +4898,11 @@ impl App {
         // IMPORTANT: Sync previous_selection to prevent update_content_metrics() from resetting scroll
         // After reload, load_document() sets previous_selection = None, but current selection is restored.
         // Without this sync, update_content_metrics() thinks selection changed and resets scroll to 0.
-        self.previous_selection = self.selected_heading_text().map(|s| s.to_string());
+        self.previous_selection = self.outline_state.selected().map(|i| {
+            self.outline_items
+                .get(i)
+                .and_then(|item| item.heading_index)
+        });
 
         // Suppress file watcher for this save - we already reloaded internally
         // Without this, file watcher detects our save and triggers a second reload
@@ -5202,8 +5218,8 @@ impl App {
 
                 // Use heading offset to find section start (avoids unreliable string search)
                 let section_start = self
-                    .selected_heading_text()
-                    .and_then(|text| self.document.find_heading(text))
+                    .selected_heading_index()
+                    .and_then(|idx| self.document.headings.get(idx))
                     .map(|h| h.offset)
                     .unwrap_or(0);
                 let content_before_section =
@@ -5614,5 +5630,87 @@ mod image_picker_tests {
         picker.set_protocol_type(ProtocolType::Kitty);
 
         assert!(!App::should_use_env_protocol_fallback(&picker));
+    }
+}
+
+#[cfg(test)]
+mod outline_integration_tests {
+    use super::*;
+    use crate::Document;
+    use crate::parser::parse_markdown;
+    use std::collections::HashSet;
+
+    fn make_doc(content: &str) -> Document {
+        parse_markdown(content)
+    }
+
+    #[test]
+    fn duplicate_headings_resolve_to_correct_content() {
+        let content = "\
+# Chapter 1
+chapter 1 body
+
+## Details
+details for chapter 1
+
+# Chapter 2
+chapter 2 body
+
+## Details
+details for chapter 2
+";
+        let doc = make_doc(content);
+        let tree = doc.build_tree();
+        let items = App::flatten_tree(&tree, &HashSet::new());
+
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[1].text, "Details");
+        assert_eq!(items[3].text, "Details");
+        assert_ne!(items[1].heading_index, items[3].heading_index);
+
+        let first = doc
+            .extract_section_at_index(items[1].heading_index.unwrap())
+            .unwrap();
+        assert!(first.contains("details for chapter 1"));
+        assert!(!first.contains("details for chapter 2"));
+
+        let second = doc
+            .extract_section_at_index(items[3].heading_index.unwrap())
+            .unwrap();
+        assert!(second.contains("details for chapter 2"));
+        assert!(!second.contains("details for chapter 1"));
+    }
+
+    #[test]
+    fn collapsed_parent_hides_children_but_indices_stay_correct() {
+        let content = "\
+# A
+body a
+
+## Sub A
+sub a content
+
+# B
+body b
+
+## Sub B
+sub b content
+";
+        let doc = make_doc(content);
+        let tree = doc.build_tree();
+
+        let mut collapsed = HashSet::new();
+        collapsed.insert("A".to_string());
+        let items = App::flatten_tree(&tree, &collapsed);
+
+        // Sub A hidden, Sub B still accessible
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[2].text, "Sub B");
+
+        let sub_b = doc
+            .extract_section_at_index(items[2].heading_index.unwrap())
+            .unwrap();
+        assert!(sub_b.contains("sub b content"));
+        assert!(!sub_b.contains("sub a content"));
     }
 }
