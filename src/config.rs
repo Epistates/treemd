@@ -50,6 +50,10 @@ pub struct UiConfig {
     /// Tree rendering style: "compact" (default, gapless) or "spaced"
     #[serde(default = "default_tree_style")]
     pub tree_style: String,
+
+    /// Show heading level markers (e.g. ##, ###) in the outline sidebar (default: true)
+    #[serde(default = "default_outline_heading_markers")]
+    pub outline_heading_markers: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,12 +254,17 @@ impl Default for UiConfig {
             code_theme: default_code_theme(),
             outline_width: default_outline_width(),
             tree_style: default_tree_style(),
+            outline_heading_markers: default_outline_heading_markers(),
         }
     }
 }
 
 fn default_tree_style() -> String {
     "compact".to_string()
+}
+
+fn default_outline_heading_markers() -> bool {
+    true
 }
 
 impl Default for TerminalConfig {
@@ -479,6 +488,7 @@ mod tests {
         assert_eq!(c.ui.code_theme, "base16-ocean.dark");
         assert_eq!(c.ui.outline_width, 30);
         assert_eq!(c.ui.tree_style, "compact");
+        assert!(c.ui.outline_heading_markers);
         assert_eq!(c.terminal.color_mode, "auto");
         assert!(!c.terminal.warned_terminal_app);
         assert!(c.images.enabled);

@@ -201,6 +201,11 @@ pub const HELP_LINES: &[HelpLine] = &[
         &[Next, Previous],
         "Move N items (vim count prefix, e.g., 5j)",
     ),
+    keybinding(
+        Normal,
+        &[ToggleHeadingMarkers],
+        "Toggle heading markers in outline",
+    ),
     keybinding(Normal, &[SetBookmark], "Set bookmark (shows ⚑ indicator)"),
     keybinding(Normal, &[JumpToBookmark], "Jump to bookmarked position"),
     blank(),

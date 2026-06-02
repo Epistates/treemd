@@ -51,6 +51,8 @@ pub enum Action {
     OutlineWidthDecrease,
     /// Toggle filtering outline by open todos
     ToggleTodoFilter,
+    /// Toggle heading level markers (#, ##, ###) in outline
+    ToggleHeadingMarkers,
 
     // === Bookmarks ===
     /// Set bookmark at current position
@@ -235,6 +237,7 @@ impl Action {
             Action::OutlineWidthIncrease => "Increase outline width",
             Action::OutlineWidthDecrease => "Decrease outline width",
             Action::ToggleTodoFilter => "Filter by open todos",
+            Action::ToggleHeadingMarkers => "Toggle heading markers",
 
             // Bookmarks
             Action::SetBookmark => "Set bookmark",
@@ -363,7 +366,8 @@ impl Action {
             | Action::ToggleOutline
             | Action::OutlineWidthIncrease
             | Action::OutlineWidthDecrease
-            | Action::ToggleTodoFilter => "Outline",
+            | Action::ToggleTodoFilter
+            | Action::ToggleHeadingMarkers => "Outline",
 
             Action::SetBookmark | Action::JumpToBookmark => "Bookmarks",
 

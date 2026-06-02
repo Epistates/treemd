@@ -149,6 +149,7 @@ treemd *.md             # Open file picker with matched files
 | `h` / `l` or `←` / `→` | Collapse/expand heading |
 | `w` | Toggle outline visibility |
 | `[` / `]` | Adjust outline width (20%, 30%, 40%) |
+| `#` | Toggle heading level markers in outline |
 
 </details>
 
@@ -370,9 +371,10 @@ The file is created automatically when you change settings (theme with `t`, outl
 
 ```toml
 [ui]
-theme = "Nord"         # OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
-outline_width = 30     # 20, 30, or 40
-tree_style = "spaced"  # "spaced" (default) or "compact" (gapless box characters)
+theme = "Nord"                  # OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
+outline_width = 30              # 20, 30, or 40
+tree_style = "spaced"           # "spaced" (default) or "compact" (gapless box characters)
+outline_heading_markers = true  # Show #/##/### level markers in outline sidebar
 
 [terminal]
 color_mode = "auto"    # "auto", "rgb", or "256"

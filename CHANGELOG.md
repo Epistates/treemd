@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Toggle heading markers in outline** - New `outline_heading_markers` config option, `#` keyboard shortcut, and `:toggle heading markers` palette command to show/hide `#`/`##`/`###` level prefixes in the outline sidebar (default: true)
+
 ## [0.5.11] - 2026-04-28
 
 ### Fixed

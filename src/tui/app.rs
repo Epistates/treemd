@@ -75,6 +75,7 @@ pub enum CommandAction {
     SaveFile, // Save pending edits to file (:w)
     Undo,     // Undo last pending edit
     ToggleOutline,
+    ToggleHeadingMarkers,
     ToggleHelp,
     ToggleRawSource,
     JumpToTop,
@@ -216,6 +217,12 @@ pub const PALETTE_COMMANDS: &[PaletteCommand] = &[
         &["outline", "sidebar"],
         "Show/hide the outline sidebar",
         CommandAction::ToggleOutline,
+    ),
+    PaletteCommand::new(
+        "Toggle heading markers",
+        &["markers", "hashes"],
+        "Show/hide # level markers in outline",
+        CommandAction::ToggleHeadingMarkers,
     ),
     PaletteCommand::new(
         "Toggle help",
@@ -394,7 +401,8 @@ pub struct App {
     pub search_query: String,
     pub highlighter: SyntaxHighlighter,
     pub show_outline: bool,
-    pub outline_width: u16, // Percentage: 20, 30, or 40
+    pub show_heading_markers: bool, // Show # prefixes in outline sidebar
+    pub outline_width: u16,         // Percentage: 20, 30, or 40
     /// Whether the config file had a custom (non-standard) outline width at startup.
     /// Used to protect power users' custom config values from being overwritten.
     /// Standard values are 20, 30, 40; anything else is considered custom.
@@ -615,6 +623,7 @@ impl App {
             search_query: String::new(),
             highlighter: SyntaxHighlighter::new(code_theme, code_theme_dir),
             show_outline: true,
+            show_heading_markers: config.ui.outline_heading_markers,
             outline_width,
             config_has_custom_outline_width,
             bookmark_position: None,
@@ -1339,6 +1348,7 @@ impl App {
             OutlineWidthIncrease => self.cycle_outline_width(true),
             OutlineWidthDecrease => self.cycle_outline_width(false),
             ToggleTodoFilter => self.toggle_todo_filter(),
+            ToggleHeadingMarkers => self.toggle_heading_markers(),
 
             // === Bookmarks ===
             SetBookmark => self.set_bookmark(),
@@ -3169,6 +3179,17 @@ impl App {
         }
     }
 
+    /// Toggle heading level markers (#, ##, ###) in the outline sidebar
+    pub fn toggle_heading_markers(&mut self) {
+        self.show_heading_markers = !self.show_heading_markers;
+        let state = if self.show_heading_markers {
+            "ON"
+        } else {
+            "OFF"
+        };
+        self.set_status_message(&format!("Heading markers: {}", state));
+    }
+
     /// Toggle filtering outline by open todos
     pub fn toggle_todo_filter(&mut self) {
         self.filter_by_todos = !self.filter_by_todos;
@@ -3404,6 +3425,10 @@ impl App {
             }
             CommandAction::ToggleOutline => {
                 self.toggle_outline();
+                false
+            }
+            CommandAction::ToggleHeadingMarkers => {
+                self.toggle_heading_markers();
                 false
             }
             CommandAction::ToggleHelp => {
