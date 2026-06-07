@@ -528,6 +528,7 @@ Override settings for a single session:
 treemd --theme Dracula README.md
 treemd --color-mode 256 README.md
 treemd --color-mode rgb README.md
+treemd --normal README.md           # Start in outline navigation mode
 ```
 
 ## Contributing

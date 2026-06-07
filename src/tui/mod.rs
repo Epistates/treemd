@@ -84,6 +84,9 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         app.enter_file_picker();
     }
 
+
+
+
     // Create file watcher for live reload
     let mut file_watcher = watcher::FileWatcher::new().ok();
     if let Some(ref mut watcher) = file_watcher {
@@ -119,6 +122,20 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
             }
 
             needs_redraw = false;
+
+            // After the first render with --normal, drain any buffered
+            // input and reset outline to the first heading.
+            if app.force_normal_mode {
+                while tty::poll_event(Duration::ZERO)? {
+                    let _ = tty::read_event()?;
+                }
+                app.outline_state.select(Some(0));
+                app.content_scroll = 0;
+                app.mode = app::AppMode::Normal;
+                app.force_normal_mode = false;
+                needs_redraw = true;
+                continue;
+            }
         }
 
         // Update file watcher if the current file changed (e.g., via navigation)

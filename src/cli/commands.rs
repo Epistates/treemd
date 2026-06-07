@@ -146,6 +146,12 @@ pub struct Cli {
     #[arg(long = "color-mode", value_name = "MODE")]
     pub color_mode: Option<ColorModeArg>,
 
+    /// Start TUI in normal/outline navigation mode
+    ///
+    /// Skip interactive element mode and start with outline navigation.
+    #[arg(long = "normal")]
+    pub normal_mode: bool,
+
     /// Disable image rendering in TUI mode
     ///
     /// Skip all image loading and display. Useful for terminals that don't

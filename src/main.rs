@@ -330,6 +330,9 @@ fn main() -> Result<()> {
         if needs_file_picker {
             app.startup_needs_file_picker = true;
         }
+        if args.normal_mode {
+            app.force_normal_mode = true;
+        }
         if let Some(dir) = file_picker_dir {
             app.file_picker_dir = Some(dir.canonicalize().unwrap_or(dir));
         }
