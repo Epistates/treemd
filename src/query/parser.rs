@@ -7,11 +7,25 @@ use super::ast::*;
 use super::error::{QueryError, QueryErrorKind};
 use super::lexer::{Token, TokenKind};
 
+/// Maximum expression nesting depth. Guards against stack overflow on
+/// pathological input such as tens of thousands of nested parentheses.
+///
+/// Each nesting level descends through ~11 recursive-descent frames, and a
+/// debug build's frames are large, so the guard must trip well before the
+/// thread stack is exhausted (empirically ~380 levels in a debug `cargo test`
+/// thread). 256 leaves comfortable margin while still allowing far deeper
+/// nesting than any real query needs.
+const MAX_DEPTH: usize = 256;
+
 /// Parser state.
 pub struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
     source: &'a str,
+    /// Current recursion depth through `parse_unary_expr`. Every recursive
+    /// descent cycle passes through `parse_unary_expr`, so guarding there
+    /// bounds total recursion.
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -20,6 +34,7 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             source,
+            depth: 0,
         }
     }
 
@@ -120,29 +135,64 @@ fn parse_piped_expr(p: &mut Parser) -> Result<PipedExpr, QueryError> {
     Ok(PipedExpr::new(stages))
 }
 
+/// Whether `expr` is an element-selector expression — the only thing the
+/// hierarchy operators (`>`, `>>`) are meaningful between. Used to disambiguate
+/// `.h1 > .h2` (hierarchy) from `2 > .level` (numeric comparison).
+fn is_element_selector(expr: &Expr) -> bool {
+    match expr {
+        Expr::Element { .. } | Expr::Hierarchy { .. } => true,
+        Expr::Group { expr, .. } => is_element_selector(expr),
+        _ => false,
+    }
+}
+
 fn parse_hierarchy_expr(p: &mut Parser) -> Result<Expr, QueryError> {
     let mut expr = parse_or_expr(p)?;
 
-    // Handle hierarchy operators (> and >>)
+    // Handle hierarchy operators (> and >>).
+    //
+    // `>>` is always the descendant operator. `>` is only the direct-child
+    // hierarchy operator when BOTH operands are element selectors; otherwise it
+    // is the numeric greater-than comparison (e.g. `select(2 > .level)`).
     loop {
-        let direct = if p.matches(&[TokenKind::GtGt]) {
-            false
-        } else if p.matches(&[TokenKind::Gt]) {
-            true
+        let descendant = p.check(&TokenKind::GtGt);
+        let child_op = p.check(&TokenKind::Gt);
+
+        if descendant {
+            p.advance();
+            let start_span = expr.span();
+            let child = parse_or_expr(p)?;
+            let end_span = child.span();
+            expr = Expr::Hierarchy {
+                parent: Box::new(expr),
+                child: Box::new(child),
+                direct: false,
+                span: start_span.merge(end_span),
+            };
+        } else if child_op {
+            p.advance();
+            let start_span = expr.span();
+            let right = parse_or_expr(p)?;
+            let end_span = right.span();
+
+            if is_element_selector(&expr) && is_element_selector(&right) {
+                expr = Expr::Hierarchy {
+                    parent: Box::new(expr),
+                    child: Box::new(right),
+                    direct: true,
+                    span: start_span.merge(end_span),
+                };
+            } else {
+                expr = Expr::Binary {
+                    op: BinaryOp::Gt,
+                    left: Box::new(expr),
+                    right: Box::new(right),
+                    span: start_span.merge(end_span),
+                };
+            }
         } else {
             break;
-        };
-
-        let start_span = expr.span();
-        let child = parse_or_expr(p)?;
-        let end_span = child.span();
-
-        expr = Expr::Hierarchy {
-            parent: Box::new(expr),
-            child: Box::new(child),
-            direct,
-            span: start_span.merge(end_span),
-        };
+        }
     }
 
     Ok(expr)
@@ -331,6 +381,24 @@ fn parse_multiplicative_expr(p: &mut Parser) -> Result<Expr, QueryError> {
 }
 
 fn parse_unary_expr(p: &mut Parser) -> Result<Expr, QueryError> {
+    // Depth guard: every recursive-descent cycle (parens, unary chains,
+    // pipes inside groups, …) routes through here, so bounding this bounds
+    // total parser recursion and prevents stack overflow on adversarial input.
+    p.depth += 1;
+    if p.depth > MAX_DEPTH {
+        p.depth -= 1;
+        return Err(QueryError::new(
+            QueryErrorKind::RecursionLimit,
+            p.current_span(),
+            p.source.to_string(),
+        ));
+    }
+    let result = parse_unary_expr_inner(p);
+    p.depth -= 1;
+    result
+}
+
+fn parse_unary_expr_inner(p: &mut Parser) -> Result<Expr, QueryError> {
     let start_span = p.current_span();
 
     if p.matches(&[TokenKind::Not]) {
@@ -356,29 +424,49 @@ fn parse_unary_expr(p: &mut Parser) -> Result<Expr, QueryError> {
     parse_postfix_expr(p)
 }
 
+/// Build a pipe expression `left | right`, flattening when `left` is already a
+/// `_pipe` so chains stay flat (`a | b | c` rather than `(a | b) | c`).
+fn _pipe(left: Expr, right: Expr, span: Span) -> Expr {
+    match left {
+        Expr::Function {
+            name,
+            mut args,
+            span: left_span,
+        } if name == "_pipe" => {
+            args.push(right);
+            Expr::Function {
+                name,
+                args,
+                span: left_span.merge(span),
+            }
+        }
+        other => Expr::Function {
+            name: "_pipe".to_string(),
+            args: vec![other, right],
+            span,
+        },
+    }
+}
+
 fn parse_postfix_expr(p: &mut Parser) -> Result<Expr, QueryError> {
     let mut expr = parse_primary_expr(p)?;
 
     loop {
         if p.matches(&[TokenKind::Dot]) {
-            // Property access: .property or .element
+            // Property access on the *result of* `expr`, e.g. `.h2.text`.
+            //
+            // The property must be applied to each value produced by the left
+            // expression, not to the whole document. Model that as a pipe:
+            // `expr | .name`. (`_pipe` is the evaluator's piping special form,
+            // and it save/restores `current` around each stage.)
             let start_span = expr.span();
             let (name, name_span) = parse_identifier(p)?;
 
-            // Check if it's an element selector or property
-            if let Some(_kind) = ElementKind::from_str(&name) {
-                // It's trying to access an element as property - this is a chain
-                // For now, treat as property access
-                expr = Expr::Property {
-                    name,
-                    span: start_span.merge(name_span),
-                };
-            } else {
-                expr = Expr::Property {
-                    name,
-                    span: start_span.merge(name_span),
-                };
-            }
+            let property = Expr::Property {
+                name,
+                span: start_span.merge(name_span),
+            };
+            expr = _pipe(expr, property, start_span.merge(name_span));
         } else if p.check(&TokenKind::LBracket) {
             // Index or filter: [0], [-1], [0:3], []
             let (index, span) = parse_index_or_filter(p)?;
@@ -732,20 +820,6 @@ fn parse_filter_or_index(p: &mut Parser) -> Result<(FilterOrIndex, Span), QueryE
         ));
     }
 
-    // Regex filter
-    if let TokenKind::Regex(pattern) = p.current_kind().clone() {
-        p.advance();
-        let end_span = p.current_span();
-        p.expect(&TokenKind::RBracket)?;
-        return Ok((
-            FilterOrIndex::Filter(Filter::Regex {
-                pattern,
-                span: start_span.merge(end_span),
-            }),
-            start_span.merge(end_span),
-        ));
-    }
-
     // Identifier filter (fuzzy match or type filter)
     if let TokenKind::Ident(name) = p.current_kind().clone() {
         p.advance();
@@ -873,6 +947,44 @@ fn parse_array_literal(p: &mut Parser, start_span: Span) -> Result<Expr, QueryEr
 }
 
 fn parse_conditional(p: &mut Parser, start_span: Span) -> Result<Expr, QueryError> {
+    // Parse the `if … then … [elif …]* [else …]` body, then consume a single
+    // closing `end`. `elif` chains are parsed recursively by the body parser
+    // *without* each level consuming its own `end`, so
+    // `if a then b elif c then d else e end` needs exactly one `end`.
+    let expr = parse_conditional_body(p, start_span)?;
+
+    let end_span = p.current_span();
+    if !p.matches(&[TokenKind::End]) {
+        return Err(QueryError::new(
+            QueryErrorKind::MissingEnd,
+            p.current_span(),
+            p.source.to_string(),
+        ));
+    }
+
+    // Stretch the outermost conditional's span to include the `end`.
+    if let Expr::Conditional {
+        condition,
+        then_branch,
+        else_branch,
+        span,
+    } = expr
+    {
+        Ok(Expr::Conditional {
+            condition,
+            then_branch,
+            else_branch,
+            span: span.merge(end_span),
+        })
+    } else {
+        Ok(expr)
+    }
+}
+
+/// Parse the body of a conditional (`if … then … [elif … | else …]`) but do
+/// NOT consume the closing `end`. The caller (`parse_conditional`) consumes the
+/// single `end` for the whole chain.
+fn parse_conditional_body(p: &mut Parser, start_span: Span) -> Result<Expr, QueryError> {
     // Condition
     let condition = parse_piped_expr(p).map(Expr::from)?;
 
@@ -887,32 +999,24 @@ fn parse_conditional(p: &mut Parser, start_span: Span) -> Result<Expr, QueryErro
 
     // Then branch
     let then_branch = parse_piped_expr(p).map(Expr::from)?;
+    let then_span = then_branch.span();
 
-    // Optional elif/else
+    // Optional elif/else. `elif` recurses into the body parser (no `end`),
+    // `else` is a plain expression.
     let else_branch = if p.matches(&[TokenKind::Elif]) {
-        // Recursive conditional
-        Some(Box::new(parse_conditional(p, p.current_span())?))
+        let elif_span = p.current_span();
+        Some(Box::new(parse_conditional_body(p, elif_span)?))
     } else if p.matches(&[TokenKind::Else]) {
         Some(Box::new(parse_piped_expr(p).map(Expr::from)?))
     } else {
         None
     };
 
-    // end
-    let end_span = p.current_span();
-    if !p.matches(&[TokenKind::End]) {
-        return Err(QueryError::new(
-            QueryErrorKind::MissingEnd,
-            p.current_span(),
-            p.source.to_string(),
-        ));
-    }
-
     Ok(Expr::Conditional {
         condition: Box::new(condition),
         then_branch: Box::new(then_branch),
         else_branch,
-        span: start_span.merge(end_span),
+        span: start_span.merge(then_span),
     })
 }
 
@@ -1016,5 +1120,83 @@ mod tests {
         } else {
             panic!("Expected Binary");
         }
+    }
+
+    #[test]
+    fn test_elif_single_end() {
+        // elif chains close with exactly one `end`.
+        let query = parse_str("if true then 1 elif true then 2 else 3 end").unwrap();
+        assert!(matches!(
+            query.expressions[0].stages[0],
+            Expr::Conditional { .. }
+        ));
+    }
+
+    #[test]
+    fn test_elif_too_many_ends_is_error() {
+        // A stray second `end` is a parse error (trailing token).
+        assert!(parse_str("if true then 1 elif true then 2 end end").is_err());
+    }
+
+    #[test]
+    fn test_property_chain_is_pipe() {
+        // `.h2.text` desugars to `.h2 | .text`.
+        let query = parse_str(".h2.text").unwrap();
+        if let Expr::Function { name, args, .. } = &query.expressions[0].stages[0] {
+            assert_eq!(name, "_pipe");
+            assert_eq!(args.len(), 2);
+            assert!(matches!(args[0], Expr::Element { .. }));
+            assert!(matches!(args[1], Expr::Property { .. }));
+        } else {
+            panic!(
+                "Expected _pipe function, got {:?}",
+                query.expressions[0].stages[0]
+            );
+        }
+    }
+
+    #[test]
+    fn test_gt_between_non_selectors_is_comparison() {
+        // `2 > .level` is a numeric comparison, not a hierarchy.
+        let query = parse_str("2 > .level").unwrap();
+        if let Expr::Binary { op, .. } = &query.expressions[0].stages[0] {
+            assert_eq!(*op, BinaryOp::Gt);
+        } else {
+            panic!(
+                "Expected Binary Gt, got {:?}",
+                query.expressions[0].stages[0]
+            );
+        }
+    }
+
+    #[test]
+    fn test_gt_between_selectors_is_hierarchy() {
+        let query = parse_str(".h1 > .h2").unwrap();
+        assert!(matches!(
+            query.expressions[0].stages[0],
+            Expr::Hierarchy { direct: true, .. }
+        ));
+    }
+
+    #[test]
+    fn test_deeply_nested_parens_errors_not_overflow() {
+        // 50k nested parens must error with RecursionLimit, not stack-overflow.
+        // Run on a thread with a production-sized (8 MiB) stack: the depth guard
+        // (MAX_DEPTH) is tuned for the real main thread, whereas libtest worker
+        // threads default to a smaller 2 MiB stack.
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let depth = 50_000;
+                let mut q = String::with_capacity(depth * 2 + 1);
+                q.push_str(&"(".repeat(depth));
+                q.push('.');
+                q.push_str(&")".repeat(depth));
+                let err = parse_str(&q).unwrap_err();
+                assert!(matches!(err.0.kind, QueryErrorKind::RecursionLimit));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

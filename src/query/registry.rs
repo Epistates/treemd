@@ -1,8 +1,7 @@
-//! Plugin registry for functions and element extractors.
+//! Plugin registry for functions.
 //!
 //! The registry system provides extensibility points for:
 //! - Custom functions (e.g., `my_fn(...)`)
-//! - Element extractors (e.g., custom `.my_element` selectors)
 //! - Output formatters
 //!
 //! # Example: Registering a Custom Function
@@ -19,7 +18,6 @@
 //! registry.register_function("my_upper", Function::new(my_uppercase, 0..=1));
 //! ```
 
-use crate::parser::Document;
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -37,16 +35,6 @@ use super::value::Value;
 /// Returns a vector of values (functions can produce multiple outputs).
 pub type FunctionFn =
     Arc<dyn Fn(&[Value], &EvalContext) -> Result<Vec<Value>, QueryError> + Send + Sync>;
-
-/// Type alias for element extractor implementations.
-///
-/// Extractors receive:
-/// - `doc`: The document to extract from
-/// - `ctx`: The evaluation context
-///
-/// Returns all matching elements as values.
-pub type ExtractorFn =
-    Arc<dyn Fn(&Document, &EvalContext) -> Result<Vec<Value>, QueryError> + Send + Sync>;
 
 /// A registered function with metadata.
 #[derive(Clone)]
@@ -108,11 +96,10 @@ impl std::fmt::Debug for Function {
     }
 }
 
-/// Registry for functions, extractors, and other extensibility points.
+/// Registry for functions and other extensibility points.
 #[derive(Default)]
 pub struct Registry {
     functions: HashMap<String, Function>,
-    extractors: HashMap<String, ExtractorFn>,
     aliases: HashMap<String, String>,
 }
 
@@ -186,23 +173,12 @@ impl Registry {
         suggestions.truncate(3);
         suggestions
     }
-
-    /// Register an element extractor.
-    pub fn register_extractor(&mut self, name: impl Into<String>, extractor: ExtractorFn) {
-        self.extractors.insert(name.into(), extractor);
-    }
-
-    /// Get an element extractor by name.
-    pub fn get_extractor(&self, name: &str) -> Option<&ExtractorFn> {
-        self.extractors.get(name)
-    }
 }
 
 impl std::fmt::Debug for Registry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Registry")
             .field("functions", &self.functions.keys().collect::<Vec<_>>())
-            .field("extractors", &self.extractors.keys().collect::<Vec<_>>())
             .field("aliases", &self.aliases)
             .finish()
     }

@@ -27,6 +27,12 @@ pub struct EvalContext {
     pub tables: Vec<TableValue>,
     /// All lists
     pub lists: Vec<ListValue>,
+    /// All paragraphs
+    pub paragraphs: Vec<ParagraphValue>,
+    /// All blockquotes
+    pub blockquotes: Vec<BlockquoteValue>,
+    /// Parsed YAML frontmatter, if present (keys sorted for stable output)
+    pub frontmatter: Option<IndexMap<String, Value>>,
     /// Document metadata
     pub document: DocumentValue,
     /// Raw document content
@@ -37,7 +43,8 @@ impl EvalContext {
     /// Create a new context from a document.
     pub fn from_document(doc: &Document) -> Self {
         let headings = extract_headings(doc);
-        let (code_blocks, links, images, tables, lists) = extract_blocks(doc);
+        let extracted = extract_blocks(doc);
+        let frontmatter = extract_frontmatter(doc);
 
         let document = DocumentValue {
             content: doc.content.clone(),
@@ -48,38 +55,47 @@ impl EvalContext {
         Self {
             current: Value::Document(document.clone()),
             headings,
-            code_blocks,
-            links,
-            images,
-            tables,
-            lists,
+            code_blocks: extracted.code_blocks,
+            links: extracted.links,
+            images: extracted.images,
+            tables: extracted.tables,
+            lists: extracted.lists,
+            paragraphs: extracted.paragraphs,
+            blockquotes: extracted.blockquotes,
+            frontmatter,
             document,
             raw_content: doc.content.clone(),
         }
     }
 }
 
+/// Maximum evaluation recursion depth. Mirrors the parser's `MAX_DEPTH` and
+/// guards against stack overflow when evaluating deeply nested expressions
+/// (the public `Query` API allows hand-built ASTs deeper than the parser
+/// would produce).
+const MAX_EVAL_DEPTH: usize = 256;
+
 /// Query execution engine.
-pub struct Engine<'a> {
-    #[allow(dead_code)] // Reserved for future use with document-level operations
-    doc: &'a Document,
+pub struct Engine {
     registry: Arc<Registry>,
     context: EvalContext,
+    /// Current evaluation recursion depth (guarded in `eval_expr`).
+    depth: usize,
 }
 
-impl<'a> Engine<'a> {
+impl Engine {
     /// Create a new engine with default registry.
-    pub fn new(doc: &'a Document) -> Self {
+    pub fn new(doc: &Document) -> Self {
         Self::with_registry(doc, Registry::with_builtins())
     }
 
     /// Create a new engine with a custom registry.
-    pub fn with_registry(doc: &'a Document, registry: Registry) -> Self {
+    pub fn with_registry(doc: &Document, registry: Registry) -> Self {
         let context = EvalContext::from_document(doc);
         Self {
-            doc,
             registry: Arc::new(registry),
             context,
+            depth: 0,
         }
     }
 
@@ -99,11 +115,21 @@ impl<'a> Engine<'a> {
         // Start with the document as input
         let mut current = vec![Value::Document(self.context.document.clone())];
 
+        // Preserve and restore the outer `current` so a top-level pipe doesn't
+        // leak its per-stage value into sibling expressions.
+        let saved = self.context.current.clone();
+
         for stage in &piped.stages {
             let mut next = Vec::new();
             for input in current {
                 self.context.current = input;
-                next.extend(self.eval_expr(stage)?);
+                match self.eval_expr(stage) {
+                    Ok(vals) => next.extend(vals),
+                    Err(e) => {
+                        self.context.current = saved;
+                        return Err(e);
+                    }
+                }
             }
             current = next;
 
@@ -113,10 +139,26 @@ impl<'a> Engine<'a> {
             }
         }
 
+        self.context.current = saved;
         Ok(current)
     }
 
     fn eval_expr(&mut self, expr: &Expr) -> Result<Vec<Value>, QueryError> {
+        self.depth += 1;
+        if self.depth > MAX_EVAL_DEPTH {
+            self.depth -= 1;
+            return Err(QueryError::new(
+                QueryErrorKind::RecursionLimit,
+                expr.span(),
+                String::new(),
+            ));
+        }
+        let result = self.eval_expr_inner(expr);
+        self.depth -= 1;
+        result
+    }
+
+    fn eval_expr_inner(&mut self, expr: &Expr) -> Result<Vec<Value>, QueryError> {
         match expr {
             Expr::Identity => Ok(vec![self.context.current.clone()]),
 
@@ -216,18 +258,24 @@ impl<'a> Engine<'a> {
                 .cloned()
                 .map(Value::List)
                 .collect(),
-            ElementKind::Blockquote => {
-                // TODO: extract blockquotes
-                Vec::new()
-            }
-            ElementKind::Paragraph => {
-                // TODO: extract paragraphs
-                Vec::new()
-            }
-            ElementKind::FrontMatter => {
-                // TODO: parse front matter
-                Vec::new()
-            }
+            ElementKind::Blockquote => self
+                .context
+                .blockquotes
+                .iter()
+                .cloned()
+                .map(Value::Blockquote)
+                .collect(),
+            ElementKind::Paragraph => self
+                .context
+                .paragraphs
+                .iter()
+                .cloned()
+                .map(Value::Paragraph)
+                .collect(),
+            ElementKind::FrontMatter => match &self.context.frontmatter {
+                Some(fm) => vec![Value::FrontMatter(fm.clone())],
+                None => Vec::new(),
+            },
         };
 
         // Apply filters
@@ -261,22 +309,6 @@ impl<'a> Engine<'a> {
                             text.contains(&pattern_lower)
                         }
                     })
-                    .collect())
-            }
-            Filter::Regex { pattern, span } => {
-                let re = regex::Regex::new(pattern).map_err(|e| {
-                    QueryError::new(
-                        QueryErrorKind::InvalidRegex {
-                            pattern: pattern.clone(),
-                            error: e.to_string(),
-                        },
-                        *span,
-                        String::new(),
-                    )
-                })?;
-                Ok(elements
-                    .into_iter()
-                    .filter(|v| re.is_match(&v.to_text()))
                     .collect())
             }
             Filter::Type { type_name, .. } => Ok(elements
@@ -320,21 +352,46 @@ impl<'a> Engine<'a> {
         // Handle special built-in functions
         match name {
             "_pipe" => {
-                // Internal pipe handling
+                // Internal pipe handling. Save/restore `current` so the pipe's
+                // per-stage value doesn't leak into the surrounding expression
+                // (e.g. `{a: (.text | upper), b: .level}` must still see the
+                // heading for `.level`).
+                let saved = self.context.current.clone();
                 let mut current = vec![self.context.current.clone()];
                 for arg in args {
                     let mut next = Vec::new();
                     for input in current {
                         self.context.current = input;
-                        next.extend(self.eval_expr(arg)?);
+                        match self.eval_expr(arg) {
+                            Ok(vals) => next.extend(vals),
+                            Err(e) => {
+                                self.context.current = saved;
+                                return Err(e);
+                            }
+                        }
                     }
                     current = next;
+                    if current.is_empty() {
+                        break;
+                    }
                 }
+                self.context.current = saved;
                 return Ok(current);
             }
             "_index" if args.len() >= 2 => {
-                // Internal index handling — simplified, just return first arg's values
-                return self.eval_expr(&args[0]);
+                return self.eval_index(&args[0], &args[1]);
+            }
+            // Higher-order forms whose single argument is an expression to be
+            // evaluated *per element* (with `current` bound to each element),
+            // not once against the whole input.
+            "any" | "all" if args.len() == 1 => {
+                return self.eval_any_all(name == "all", &args[0]);
+            }
+            "sort_by" if args.len() == 1 => {
+                return self.eval_sort_by(&args[0]);
+            }
+            "group_by" if args.len() == 1 => {
+                return self.eval_group_by(&args[0]);
             }
             _ => {}
         }
@@ -391,6 +448,112 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// Evaluate the internal `_index(target, index_arg)` form produced by the
+    /// parser for postfix `[...]` on non-element expressions.
+    ///
+    /// `index_arg` is encoded by the parser as:
+    /// - `Number(n)`  → single index `[n]`
+    /// - `Array[a,b]` → slice `[a:b]` (each of `a`/`b` is `Number` or `Null`)
+    /// - `Null`       → iterate `[]`
+    ///
+    /// If the target evaluates to a single array value, we index *into* that
+    /// array (jq semantics, negative indices supported). Otherwise we index the
+    /// result stream.
+    fn eval_index(&mut self, target: &Expr, index_arg: &Expr) -> Result<Vec<Value>, QueryError> {
+        let target_vals = self.eval_expr(target)?;
+        let index = decode_index_arg(index_arg);
+
+        // Single array value → index into its elements (jq-style subscripting).
+        if target_vals.len() == 1
+            && let Value::Array(items) = &target_vals[0]
+        {
+            return apply_index(items.clone(), &index);
+        }
+
+        // Otherwise index the result stream.
+        apply_index(target_vals, &index)
+    }
+
+    /// Elements of the current value for higher-order forms: the items of an
+    /// array, or the value itself wrapped as a single element.
+    fn current_elements(&self) -> Vec<Value> {
+        match &self.context.current {
+            Value::Array(a) => a.clone(),
+            other => vec![other.clone()],
+        }
+    }
+
+    /// Evaluate `cond` against `element` (with `current` bound to it) and return
+    /// its truthiness. Restores `current` afterward.
+    fn eval_predicate(&mut self, element: &Value, cond: &Expr) -> Result<bool, QueryError> {
+        let saved = std::mem::replace(&mut self.context.current, element.clone());
+        let result = self.eval_expr(cond);
+        self.context.current = saved;
+        let vals = result?;
+        Ok(vals.into_iter().next().unwrap_or(Value::Null).is_truthy())
+    }
+
+    /// Evaluate `key_expr` against `element` (with `current` bound to it) and
+    /// return its first result value. Restores `current` afterward.
+    fn eval_key(&mut self, element: &Value, key_expr: &Expr) -> Result<Value, QueryError> {
+        let saved = std::mem::replace(&mut self.context.current, element.clone());
+        let result = self.eval_expr(key_expr);
+        self.context.current = saved;
+        let vals = result?;
+        Ok(vals.into_iter().next().unwrap_or(Value::Null))
+    }
+
+    /// `any(cond)` / `all(cond)` — evaluate `cond` per element.
+    fn eval_any_all(&mut self, all: bool, cond: &Expr) -> Result<Vec<Value>, QueryError> {
+        let elements = self.current_elements();
+        let mut acc = all; // all → start true; any → start false
+        for el in &elements {
+            let truthy = self.eval_predicate(el, cond)?;
+            if all {
+                acc &= truthy;
+                if !acc {
+                    break;
+                }
+            } else {
+                acc |= truthy;
+                if acc {
+                    break;
+                }
+            }
+        }
+        Ok(vec![Value::Bool(acc)])
+    }
+
+    /// `sort_by(key)` — stable sort the current array by the evaluated key.
+    fn eval_sort_by(&mut self, key_expr: &Expr) -> Result<Vec<Value>, QueryError> {
+        let elements = self.current_elements();
+        let mut keyed: Vec<(Value, Value)> = Vec::with_capacity(elements.len());
+        for el in elements {
+            let key = self.eval_key(&el, key_expr)?;
+            keyed.push((key, el));
+        }
+        keyed.sort_by(|a, b| sort_key_cmp(&a.0, &b.0));
+        Ok(vec![Value::Array(
+            keyed.into_iter().map(|(_, v)| v).collect(),
+        )])
+    }
+
+    /// `group_by(key)` — group the current array into an object keyed by the
+    /// stringified evaluated key (per element), preserving first-seen order.
+    fn eval_group_by(&mut self, key_expr: &Expr) -> Result<Vec<Value>, QueryError> {
+        let elements = self.current_elements();
+        let mut groups: IndexMap<String, Vec<Value>> = IndexMap::new();
+        for el in elements {
+            let key = self.eval_key(&el, key_expr)?.to_text();
+            groups.entry(key).or_default().push(el);
+        }
+        let obj: IndexMap<String, Value> = groups
+            .into_iter()
+            .map(|(k, v)| (k, Value::Array(v)))
+            .collect();
+        Ok(vec![Value::Object(obj)])
+    }
+
     fn eval_hierarchy(
         &mut self,
         parent: &Expr,
@@ -416,6 +579,27 @@ impl<'a> Engine<'a> {
                     // Find headings that are children of this parent
                     let parent_idx = parent_heading.index;
                     let parent_level = parent_heading.level;
+
+                    // Byte bounds of this heading's scope:
+                    // - direct (`>`):     up to the next heading of ANY level
+                    //   (this heading's own body only).
+                    // - descendant (`>>`): up to the next heading of level
+                    //   <= parent (the whole subtree).
+                    let scope_start_offset = parent_heading.offset;
+                    let scope_end_offset = self
+                        .context
+                        .headings
+                        .iter()
+                        .skip(parent_idx + 1)
+                        .find(|h| {
+                            if direct {
+                                true
+                            } else {
+                                h.level <= parent_level
+                            }
+                        })
+                        .map(|h| h.offset)
+                        .unwrap_or(self.context.raw_content.len());
 
                     match kind {
                         ElementKind::Heading(level_filter) => {
@@ -462,15 +646,28 @@ impl<'a> Engine<'a> {
                             }
                         }
                         ElementKind::Code => {
-                            // Find code blocks under this heading
-                            // For now, return all code blocks (simplified)
-                            // TODO: Implement proper scoping
-                            results
-                                .extend(self.context.code_blocks.iter().cloned().map(Value::Code));
+                            // turbovault's per-block start_line is not reliable
+                            // (it reports 1 for every fenced block), so scope by
+                            // re-parsing the heading's byte range instead of
+                            // filtering the global list by line number.
+                            let scope =
+                                &self.context.raw_content[scope_start_offset..scope_end_offset];
+                            results.extend(extract_code_blocks(scope).into_iter().map(Value::Code));
                         }
-                        _ => {
-                            // Other element types under headings
+                        ElementKind::Link => {
+                            // Links carry byte offsets, so scope by byte range.
+                            for link in &self.context.links {
+                                if link.offset >= scope_start_offset
+                                    && link.offset < scope_end_offset
+                                {
+                                    results.push(Value::Link(link.clone()));
+                                }
+                            }
                         }
+                        // Images, tables, and lists carry no source positions in
+                        // the current model, so they cannot be scoped to a
+                        // heading yet. Left unimplemented intentionally.
+                        _ => {}
                     }
                 }
             }
@@ -513,10 +710,9 @@ impl<'a> Engine<'a> {
             BinaryOp::Or => Value::Bool(left_val.is_truthy() || right_val.is_truthy()),
             BinaryOp::Add => add_values(&left_val, &right_val),
             BinaryOp::Sub => sub_values(&left_val, &right_val),
-            BinaryOp::Mul => mul_values(&left_val, &right_val),
+            BinaryOp::Mul => mul_values(&left_val, &right_val)?,
             BinaryOp::Div => div_values(&left_val, &right_val)?,
             BinaryOp::Mod => mod_values(&left_val, &right_val)?,
-            BinaryOp::Concat => concat_values(&left_val, &right_val),
             BinaryOp::Alt => {
                 if left_val.is_truthy() {
                     left_val
@@ -611,19 +807,10 @@ fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
             // Calculate line number
             let line = doc.content[..h.offset].lines().count() + 1;
 
-            // Extract content (simplified - until next heading)
-            let content_start = doc.content[h.offset..]
-                .find('\n')
-                .map(|i| h.offset + i + 1)
-                .unwrap_or(h.offset);
-
-            let content_end = doc
-                .headings
-                .iter()
-                .skip(idx + 1)
-                .find(|next_h| next_h.level <= h.level)
-                .map(|next_h| next_h.offset)
-                .unwrap_or(doc.content.len());
+            // Body bounds shared with the document extractor: handles CRLF,
+            // setext underlines, and EOF-without-newline uniformly.
+            let content_start = doc.body_start(idx);
+            let content_end = doc.section_end(idx);
 
             let content = doc.content[content_start..content_end].trim().to_string();
             let raw_md = doc.content[h.offset..content_end].to_string();
@@ -641,16 +828,19 @@ fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
         .collect()
 }
 
-#[allow(clippy::type_complexity)]
-fn extract_blocks(
-    doc: &Document,
-) -> (
-    Vec<CodeValue>,
-    Vec<LinkValue>,
-    Vec<ImageValue>,
-    Vec<TableValue>,
-    Vec<ListValue>,
-) {
+/// Block-level elements extracted from a document, grouped by kind.
+#[derive(Default)]
+struct ExtractedBlocks {
+    code_blocks: Vec<CodeValue>,
+    links: Vec<LinkValue>,
+    images: Vec<ImageValue>,
+    tables: Vec<TableValue>,
+    lists: Vec<ListValue>,
+    paragraphs: Vec<ParagraphValue>,
+    blockquotes: Vec<BlockquoteValue>,
+}
+
+fn extract_blocks(doc: &Document) -> ExtractedBlocks {
     use crate::parser::content::parse_content;
     use crate::parser::links::extract_links;
     use crate::parser::output::Block;
@@ -658,18 +848,12 @@ fn extract_blocks(
     let blocks = parse_content(&doc.content, 1);
     let links = extract_links(&doc.content);
 
-    let mut code_blocks = Vec::new();
-    let mut images = Vec::new();
-    let mut tables = Vec::new();
-    let mut lists = Vec::new();
+    let mut out = ExtractedBlocks::default();
 
-    // Recursively extract blocks from nested structures (e.g., list items)
-    fn extract_nested_blocks(
-        blocks: &[Block],
-        code_blocks: &mut Vec<CodeValue>,
-        images: &mut Vec<ImageValue>,
-        tables: &mut Vec<TableValue>,
-    ) {
+    // Recursively extract blocks from nested structures (e.g., list items,
+    // blockquotes, details). Top-level paragraphs/blockquotes are collected by
+    // the outer loop; nested ones are collected here too.
+    fn walk(blocks: &[Block], out: &mut ExtractedBlocks) {
         for block in blocks {
             match block {
                 Block::Code {
@@ -678,7 +862,7 @@ fn extract_blocks(
                     start_line,
                     end_line,
                 } => {
-                    code_blocks.push(CodeValue {
+                    out.code_blocks.push(CodeValue {
                         language: language.clone(),
                         content: content.clone(),
                         start_line: *start_line,
@@ -686,7 +870,7 @@ fn extract_blocks(
                     });
                 }
                 Block::Image { alt, src, title } => {
-                    images.push(ImageValue {
+                    out.images.push(ImageValue {
                         alt: alt.clone(),
                         src: src.clone(),
                         title: title.clone(),
@@ -697,7 +881,7 @@ fn extract_blocks(
                     rows,
                     alignments,
                 } => {
-                    tables.push(TableValue {
+                    out.tables.push(TableValue {
                         headers: headers.clone(),
                         rows: rows.clone(),
                         alignments: alignments
@@ -706,81 +890,43 @@ fn extract_blocks(
                             .collect(),
                     });
                 }
-                Block::Blockquote { blocks, .. } => {
-                    // Recursively extract from blockquote content
-                    extract_nested_blocks(blocks, code_blocks, images, tables);
+                Block::Paragraph { content, .. } => {
+                    out.paragraphs.push(ParagraphValue {
+                        content: content.clone(),
+                    });
+                }
+                Block::List { ordered, items } => {
+                    for item in items {
+                        walk(&item.blocks, out);
+                    }
+                    out.lists.push(ListValue {
+                        ordered: *ordered,
+                        items: items
+                            .iter()
+                            .map(|i| ListItemValue {
+                                content: i.content.clone(),
+                                checked: i.checked,
+                            })
+                            .collect(),
+                    });
+                }
+                Block::Blockquote { content, blocks } => {
+                    out.blockquotes.push(BlockquoteValue {
+                        content: content.clone(),
+                    });
+                    walk(blocks, out);
                 }
                 Block::Details { blocks, .. } => {
-                    // Recursively extract from details content
-                    extract_nested_blocks(blocks, code_blocks, images, tables);
+                    walk(blocks, out);
                 }
                 _ => {}
             }
         }
     }
 
-    for block in blocks {
-        match block {
-            Block::Code {
-                language,
-                content,
-                start_line,
-                end_line,
-            } => {
-                code_blocks.push(CodeValue {
-                    language,
-                    content,
-                    start_line,
-                    end_line,
-                });
-            }
-            Block::Image { alt, src, title } => {
-                images.push(ImageValue { alt, src, title });
-            }
-            Block::Table {
-                headers,
-                rows,
-                alignments,
-            } => {
-                tables.push(TableValue {
-                    headers,
-                    rows,
-                    alignments: alignments
-                        .iter()
-                        .map(|a| format!("{:?}", a).to_lowercase())
-                        .collect(),
-                });
-            }
-            Block::List { ordered, items } => {
-                // Extract code blocks and other elements from list item nested blocks
-                for item in &items {
-                    extract_nested_blocks(&item.blocks, &mut code_blocks, &mut images, &mut tables);
-                }
+    walk(&blocks, &mut out);
 
-                lists.push(ListValue {
-                    ordered,
-                    items: items
-                        .into_iter()
-                        .map(|i| ListItemValue {
-                            content: i.content,
-                            checked: i.checked,
-                        })
-                        .collect(),
-                });
-            }
-            Block::Blockquote { blocks, .. } => {
-                // Recursively extract from blockquote content
-                extract_nested_blocks(&blocks, &mut code_blocks, &mut images, &mut tables);
-            }
-            Block::Details { blocks, .. } => {
-                // Recursively extract from details content
-                extract_nested_blocks(&blocks, &mut code_blocks, &mut images, &mut tables);
-            }
-            _ => {}
-        }
-    }
-
-    let link_values: Vec<LinkValue> = links
+    out.links = links
         .into_iter()
         .map(|l| {
             use crate::parser::links::LinkTarget;
@@ -806,7 +952,90 @@ fn extract_blocks(
         })
         .collect();
 
-    (code_blocks, link_values, images, tables, lists)
+    out
+}
+
+/// Parse a markdown fragment and return only its code blocks (including those
+/// nested in lists/blockquotes/details). Used to scope code blocks to a
+/// heading's byte range, since turbovault's per-block line numbers are not
+/// reliable for line-range filtering.
+fn extract_code_blocks(fragment: &str) -> Vec<CodeValue> {
+    use crate::parser::content::parse_content;
+    use crate::parser::output::Block;
+
+    fn walk(blocks: &[Block], out: &mut Vec<CodeValue>) {
+        for block in blocks {
+            match block {
+                Block::Code {
+                    language,
+                    content,
+                    start_line,
+                    end_line,
+                } => out.push(CodeValue {
+                    language: language.clone(),
+                    content: content.clone(),
+                    start_line: *start_line,
+                    end_line: *end_line,
+                }),
+                Block::List { items, .. } => {
+                    for item in items {
+                        walk(&item.blocks, out);
+                    }
+                }
+                Block::Blockquote { blocks, .. } | Block::Details { blocks, .. } => {
+                    walk(blocks, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let blocks = parse_content(fragment, 1);
+    let mut out = Vec::new();
+    walk(&blocks, &mut out);
+    out
+}
+
+/// Parse the document's YAML frontmatter into an ordered, sorted-key map of
+/// query [`Value`]s. Returns `None` when there is no frontmatter.
+fn extract_frontmatter(doc: &Document) -> Option<IndexMap<String, Value>> {
+    use turbovault_parser::{ParseOptions, ParsedContent};
+
+    let parsed =
+        ParsedContent::parse_with_options(&doc.content, ParseOptions::none().with_frontmatter());
+    let fm = parsed.frontmatter?;
+
+    // Sort keys for stable, deterministic output.
+    let mut entries: Vec<(String, &serde_json::Value)> =
+        fm.data.iter().map(|(k, v)| (k.clone(), v)).collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut map = IndexMap::new();
+    for (k, v) in entries {
+        map.insert(k, json_to_value(v));
+    }
+    Some(map)
+}
+
+/// Convert a `serde_json::Value` (from parsed frontmatter) into a query
+/// [`Value`], sorting object keys for deterministic output.
+fn json_to_value(v: &serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::String(s) => Value::String(s.clone()),
+        serde_json::Value::Array(arr) => Value::Array(arr.iter().map(json_to_value).collect()),
+        serde_json::Value::Object(obj) => {
+            let mut keys: Vec<&String> = obj.keys().collect();
+            keys.sort();
+            let mut map = IndexMap::new();
+            for k in keys {
+                map.insert(k.clone(), json_to_value(&obj[k]));
+            }
+            Value::Object(map)
+        }
+    }
 }
 
 fn literal_to_value(lit: &Literal) -> Value {
@@ -815,6 +1044,35 @@ fn literal_to_value(lit: &Literal) -> Value {
         Literal::Number(n) => Value::Number(*n),
         Literal::Bool(b) => Value::Bool(*b),
         Literal::Null => Value::Null,
+    }
+}
+
+/// Decode the parser's encoded `_index` argument expression back into an
+/// [`IndexOp`]. See [`Engine::eval_index`] for the encoding.
+fn decode_index_arg(arg: &Expr) -> IndexOp {
+    match arg {
+        Expr::Literal {
+            value: Literal::Number(n),
+            ..
+        } => IndexOp::Single(*n as i64),
+        Expr::Array { elements, .. } if elements.len() == 2 => {
+            let bound = |e: &Expr| -> Option<i64> {
+                if let Expr::Literal {
+                    value: Literal::Number(n),
+                    ..
+                } = e
+                {
+                    Some(*n as i64)
+                } else {
+                    None
+                }
+            };
+            IndexOp::Slice {
+                start: bound(&elements[0]),
+                end: bound(&elements[1]),
+            }
+        }
+        _ => IndexOp::Iterate,
     }
 }
 
@@ -862,6 +1120,19 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// Total ordering used by `sort_by`. Numbers sort numerically, strings
+/// lexically; mixed/other types fall back to their text representation so the
+/// sort is always total and deterministic.
+fn sort_key_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => {
+            x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
+        }
+        (Value::String(x), Value::String(y)) => x.cmp(y),
+        _ => a.to_text().cmp(&b.to_text()),
+    }
+}
+
 fn compare_values(a: &Value, b: &Value) -> i32 {
     match (a, b) {
         (Value::Number(a), Value::Number(b)) => {
@@ -898,13 +1169,40 @@ fn sub_values(a: &Value, b: &Value) -> Value {
     }
 }
 
-fn mul_values(a: &Value, b: &Value) -> Value {
+/// Maximum length (in bytes) of a string produced by the repeat operator
+/// (`"x" * n`). Prevents capacity-overflow aborts and runaway allocations.
+const MAX_REPEAT_LEN: usize = 10 * 1024 * 1024;
+
+fn mul_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => Value::Number(a * b),
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * b)),
         (Value::String(s), Value::Number(n)) | (Value::Number(n), Value::String(s)) => {
-            Value::String(s.repeat(*n as usize))
+            // jq-style string repeat. Reject negative/non-finite counts and cap
+            // the result size so `"x" * 1e300` errors cleanly instead of
+            // aborting the process with a capacity overflow.
+            if !n.is_finite() || *n < 0.0 {
+                return Err(QueryError::new(
+                    QueryErrorKind::InvalidOperation(format!(
+                        "string repeat count must be a finite, non-negative number (got {n})"
+                    )),
+                    Span::default(),
+                    String::new(),
+                ));
+            }
+            let count = *n as usize;
+            let total = s.len().saturating_mul(count);
+            if total > MAX_REPEAT_LEN {
+                return Err(QueryError::new(
+                    QueryErrorKind::InvalidOperation(format!(
+                        "string repeat result too large ({total} bytes, max {MAX_REPEAT_LEN})"
+                    )),
+                    Span::default(),
+                    String::new(),
+                ));
+            }
+            Ok(Value::String(s.repeat(count)))
         }
-        _ => Value::Null,
+        _ => Ok(Value::Null),
     }
 }
 
@@ -940,10 +1238,6 @@ fn mod_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
         }
         _ => Ok(Value::Null),
     }
-}
-
-fn concat_values(a: &Value, b: &Value) -> Value {
-    Value::String(format!("{}{}", a.to_text(), b.to_text()))
 }
 
 #[cfg(test)]

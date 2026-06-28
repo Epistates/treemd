@@ -29,6 +29,14 @@ pub struct Heading {
     /// Byte offset where the heading starts in the source document
     #[serde(skip_serializing)]
     pub offset: usize,
+    /// Byte length of the entire heading construct, as reported by the parser.
+    ///
+    /// For ATX headings this spans the marker line (including its line
+    /// terminator when present); for setext headings it spans both the text
+    /// line and the underline. `offset + source_len` therefore lands at the
+    /// first byte of the section body, even across CRLF or setext underlines.
+    #[serde(skip_serializing)]
+    pub source_len: usize,
 }
 
 /// A node in the heading tree.
@@ -143,29 +151,70 @@ impl Document {
 
     /// Extract the content of a section by heading index.
     pub fn extract_section_at_index(&self, heading_idx: usize) -> Option<String> {
-        let heading = self.headings.get(heading_idx)?;
-
-        // Start from the heading's stored byte offset
-        let start = heading.offset;
-
-        // Find content start (skip the heading line itself)
-        let after_heading = &self.content[start..];
-        let content_start = after_heading
-            .find('\n')
-            .map(|i| start + i + 1)
-            .unwrap_or(start);
-
-        // Find end: next heading at same or higher level
-        let end = self
-            .headings
-            .iter()
-            .skip(heading_idx + 1)
-            .find(|h| h.level <= heading.level)
-            .map(|h| h.offset)
-            .unwrap_or(self.content.len());
-
-        // Extract section content
+        if heading_idx >= self.headings.len() {
+            return None;
+        }
+        let content_start = self.body_start(heading_idx);
+        let end = self.section_end(heading_idx);
         Some(self.content[content_start..end].trim().to_string())
+    }
+
+    /// Byte offset where the body of section `idx` begins, i.e. the first byte
+    /// after the heading construct, normalized to the start of the next line.
+    ///
+    /// The parser reports `offset + source_len` already pointing at the start of
+    /// the body in the common case (the construct length includes its line
+    /// terminator, handling CRLF and setext underlines uniformly). The extra
+    /// `find('\n')` is a safety net for the rare case where the reported range
+    /// stops before the terminator; it never crosses into the next line's text.
+    pub fn body_start(&self, idx: usize) -> usize {
+        let heading = &self.headings[idx];
+        let after = (heading.offset + heading.source_len).min(self.content.len());
+
+        // If `after` already sits at the start of a line (or EOF), it is the
+        // body start. Otherwise advance to just past the next newline.
+        if after >= self.content.len() {
+            return self.content.len();
+        }
+        let preceding_is_newline = self.content[..after]
+            .chars()
+            .next_back()
+            .map(|c| c == '\n')
+            .unwrap_or(true);
+        if preceding_is_newline {
+            after
+        } else {
+            self.content[after..]
+                .find('\n')
+                .map(|i| after + i + 1)
+                .unwrap_or(self.content.len())
+        }
+    }
+
+    /// Byte offset where section `idx` ends: the offset of the next heading at a
+    /// level less than or equal to this heading's level, or end of content.
+    ///
+    /// Used for "section" extraction where deeper subsections stay within the
+    /// parent.
+    pub fn section_end(&self, idx: usize) -> usize {
+        let level = self.headings[idx].level;
+        self.headings
+            .iter()
+            .skip(idx + 1)
+            .find(|h| h.level <= level)
+            .map(|h| h.offset)
+            .unwrap_or(self.content.len())
+    }
+
+    /// Byte offset where section `idx` ends when bounding at *any* following
+    /// heading (regardless of level). Used by the nested JSON builder, where
+    /// child sections are emitted separately, so the parent's own body must
+    /// stop at the very next heading.
+    pub fn section_end_any(&self, idx: usize) -> usize {
+        self.headings
+            .get(idx + 1)
+            .map(|h| h.offset)
+            .unwrap_or(self.content.len())
     }
 }
 
@@ -222,6 +271,24 @@ mod tests {
             level,
             text: text.to_string(),
             offset,
+            source_len: 0,
+        }
+    }
+
+    /// Build a heading whose `source_len` is derived from `content`: the span
+    /// from `offset` through the end of that line (including the newline). This
+    /// matches what the parser reports for ATX headings and lets the
+    /// extraction tests exercise the real `body_start` path.
+    fn h_in(content: &str, level: usize, text: &str, offset: usize) -> Heading {
+        let line_end = content[offset..]
+            .find('\n')
+            .map(|i| offset + i + 1)
+            .unwrap_or(content.len());
+        Heading {
+            level,
+            text: text.to_string(),
+            offset,
+            source_len: line_end - offset,
         }
     }
 
@@ -441,7 +508,13 @@ mod tests {
         let content = "# Alpha\nbody alpha\n\n# Beta\nbody beta\n";
         let alpha = content.find("# Alpha").unwrap();
         let beta = content.find("# Beta").unwrap();
-        let d = doc(content, vec![h(1, "Alpha", alpha), h(1, "Beta", beta)]);
+        let d = doc(
+            content,
+            vec![
+                h_in(content, 1, "Alpha", alpha),
+                h_in(content, 1, "Beta", beta),
+            ],
+        );
         let section = d.extract_section("ALPHA").expect("found");
         assert!(section.contains("body alpha"));
         assert!(!section.contains("body beta"));
@@ -457,7 +530,12 @@ mod tests {
         let b = content.find("## B").unwrap();
         let d = doc(
             content,
-            vec![h(1, "Top", top), h(2, "A", a), h(3, "A1", a1), h(2, "B", b)],
+            vec![
+                h_in(content, 1, "Top", top),
+                h_in(content, 2, "A", a),
+                h_in(content, 3, "A1", a1),
+                h_in(content, 2, "B", b),
+            ],
         );
         let section = d.extract_section("A").expect("found");
         assert!(section.contains("a-body"));
@@ -484,10 +562,10 @@ mod tests {
         let d = doc(
             content,
             vec![
-                h(1, "heading", h1),
-                h(2, "sub heading", s1),
-                h(1, "heading 2", h2),
-                h(2, "sub heading", s2),
+                h_in(content, 1, "heading", h1),
+                h_in(content, 2, "sub heading", s1),
+                h_in(content, 1, "heading 2", h2),
+                h_in(content, 2, "sub heading", s2),
             ],
         );
 
@@ -509,7 +587,11 @@ mod tests {
         let f2 = content.find("# First\nLast").unwrap();
         let d = doc(
             content,
-            vec![h(1, "First", f1), h(1, "Second", sec), h(1, "First", f2)],
+            vec![
+                h_in(content, 1, "First", f1),
+                h_in(content, 1, "Second", sec),
+                h_in(content, 1, "First", f2),
+            ],
         );
 
         let first = d.extract_section_at_index(0).unwrap();
@@ -525,5 +607,40 @@ mod tests {
     fn extract_section_at_index_out_of_bounds() {
         let d = doc("# A\n", vec![h(1, "A", 0)]);
         assert!(d.extract_section_at_index(999).is_none());
+    }
+
+    // ---------- regressions via parse_markdown (real source_len) ----------
+
+    #[test]
+    fn extract_section_crlf_does_not_panic_and_excludes_heading() {
+        // Mid-multibyte-char on a CRLF line previously risked a byte-slice
+        // panic in the section extractor.
+        let d = crate::parser::parse_markdown("# Top\r\naaa\r\nccé\r\n# Next\r\n");
+        let top = d.extract_section_at_index(0).unwrap();
+        assert!(top.contains("aaa"));
+        assert!(top.contains("ccé"));
+        assert!(!top.contains("# Top"));
+        assert!(!top.contains("# Next"));
+    }
+
+    #[test]
+    fn extract_section_setext_excludes_underline() {
+        // The setext underline ("-----") must not appear in the body.
+        let d = crate::parser::parse_markdown("Title\n=====\nbody\n\nSub\n-----\nsub body\n");
+        // Two headings: Title (h1), Sub (h2).
+        let sub_idx = d.headings.iter().position(|h| h.text == "Sub").unwrap();
+        let body = d.extract_section_at_index(sub_idx).unwrap();
+        assert_eq!(body.trim(), "sub body");
+        assert!(!body.contains("-----"));
+    }
+
+    #[test]
+    fn extract_section_solo_heading_at_eof_is_empty() {
+        // A heading with no trailing newline and no body should yield "" — not
+        // its own heading line.
+        let d = crate::parser::parse_markdown("# First\nbody\n\n# Solo");
+        let solo_idx = d.headings.iter().position(|h| h.text == "Solo").unwrap();
+        let body = d.extract_section_at_index(solo_idx).unwrap();
+        assert_eq!(body, "");
     }
 }

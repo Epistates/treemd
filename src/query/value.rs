@@ -151,6 +151,8 @@ impl Value {
             Value::Image(i) => i.get_property(name),
             Value::Table(t) => t.get_property(name),
             Value::List(l) => l.get_property(name),
+            Value::Blockquote(b) => b.get_property(name),
+            Value::Paragraph(p) => p.get_property(name),
             Value::Document(d) => d.get_property(name),
             Value::FrontMatter(fm) => fm.get(name).cloned(),
             _ => None,
@@ -195,7 +197,8 @@ impl Value {
     /// Get the length of this value (for arrays, strings, objects).
     pub fn len(&self) -> Option<usize> {
         match self {
-            Value::String(s) => Some(s.len()),
+            // jq counts Unicode codepoints, not bytes.
+            Value::String(s) => Some(s.chars().count()),
             Value::Array(a) => Some(a.len()),
             Value::Object(o) => Some(o.len()),
             Value::Table(t) => Some(t.rows.len()),
@@ -511,10 +514,28 @@ pub struct BlockquoteValue {
     pub content: String,
 }
 
+impl BlockquoteValue {
+    pub fn get_property(&self, name: &str) -> Option<Value> {
+        match name {
+            "text" | "content" => Some(Value::String(self.content.clone())),
+            _ => None,
+        }
+    }
+}
+
 /// Paragraph element value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParagraphValue {
     pub content: String,
+}
+
+impl ParagraphValue {
+    pub fn get_property(&self, name: &str) -> Option<Value> {
+        match name {
+            "text" | "content" => Some(Value::String(self.content.clone())),
+            _ => None,
+        }
+    }
 }
 
 /// Document value (root).
@@ -541,24 +562,12 @@ impl DocumentValue {
 // ============================================================================
 
 /// Generate URL-friendly slug from text.
+///
+/// Delegates to the single canonical implementation (turbovault, via
+/// `parser::content::slugify`) so heading slugs are consistent across the
+/// document model, JSON output, and the query language.
 fn slugify(text: &str) -> String {
-    text.to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() {
-                c
-            } else if c.is_whitespace() || c == '-' || c == '.' || c == '_' {
-                '-'
-            } else {
-                '\0'
-            }
-        })
-        .filter(|&c| c != '\0')
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
+    crate::parser::content::slugify(text)
 }
 
 #[cfg(test)]
@@ -586,8 +595,10 @@ mod tests {
 
     #[test]
     fn test_slugify() {
+        // Now delegates to turbovault's canonical slugify: `.` and `_` are
+        // dropped (not treated as separators), so "API v2.0" -> "api-v20".
         assert_eq!(slugify("Hello World"), "hello-world");
         assert_eq!(slugify("Getting Started!"), "getting-started");
-        assert_eq!(slugify("API v2.0"), "api-v2-0");
+        assert_eq!(slugify("API v2.0"), "api-v20");
     }
 }

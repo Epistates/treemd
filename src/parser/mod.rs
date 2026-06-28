@@ -58,6 +58,7 @@ pub fn parse_markdown(content: &str) -> Document {
             level: h.level as usize,
             text: h.text,
             offset: h.position.offset,
+            source_len: h.position.length,
         })
         .collect();
 

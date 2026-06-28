@@ -120,8 +120,8 @@ pub enum QueryErrorKind {
     // Lexer errors
     UnexpectedChar(char),
     UnterminatedString,
-    UnterminatedRegex,
     InvalidEscape(char),
+    InvalidNumber(String),
 
     // Parser errors
     UnexpectedToken {
@@ -170,6 +170,12 @@ pub enum QueryErrorKind {
         error: String,
     },
     DivisionByZero,
+    /// An operation was invalid for the given operands (e.g. string repeat
+    /// with a negative or non-finite count, or a result that would exceed the
+    /// size cap).
+    InvalidOperation(String),
+    /// The parser or evaluator exceeded its maximum expression nesting depth.
+    RecursionLimit,
 }
 
 impl QueryErrorKind {
@@ -178,8 +184,8 @@ impl QueryErrorKind {
         match self {
             QueryErrorKind::UnexpectedChar(_) => "unexpected character",
             QueryErrorKind::UnterminatedString => "string not closed",
-            QueryErrorKind::UnterminatedRegex => "regex not closed",
             QueryErrorKind::InvalidEscape(_) => "invalid escape",
+            QueryErrorKind::InvalidNumber(_) => "invalid number",
             QueryErrorKind::UnexpectedToken { .. } => "unexpected token",
             QueryErrorKind::UnexpectedEof { .. } => "unexpected end",
             QueryErrorKind::InvalidHeadingLevel(_) => "invalid level",
@@ -200,6 +206,8 @@ impl QueryErrorKind {
             QueryErrorKind::IndexOutOfBounds { .. } => "index out of bounds",
             QueryErrorKind::InvalidRegex { .. } => "invalid regex",
             QueryErrorKind::DivisionByZero => "division by zero",
+            QueryErrorKind::InvalidOperation(_) => "invalid operation",
+            QueryErrorKind::RecursionLimit => "nesting too deep",
         }
     }
 }
@@ -213,11 +221,11 @@ impl fmt::Display for QueryErrorKind {
             QueryErrorKind::UnterminatedString => {
                 write!(f, "Unterminated string literal")
             }
-            QueryErrorKind::UnterminatedRegex => {
-                write!(f, "Unterminated regex pattern")
-            }
             QueryErrorKind::InvalidEscape(c) => {
                 write!(f, "Invalid escape sequence '\\{}'", c)
+            }
+            QueryErrorKind::InvalidNumber(s) => {
+                write!(f, "Invalid number literal '{}'", s)
             }
             QueryErrorKind::UnexpectedToken { expected, found } => {
                 if expected.len() == 1 {
@@ -319,6 +327,12 @@ impl fmt::Display for QueryErrorKind {
             }
             QueryErrorKind::DivisionByZero => {
                 write!(f, "Division by zero")
+            }
+            QueryErrorKind::InvalidOperation(msg) => {
+                write!(f, "Invalid operation: {}", msg)
+            }
+            QueryErrorKind::RecursionLimit => {
+                write!(f, "Expression nesting too deep")
             }
         }
     }

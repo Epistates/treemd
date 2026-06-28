@@ -7,7 +7,6 @@
 //! The query system is designed with pluggability in mind:
 //!
 //! - **Function Registry**: Register built-in and custom functions via traits
-//! - **Element Extractors**: Pluggable extractors for different markdown elements
 //! - **Output Formatters**: Extensible output rendering
 //! - **Value System**: Extensible runtime value types
 //!
@@ -30,14 +29,13 @@ mod registry;
 mod value;
 
 pub mod builtins;
-pub mod extractors;
 
 // Re-exports for public API
 pub use ast::Span;
 pub use ast::{Expr, Query};
 pub use error::{QueryError, QueryErrorKind};
 pub use eval::{Engine, EvalContext};
-pub use registry::{ExtractorFn, Function, FunctionRegistry, Registry};
+pub use registry::{Function, FunctionRegistry, Registry};
 pub use value::{Value, ValueKind};
 
 use crate::parser::Document;
@@ -70,7 +68,7 @@ pub fn parse(query_str: &str) -> Result<Query, QueryError> {
 }
 
 /// Create a new query engine with default configuration.
-pub fn engine(doc: &Document) -> Engine<'_> {
+pub fn engine(doc: &Document) -> Engine {
     Engine::new(doc)
 }
 
@@ -97,7 +95,7 @@ pub fn engine(doc: &Document) -> Engine<'_> {
 /// let mut engine = query::engine_with_registry(&doc, registry);
 /// // Now you can use: .h1 | .text | my_upper()
 /// ```
-pub fn engine_with_registry(doc: &Document, registry: Registry) -> Engine<'_> {
+pub fn engine_with_registry(doc: &Document, registry: Registry) -> Engine {
     Engine::with_registry(doc, registry)
 }
 

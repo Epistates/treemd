@@ -52,7 +52,6 @@ pub enum TokenKind {
     // Literals
     String(String),
     Number(f64),
-    Regex(String),
 
     // Identifiers
     Ident(String),
@@ -101,7 +100,6 @@ impl TokenKind {
             TokenKind::Null => "'null'",
             TokenKind::String(_) => "string",
             TokenKind::Number(_) => "number",
-            TokenKind::Regex(_) => "regex",
             TokenKind::Ident(_) => "identifier",
             TokenKind::Eof => "end of input",
         }
@@ -206,38 +204,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    #[allow(dead_code)] // Reserved for future regex filter support
-    fn read_regex(&mut self, start: usize) -> Result<Token, QueryError> {
-        let mut pattern = String::new();
-
-        loop {
-            match self.advance() {
-                Some((_, '/')) => {
-                    return Ok(Token::new(
-                        TokenKind::Regex(pattern),
-                        Span::new(start, self.pos),
-                    ));
-                }
-                Some((_, '\\')) => {
-                    // Preserve escapes in regex
-                    pattern.push('\\');
-                    if let Some((_, c)) = self.advance() {
-                        pattern.push(c);
-                    }
-                }
-                Some((_, c)) => pattern.push(c),
-                None => {
-                    return Err(QueryError::new(
-                        QueryErrorKind::UnterminatedRegex,
-                        Span::new(start, self.pos),
-                        self.input.to_string(),
-                    ));
-                }
-            }
-        }
-    }
-
-    fn read_number(&mut self, start: usize, first_char: char) -> Token {
+    fn read_number(&mut self, start: usize, first_char: char) -> Result<Token, QueryError> {
         let mut num_str = String::new();
         num_str.push(first_char);
 
@@ -254,8 +221,19 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let value = num_str.parse::<f64>().unwrap_or(0.0);
-        Token::new(TokenKind::Number(value), Span::new(start, self.pos))
+        // Reject malformed numbers (e.g. `1.2.3`, `1e`) rather than silently
+        // coercing them to 0.0.
+        match num_str.parse::<f64>() {
+            Ok(value) => Ok(Token::new(
+                TokenKind::Number(value),
+                Span::new(start, self.pos),
+            )),
+            Err(_) => Err(QueryError::new(
+                QueryErrorKind::InvalidNumber(num_str),
+                Span::new(start, self.pos),
+                self.input.to_string(),
+            )),
+        }
     }
 
     fn read_identifier(&mut self, start: usize, first_char: char) -> Token {
@@ -289,7 +267,7 @@ impl<'a> Lexer<'a> {
         Token::new(kind, Span::new(start, self.pos))
     }
 
-    fn next_token(&mut self) -> Result<Token, QueryError> {
+    fn next_token(&mut self, prev: Option<&TokenKind>) -> Result<Token, QueryError> {
         self.skip_whitespace();
 
         let Some((start, c)) = self.advance() else {
@@ -316,11 +294,16 @@ impl<'a> Lexer<'a> {
             '%' => Token::new(TokenKind::Percent, Span::new(start, self.pos)),
 
             '-' => {
-                // Could be minus or negative number
-                if let Some(c) = self.peek()
+                // A leading `-` is a negative numeric literal only in prefix
+                // position — at the start of input or right after an operator,
+                // an opening delimiter, `,`/`:`/`|`, or a keyword. In infix
+                // position (after a value, identifier, `)`, `]`, or number) it
+                // is the subtraction operator, so `5-3` lexes as `5 - 3`.
+                if prev_allows_prefix_minus(prev)
+                    && let Some(c) = self.peek()
                     && c.is_ascii_digit()
                 {
-                    return Ok(self.read_number(start, '-'));
+                    return self.read_number(start, '-');
                 }
                 Token::new(TokenKind::Minus, Span::new(start, self.pos))
             }
@@ -388,7 +371,7 @@ impl<'a> Lexer<'a> {
             '"' => self.read_string('"', start)?,
             '\'' => self.read_string('\'', start)?,
 
-            c if c.is_ascii_digit() => self.read_number(start, c),
+            c if c.is_ascii_digit() => return self.read_number(start, c),
 
             c if c.is_alphabetic() || c == '_' => self.read_identifier(start, c),
 
@@ -405,14 +388,63 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// Whether a `-` following the token `prev` should be lexed as the sign of a
+/// negative numeric literal (prefix position) rather than the subtraction
+/// operator (infix position).
+///
+/// Prefix position is: start of input, or directly after an operator, an
+/// opening delimiter, `,`/`:`/`|`, or a keyword. After a value-producing token
+/// (number, string, identifier, `)`, `]`) a `-` is subtraction.
+fn prev_allows_prefix_minus(prev: Option<&TokenKind>) -> bool {
+    match prev {
+        // Start of input.
+        None => true,
+        Some(kind) => matches!(
+            kind,
+            // Open delimiters
+            TokenKind::LBracket
+                | TokenKind::LParen
+                | TokenKind::LBrace
+                // Separators / pipe
+                | TokenKind::Comma
+                | TokenKind::Colon
+                | TokenKind::Pipe
+                // Comparison / arithmetic operators
+                | TokenKind::Eq
+                | TokenKind::Ne
+                | TokenKind::Lt
+                | TokenKind::Le
+                | TokenKind::Gt
+                | TokenKind::GtGt
+                | TokenKind::Ge
+                | TokenKind::Plus
+                | TokenKind::Minus
+                | TokenKind::Star
+                | TokenKind::Slash
+                | TokenKind::SlashSlash
+                | TokenKind::Percent
+                // Keywords that introduce an expression
+                | TokenKind::And
+                | TokenKind::Or
+                | TokenKind::Not
+                | TokenKind::If
+                | TokenKind::Then
+                | TokenKind::Elif
+                | TokenKind::Else
+        ),
+    }
+}
+
 /// Tokenize a query string.
 pub fn tokenize(input: &str) -> Result<Vec<Token>, QueryError> {
     let mut lexer = Lexer::new(input);
     let mut tokens = Vec::new();
+    let mut prev_kind: Option<TokenKind> = None;
 
     loop {
-        let token = lexer.next_token()?;
+        let token = lexer.next_token(prev_kind.as_ref())?;
         let is_eof = matches!(token.kind, TokenKind::Eof);
+        prev_kind = Some(token.kind.clone());
         tokens.push(token);
         if is_eof {
             break;
@@ -562,6 +594,73 @@ mod tests {
                 TokenKind::Eof
             ]
         );
+    }
+
+    #[test]
+    fn test_subtraction_not_negative_literal() {
+        // `5-3` must lex as 5, minus, 3 — not 5 then -3.
+        assert_eq!(
+            tokenize_kinds("5-3"),
+            vec![
+                TokenKind::Number(5.0),
+                TokenKind::Minus,
+                TokenKind::Number(3.0),
+                TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn test_negative_literal_in_prefix_position() {
+        // After `(` and after `,` a `-N` is a negative literal.
+        assert_eq!(
+            tokenize_kinds("(-3)"),
+            vec![
+                TokenKind::LParen,
+                TokenKind::Number(-3.0),
+                TokenKind::RParen,
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            tokenize_kinds("1, -2"),
+            vec![
+                TokenKind::Number(1.0),
+                TokenKind::Comma,
+                TokenKind::Number(-2.0),
+                TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn test_subtraction_after_paren_and_ident() {
+        assert_eq!(
+            tokenize_kinds("(1)-2"),
+            vec![
+                TokenKind::LParen,
+                TokenKind::Number(1.0),
+                TokenKind::RParen,
+                TokenKind::Minus,
+                TokenKind::Number(2.0),
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            tokenize_kinds("a-1"),
+            vec![
+                TokenKind::Ident("a".into()),
+                TokenKind::Minus,
+                TokenKind::Number(1.0),
+                TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn test_malformed_number_is_error() {
+        assert!(tokenize("1.2.3").is_err());
+        assert!(tokenize("1e").is_err());
     }
 
     #[test]

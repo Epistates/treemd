@@ -3,7 +3,6 @@
 use super::content::{parse_content, slugify};
 use super::document::{Document, HeadingNode};
 use super::output::*;
-use super::utils::get_heading_level;
 use std::path::Path;
 
 /// Build complete JSON output with nested sections and markdown intelligence
@@ -22,21 +21,18 @@ pub fn build_json_output(doc: &Document, source_path: Option<&Path>) -> Document
     };
 
     // Build sections with content
-    let sections = tree
-        .iter()
-        .map(|node| build_section(node, &doc.content))
-        .collect();
+    let sections = tree.iter().map(|node| build_section(node, doc)).collect();
 
     DocumentOutput {
         document: DocumentRoot { metadata, sections },
     }
 }
 
-fn build_section(node: &HeadingNode, full_content: &str) -> Section {
+fn build_section(node: &HeadingNode, doc: &Document) -> Section {
     let heading = &node.heading;
 
     // Extract content for this section
-    let (raw_content, offset, line) = extract_section_content(heading, full_content);
+    let (raw_content, offset, line) = extract_section_content(doc, node.index);
 
     // Parse content into blocks
     let blocks = parse_content(&raw_content, line);
@@ -45,7 +41,7 @@ fn build_section(node: &HeadingNode, full_content: &str) -> Section {
     let children = node
         .children
         .iter()
-        .map(|child| build_section(child, full_content))
+        .map(|child| build_section(child, doc))
         .collect();
 
     Section {
@@ -62,52 +58,28 @@ fn build_section(node: &HeadingNode, full_content: &str) -> Section {
     }
 }
 
-fn extract_section_content(
-    heading: &super::document::Heading,
-    full_content: &str,
-) -> (String, usize, usize) {
-    // Use stored byte offset for direct access
-    let offset = heading.offset;
+/// Extract the raw body of section `idx` for nested JSON output.
+///
+/// Bounds the body at the *next heading of any level* (child sections are
+/// emitted separately in the `children` array), and shares `Document::body_start`
+/// so CRLF, setext underlines, and EOF headings are handled correctly.
+///
+/// Returns `(raw_body, body_offset, body_line)`.
+fn extract_section_content(doc: &Document, idx: usize) -> (String, usize, usize) {
+    let offset = doc.headings[idx].offset;
 
-    // Calculate line number from byte offset
-    let line = full_content[..offset].lines().count() + 1;
+    // Line number of the heading itself (1-indexed); body starts on the line
+    // after the heading.
+    let line = doc.content[..offset].lines().count() + 1;
 
-    // Find content start (skip the heading line itself)
-    let after_heading = &full_content[offset..];
-    let content_start = after_heading.find('\n').map(|i| i + 1).unwrap_or(0);
-    let section_content = &after_heading[content_start..];
-
-    // Find next heading (any level, since children are extracted separately)
-    let end = find_next_heading(section_content);
+    let content_start = doc.body_start(idx);
+    let end = doc.section_end_any(idx);
 
     (
-        section_content[..end].trim().to_string(),
-        offset + content_start,
+        doc.content[content_start..end].trim().to_string(),
+        content_start,
         line + 1,
     )
-}
-
-fn find_next_heading(content: &str) -> usize {
-    let mut in_code_block = false;
-    let mut pos = 0;
-
-    for line in content.lines() {
-        // Track code block fences
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-        }
-
-        // Check for heading only if not in code block
-        if !in_code_block && get_heading_level(line).is_some() {
-            // For nested JSON output, stop at ANY heading (child sections are
-            // extracted separately and included in the children array)
-            return pos;
-        }
-
-        pos += line.len() + 1; // +1 for newline
-    }
-
-    content.len()
 }
 
 fn calculate_max_depth(tree: &[HeadingNode]) -> usize {
@@ -126,38 +98,52 @@ mod tests {
     use super::*;
     use crate::parser::parse_markdown;
 
-    // ---------- find_next_heading (code-block awareness) ----------
+    // ---------- section body bounding (via parse_markdown + builder) ----------
 
-    #[test]
-    fn find_next_heading_stops_at_first_heading() {
-        let content = "para one\nmore text\n## Subsection\nbody\n";
-        let end = find_next_heading(content);
-        assert_eq!(&content[..end], "para one\nmore text\n");
+    /// Helper: build the JSON output and return the raw body of the first
+    /// top-level section.
+    fn first_section_raw(md: &str) -> String {
+        let doc = parse_markdown(md);
+        let out = build_json_output(&doc, None);
+        out.document.sections[0].content.raw.clone()
     }
 
     #[test]
-    fn find_next_heading_no_heading_returns_full_len() {
-        let content = "just a paragraph\nwith two lines\n";
-        assert_eq!(find_next_heading(content), content.len());
+    fn section_body_stops_at_first_child_heading() {
+        // The nested builder bounds a parent's raw body at the next heading of
+        // any level; the child body is emitted separately.
+        let md = "# Top\npara one\nmore text\n## Subsection\nbody\n";
+        let raw = first_section_raw(md);
+        assert!(raw.contains("para one"));
+        assert!(raw.contains("more text"));
+        assert!(!raw.contains("Subsection"));
+        assert!(!raw.contains("body"));
     }
 
     #[test]
-    fn find_next_heading_ignores_heading_inside_code_block() {
-        // The `# fake heading` inside ``` must NOT terminate the section.
-        let content = "intro\n\n```rust\n# fake heading\nlet x = 1;\n```\n\n## real heading\n";
-        let end = find_next_heading(content);
-        // Should land at the real heading's line, not the fake one.
-        assert!(content[..end].contains("# fake heading"));
-        assert!(!content[..end].contains("## real heading"));
+    fn section_body_no_child_heading_takes_rest_of_doc() {
+        let md = "# Top\njust a paragraph\nwith two lines\n";
+        let raw = first_section_raw(md);
+        assert!(raw.contains("just a paragraph"));
+        assert!(raw.contains("with two lines"));
     }
 
     #[test]
-    fn find_next_heading_ignores_indented_code_fences() {
-        // turbovault treats `  ```` as a code fence (trim_start before checking).
-        let content = "intro\n  ```\n# fake\n  ```\n## real\n";
-        let end = find_next_heading(content);
-        assert!(content[..end].contains("# fake"));
-        assert!(!content[..end].contains("## real"));
+    fn section_body_keeps_heading_inside_code_block() {
+        // A `# fake heading` inside a fenced block must NOT split the section —
+        // turbovault's heading parser is code-block aware, so it is not a heading.
+        let md = "# Top\nintro\n\n```rust\n# fake heading\nlet x = 1;\n```\n\n## real heading\n";
+        let raw = first_section_raw(md);
+        assert!(raw.contains("# fake heading"));
+        assert!(!raw.contains("real heading"));
+    }
+
+    #[test]
+    fn section_body_keeps_indented_code_fence_content() {
+        let md = "# Top\nintro\n  ```\n# fake\n  ```\n## real\n";
+        let raw = first_section_raw(md);
+        assert!(raw.contains("# fake"));
+        assert!(!raw.contains("real"));
     }
 
     // ---------- count_words ----------

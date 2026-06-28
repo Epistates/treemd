@@ -5,7 +5,8 @@
 mod collection;
 mod string;
 
-use super::error::QueryError;
+use super::ast::Span;
+use super::error::{QueryError, QueryErrorKind};
 use super::eval::EvalContext;
 use super::registry::{Function, Registry};
 use super::value::Value;
@@ -118,7 +119,8 @@ fn fn_count(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
     let input = args.first().unwrap_or(&Value::Null);
     let count = match input {
         Value::Array(a) => a.len(),
-        Value::String(s) => s.len(),
+        // jq counts Unicode codepoints, not bytes.
+        Value::String(s) => s.chars().count(),
         Value::Object(o) => o.len(),
         _ => 1,
     };
@@ -321,25 +323,9 @@ fn fn_chars(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
 
 fn fn_slugify(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    let text = input.to_text();
-    let slug = text
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() {
-                c
-            } else if c.is_whitespace() || c == '-' {
-                '-'
-            } else {
-                '\0'
-            }
-        })
-        .filter(|&c| c != '\0')
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
+    // Delegate to the canonical (turbovault) slugify for consistency with
+    // heading slugs everywhere else.
+    let slug = crate::parser::content::slugify(&input.to_text());
     Ok(vec![Value::String(slug)])
 }
 
@@ -393,11 +379,20 @@ fn fn_matches(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryErr
     let input = args.first().unwrap_or(&Value::Null);
     let pattern = args.get(1).map(|v| v.to_text()).unwrap_or_default();
 
-    let result = regex::Regex::new(&pattern)
-        .map(|re| re.is_match(&input.to_text()))
-        .unwrap_or(false);
+    // Propagate invalid-regex errors instead of silently treating them as a
+    // non-match.
+    let re = regex::Regex::new(&pattern).map_err(|e| {
+        QueryError::new(
+            QueryErrorKind::InvalidRegex {
+                pattern: pattern.clone(),
+                error: e.to_string(),
+            },
+            Span::default(),
+            String::new(),
+        )
+    })?;
 
-    Ok(vec![Value::Bool(result)])
+    Ok(vec![Value::Bool(re.is_match(&input.to_text()))])
 }
 
 fn fn_has(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
@@ -610,28 +605,28 @@ fn fn_nth(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> 
     }
 }
 
+// NOTE: `any`/`all`/`sort_by`/`group_by` are intercepted as special forms in
+// `Engine::eval_function` so their predicate/key argument is evaluated *per
+// element* (the registry path evaluates arguments only once). These registry
+// entries exist solely so calling them with the wrong number of arguments
+// produces an arity error; with the correct single argument they never reach
+// these bodies. The fallbacks below cover only the degenerate
+// already-truthy-input case.
+
 fn fn_any(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    let condition = args.get(1).unwrap_or(&Value::Bool(false));
-
     let result = match input {
-        Value::Array(a) => a.iter().any(|v| {
-            // If condition is a function result applied to each element
-            // For now, check if any element is truthy
-            v.is_truthy()
-        }),
-        _ => condition.is_truthy(),
+        Value::Array(a) => a.iter().any(|v| v.is_truthy()),
+        other => other.is_truthy(),
     };
     Ok(vec![Value::Bool(result)])
 }
 
 fn fn_all(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    let _condition = args.get(1).unwrap_or(&Value::Bool(true));
-
     let result = match input {
         Value::Array(a) => a.iter().all(|v| v.is_truthy()),
-        _ => input.is_truthy(),
+        other => other.is_truthy(),
     };
     Ok(vec![Value::Bool(result)])
 }

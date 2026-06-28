@@ -231,9 +231,6 @@ pub enum Filter {
         span: Span,
     },
 
-    /// Regex filter: `[/pattern/]`
-    Regex { pattern: String, span: Span },
-
     /// Type filter: `[anchor]`, `[external]` for links
     Type { type_name: String, span: Span },
 }
@@ -296,9 +293,6 @@ pub enum BinaryOp {
     Div,
     Mod,
 
-    // String
-    Concat,
-
     // Null coalescing
     Alt, // //
 }
@@ -319,7 +313,6 @@ impl BinaryOp {
             BinaryOp::Mul => "*",
             BinaryOp::Div => "/",
             BinaryOp::Mod => "%",
-            BinaryOp::Concat => "+",
             BinaryOp::Alt => "//",
         }
     }
@@ -332,7 +325,7 @@ impl BinaryOp {
             BinaryOp::Eq | BinaryOp::Ne => 3,
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => 4,
             BinaryOp::Alt => 5,
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Concat => 6,
+            BinaryOp::Add | BinaryOp::Sub => 6,
             BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 7,
         }
     }

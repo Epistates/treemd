@@ -158,15 +158,18 @@ pub fn process_input(source: InputSource) -> Result<String, Box<dyn std::error::
         InputSource::File(c) | InputSource::Stdin(c) => c,
     };
 
-    // Check if content looks like markdown (has headings)
-    if content.trim_start().starts_with('#') || content.contains("\n#") {
-        // Markdown content, pass through
-        Ok(content)
-    } else {
-        // Plain text - wrap in a document heading for basic viewing
+    // Decide whether to wrap based on whether the markdown *parser* finds any
+    // headings — not a naive `#` text scan. A `#` scan both misfires (e.g. a
+    // leading `#` inside a code fence) and misses setext headings
+    // (`Title\n=====`), which have no `#` at all but are real headings.
+    if turbovault_parser::parse_headings(&content).is_empty() {
+        // No headings at all: wrap in a phantom heading for basic viewing.
         let mut markdown = String::from("# Input\n\n");
         markdown.push_str(&content);
         Ok(markdown)
+    } else {
+        // Document has structure already; pass through unchanged.
+        Ok(content)
     }
 }
 
@@ -191,5 +194,25 @@ mod tests {
         let result = process_input(source).unwrap();
         assert!(result.starts_with("# Input\n\n"));
         assert!(result.contains("Just some plain text"));
+    }
+
+    #[test]
+    fn test_setext_markdown_not_wrapped() {
+        // Setext headings have no '#' but are real headings — must pass through.
+        let md = "Title\n=====\n\nbody text\n";
+        let source = InputSource::Stdin(md.to_string());
+        let result = process_input(source).unwrap();
+        assert_eq!(result, md);
+        assert!(!result.starts_with("# Input"));
+    }
+
+    #[test]
+    fn test_hash_inside_code_fence_only_is_wrapped() {
+        // A leading '#' that lives inside a fenced code block is not a heading;
+        // such content has no real headings and should be wrapped.
+        let md = "```\n# not a heading\n```\n";
+        let source = InputSource::Stdin(md.to_string());
+        let result = process_input(source).unwrap();
+        assert!(result.starts_with("# Input\n\n"));
     }
 }
