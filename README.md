@@ -61,6 +61,8 @@ Use it to:
 | **Command palette** | Fuzzy-search every command with `:`—no need to memorize keys |
 | **Collapsible tree** | Expand/collapse sections with `Space`/`Enter` |
 | **Bookmarks** | Mark positions (`m`) and jump back (`'`) |
+| **Callouts** | GFM alerts and Obsidian callouts (`> [!NOTE]`, `> [!WARNING]`, …) rendered with icons and accent colors |
+| **Remote documents** | Open URLs directly: `treemd https://…` or `treemd github:owner/repo` |
 | **8 color themes** | Nord, Dracula, Solarized, Monokai, Gruvbox, Tokyo Night, Catppuccin Mocha, Ocean Dark |
 | **Customizable keybindings** | Remap any key via [config file](#custom-keybindings) |
 
@@ -112,9 +114,24 @@ pacman -S treemd
 pkgin install treemd
 ```
 
+### Shell completions & man page
+
+```sh
+treemd --setup-completions   # Interactive tab-completion setup (bash/zsh/fish)
+treemd --man-page > treemd.1 # Generate the man page (for packagers)
+```
+
+Completions are context-aware: they only offer `.md`/`.markdown` files and directories.
+
 ## Usage
 
 ### TUI Mode (Interactive)
+
+```sh
+treemd README.md                  # Open a file
+treemd github:rust-lang/rust      # Read a GitHub repo's README
+treemd https://example.com/doc.md # Open any markdown URL
+```
 
 Launch the interactive interface by running treemd with a file:
 
@@ -137,8 +154,7 @@ treemd *.md             # Open file picker with matched files
 | `p` | Jump to parent heading |
 | `d` / `u` or `PageDown` / `PageUp` | Page down/up |
 | `Tab` / `Shift+Tab` | Switch focus between outline and content |
-| `1`-`9` | Jump to heading by number |
-| `5j` etc. | Repeat motion with a vim count prefix |
+| `5j` etc. | Repeat motion with a vim count prefix (digits `1`-`9` start a count, shown in the status bar) |
 
 </details>
 
@@ -190,7 +206,8 @@ treemd *.md             # Open file picker with matched files
 | Key | Action |
 |-----|--------|
 | `i` | Enter interactive mode |
-| `Tab` / `j` / `k` | Navigate elements |
+| `j` / `k` | Navigate elements |
+| `Tab` / `Shift+Tab` | Next/previous link within element |
 | `Enter` | Activate element |
 | `Space` | Toggle checkboxes/details |
 | `y` | Copy content |
@@ -224,13 +241,13 @@ treemd *.md             # Open file picker with matched files
 | `r` | Toggle raw markdown source |
 | `M` | Toggle mouse capture (turn off to select text) |
 | `e` | Edit file in `$VISUAL` or `$EDITOR` |
-| `t` | Cycle color theme |
+| `t` | Open theme picker (live preview) |
 | `y` | Copy current section |
 | `Y` | Copy anchor link |
 | `m` | Set bookmark |
 | `'` | Jump to bookmark |
 | `?` | Toggle help overlay |
-| `q` / `Esc` | Quit |
+| `q` | Quit (`Esc` backs out of searches/modes) |
 
 </details>
 

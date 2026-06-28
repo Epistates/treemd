@@ -1,5 +1,7 @@
-.*
+# macOS
 .DS_Store
+
+# Environment / secrets
 .env
 
 # Certificates and keys (should NEVER be committed)
@@ -16,15 +18,18 @@
 *.swo
 *~
 debug_output.txt
-!.github/
 
-# IDE
+# IDE / tool state
 .vscode/
 .idea/
 *.iml
+.claude/
+.strategy/
 
 assets/raw/
 
-*.md
-!README.md
-!CHANGELOG.md
+# Local scratch markdown at the repo root only — docs/ and tests/ markdown IS tracked
+/*.md
+!/README.md
+!/CHANGELOG.md
+/notes/
