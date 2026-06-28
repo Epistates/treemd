@@ -8,7 +8,7 @@ use crate::tui::help_text;
 use crate::tui::theme::Theme;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
@@ -149,13 +149,7 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
             LinkTarget::WikiLink { target, .. } => format!("[[{}]]", target),
-            LinkTarget::External(url) => {
-                if url.len() > 50 {
-                    format!("{}...", &url[..47])
-                } else {
-                    url.clone()
-                }
-            }
+            LinkTarget::External(url) => super::util::truncate_with_ellipsis(url, 50),
         };
 
         // Different styles for selected vs unselected
@@ -440,7 +434,7 @@ pub fn render_cell_edit_overlay(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
         Line::from(vec![Span::styled(
             edit_text,
-            Style::default().fg(Color::White),
+            Style::default().fg(theme.modal_text()),
         )]),
         Line::from(""),
         Line::from(vec![Span::styled(
@@ -718,7 +712,7 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
                 &app.command_palette.query,
                 Style::default().fg(theme.modal_text()),
             ),
-            Span::styled(" ", Style::default().bg(Color::White)), // Cursor (reverse-video for gapless rendering)
+            Span::styled(" ", Style::default().bg(theme.foreground)), // Cursor (reverse-video for gapless rendering)
         ]),
         Line::from(""),
     ];

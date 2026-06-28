@@ -1,4 +1,5 @@
 mod app;
+mod edits;
 mod help_text;
 mod image_cache;
 mod interactive;
@@ -39,9 +40,17 @@ fn run_editor(
     file: &Path,
     line: Option<u32>,
     editor_config: &EditorConfig,
+    mouse_captured: bool,
 ) -> Result<()> {
-    // Leave alternate screen and disable raw mode to give editor full terminal control
+    use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+
+    // Leave alternate screen, disable raw mode and release the mouse so the
+    // editor gets full terminal control (a child editor inheriting
+    // mouse-reporting mode behaves erratically)
     stdout().execute(LeaveAlternateScreen)?;
+    if mouse_captured {
+        let _ = stdout().execute(DisableMouseCapture);
+    }
     tty::suspend_raw_mode()?;
 
     // Build editor command with config
@@ -57,6 +66,9 @@ fn run_editor(
 
     // Restore terminal state
     stdout().execute(EnterAlternateScreen)?;
+    if mouse_captured {
+        let _ = stdout().execute(EnableMouseCapture);
+    }
     tty::resume_raw_mode()?;
     terminal.clear()?;
 
@@ -136,7 +148,13 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("file");
             let editor_config = app.editor_config();
-            match run_editor(terminal, &file_path, None, &editor_config) {
+            match run_editor(
+                terminal,
+                &file_path,
+                None,
+                &editor_config,
+                app.mouse_capture,
+            ) {
                 Ok(_) => {
                     app.status_message = Some(format!("✓ Opened {} in editor", filename));
                 }
@@ -167,36 +185,53 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         } else if let Some(ref mut watcher) = file_watcher
             && watcher.check_for_changes()
         {
-            // Save state before reload
-            let was_interactive = app.mode == app::AppMode::Interactive;
-            let saved_scroll = app.content_scroll;
-            let saved_element_idx = app.interactive_state.current_index;
-
-            // File changed externally - reload with state preservation
-            if let Err(e) = app.reload_current_file() {
-                app.status_message = Some(format!("✗ Reload failed: {}", e));
+            if app.has_unsaved_changes {
+                // Never clobber buffered edits with an external reload; the
+                // user must save or undo first, then the file can be reloaded.
+                app.status_message = Some(
+                    "⚠ File changed on disk — reload skipped to protect unsaved edits (save or undo first)"
+                        .to_string(),
+                );
+                needs_redraw = true;
             } else {
-                // Re-index interactive elements if in interactive mode
-                if was_interactive {
-                    app.reindex_interactive_elements();
-                    // Restore element selection if still valid
-                    if let Some(idx) = saved_element_idx
-                        && idx < app.interactive_state.elements.len()
-                    {
-                        app.interactive_state.current_index = Some(idx);
+                // Save state before reload
+                let was_interactive = app.mode == app::AppMode::Interactive;
+                let saved_scroll = app.content_scroll;
+                let saved_element_idx = app.interactive_state.current_index;
+
+                // File changed externally - reload with state preservation
+                match app.reload_current_file() {
+                    Err(e) => {
+                        app.status_message = Some(format!("✗ Reload failed: {}", e));
+                        needs_redraw = true;
+                    }
+                    // Disk content matches what we have (e.g. the echo of our
+                    // own save arriving after the suppression window) — ignore.
+                    Ok(false) => {}
+                    Ok(true) => {
+                        // Re-index interactive elements if in interactive mode
+                        if was_interactive {
+                            app.reindex_interactive_elements();
+                            // Restore element selection if still valid
+                            if let Some(idx) = saved_element_idx
+                                && idx < app.interactive_state.elements.len()
+                            {
+                                app.interactive_state.current_index = Some(idx);
+                            }
+                        }
+                        // Restore scroll position
+                        app.content_scroll = saved_scroll.min(app.max_content_scroll());
+                        app.content_scroll_state = app
+                            .content_scroll_state
+                            .position(app.content_scroll as usize);
+                        // Sync previous_selection to prevent update_content_metrics() from resetting scroll
+                        app.sync_previous_selection();
+
+                        app.status_message = Some("↻ File reloaded (external change)".to_string());
+                        needs_redraw = true;
                     }
                 }
-                // Restore scroll position
-                app.content_scroll = saved_scroll.min(app.max_content_scroll());
-                app.content_scroll_state = app
-                    .content_scroll_state
-                    .position(app.content_scroll as usize);
-                // Sync previous_selection to prevent update_content_metrics() from resetting scroll
-                app.sync_previous_selection();
-
-                app.status_message = Some("↻ File reloaded (external change)".to_string());
             }
-            needs_redraw = true;
         }
 
         if !event_ready {
@@ -241,6 +276,14 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                 continue;
             }
 
+            // A sticky message (error set without a timestamp) stays visible
+            // until the user presses a key; dismiss it now. Track the message
+            // state so anything set directly during this keypress is marked
+            // sticky for the next one.
+            app.dismiss_sticky_status_message();
+            let prev_status = app.status_message.clone();
+            let prev_status_time = app.status_message_time;
+
             // Handle text input modes separately - these need raw character input
             let handled = handle_text_input(&mut app, key.code, key.modifiers);
 
@@ -269,27 +312,51 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                 if !digit_handled {
                     // Try to get an action from the keybinding system
                     if let Some(action) = app.get_action_for_key(key.code, key.modifiers) {
-                        // Special handling for CommandPalette confirm - it may return Quit
-                        if action == Action::ConfirmAction
-                            && app.mode == app::AppMode::CommandPalette
                         {
-                            if app.execute_selected_command() {
-                                return Ok(()); // Quit command executed
-                            }
-                        } else {
-                            match app.execute_action(action) {
+                            // CommandPalette confirm routes through the palette
+                            // executor; everything else through the action dispatch.
+                            // Both produce an ActionResult handled uniformly below.
+                            let result = if action == Action::ConfirmAction
+                                && app.mode == app::AppMode::CommandPalette
+                            {
+                                app.execute_selected_command()
+                            } else {
+                                app.execute_action(action)
+                            };
+                            match result {
                                 ActionResult::Quit => return Ok(()),
                                 ActionResult::RunEditor(path, line) => {
                                     let editor_config = app.editor_config();
-                                    match run_editor(terminal, &path, line, &editor_config) {
+                                    match run_editor(
+                                        terminal,
+                                        &path,
+                                        line,
+                                        &editor_config,
+                                        app.mouse_capture,
+                                    ) {
                                         Ok(_) => {
-                                            if let Err(e) = app.reload_current_file() {
-                                                app.status_message =
-                                                    Some(format!("✗ Failed to reload: {}", e));
-                                            } else {
-                                                app.status_message = Some(
-                                                    "✓ File reloaded after editing".to_string(),
-                                                );
+                                            // The user deliberately edited the file externally,
+                                            // so the on-disk version wins over any buffered edits.
+                                            let had_pending = app.has_unsaved_changes;
+                                            match app.reload_current_file() {
+                                                Err(e) => {
+                                                    app.status_message =
+                                                        Some(format!("✗ Failed to reload: {}", e));
+                                                }
+                                                Ok(reloaded) => {
+                                                    if reloaded && had_pending {
+                                                        app.discard_pending_edits();
+                                                        app.status_message = Some(
+                                                            "✓ File reloaded after editing (buffered edits discarded)"
+                                                                .to_string(),
+                                                        );
+                                                    } else if reloaded {
+                                                        app.status_message = Some(
+                                                            "✓ File reloaded after editing"
+                                                                .to_string(),
+                                                        );
+                                                    }
+                                                }
                                             }
                                             app.update_content_metrics();
                                         }
@@ -310,6 +377,13 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         app.clear_count();
                     }
                 }
+            }
+
+            // Anything assigned directly to status_message during this
+            // keypress (without refreshing the timestamp) is treated as
+            // sticky: it stays visible until the next keypress.
+            if app.status_message != prev_status && app.status_message_time == prev_status_time {
+                app.status_message_time = None;
             }
         }
     }
@@ -334,80 +408,30 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
     }
 }
 
-/// Handle text input for search/edit modes
-/// Returns true if the key was handled
+/// Handle text input for search/edit modes.
+/// Returns true if the key was handled by an active input field.
+///
+/// All six input fields share the same editing behavior: plain characters
+/// insert (Shift allowed for capitals), Ctrl+U clears, Ctrl+W deletes the
+/// trailing word, and any other modifier chord falls through to the
+/// keybinding system instead of inserting a literal character.
 fn handle_text_input(
     app: &mut App,
     code: KeyCode,
     modifiers: crossterm::event::KeyModifiers,
 ) -> bool {
-    // Text input modes: outline search, doc search, link search, command palette, cell edit
+    use crate::tui::app::TextInputEdit;
+    use crossterm::event::KeyModifiers;
 
-    // Outline search mode - only handle input when active
-    if app.show_search && app.outline_search_active {
-        match code {
-            KeyCode::Char('u') if modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                app.search_query.clear();
-                app.filter_outline();
-                return true;
-            }
-            KeyCode::Char(c) => {
-                app.search_input(c);
-                return true;
-            }
-            _ => {}
-        }
-    }
+    let chorded =
+        modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
 
-    // Doc search input mode
-    if app.mode == app::AppMode::DocSearch && app.doc_search.active {
-        match code {
-            KeyCode::Char('u') if modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                app.doc_search.query.clear();
-                app.update_doc_search_matches();
-                return true;
-            }
-            KeyCode::Char(c) => {
-                app.doc_search_input(c);
-                return true;
-            }
-            _ => {}
-        }
-    }
+    let edit = match code {
+        KeyCode::Char('u') if modifiers == KeyModifiers::CONTROL => TextInputEdit::Clear,
+        KeyCode::Char('w') if modifiers == KeyModifiers::CONTROL => TextInputEdit::DeleteWord,
+        KeyCode::Char(c) if !chorded => TextInputEdit::Insert(c),
+        _ => return false,
+    };
 
-    // Link search input mode
-    if app.mode == app::AppMode::LinkFollow
-        && app.link_picker.active
-        && let KeyCode::Char(c) = code
-    {
-        app.link_search_push(c);
-        return true;
-    }
-
-    // File search input mode (FilePicker with file_search_active flag)
-    if ((app.mode == app::AppMode::FilePicker && app.file_picker.active)
-        || app.mode == app::AppMode::FileSearch)
-        && let KeyCode::Char(c) = code
-    {
-        app.file_search_push(c);
-        return true;
-    }
-
-    // Command palette input mode
-    if app.mode == app::AppMode::CommandPalette
-        && let KeyCode::Char(c) = code
-    {
-        app.command_palette_input(c);
-        return true;
-    }
-
-    // Cell edit mode
-    if app.mode == app::AppMode::CellEdit
-        && let KeyCode::Char(c) = code
-    {
-        app.cell_edit_value.push(c);
-        return true;
-    }
-
-    false
+    app.apply_text_input_edit(edit)
 }

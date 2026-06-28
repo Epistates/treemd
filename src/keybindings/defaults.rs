@@ -125,19 +125,15 @@ fn add_normal_mode(kb: &mut Keybindings) {
 
     // Application
     bind(kb, Normal, "q", Quit);
-    bind(kb, Normal, "Escape", Quit);
+    // Esc backs out (clears search/filter, shows quit hint) instead of
+    // terminating the session — q is the deliberate quit key.
+    bind(kb, Normal, "Escape", ExitMode);
     bind(kb, Normal, "Ctrl+l", Redraw);
 
-    // Jump to heading by number
-    bind(kb, Normal, "1", JumpToHeading1);
-    bind(kb, Normal, "2", JumpToHeading2);
-    bind(kb, Normal, "3", JumpToHeading3);
-    bind(kb, Normal, "4", JumpToHeading4);
-    bind(kb, Normal, "5", JumpToHeading5);
-    bind(kb, Normal, "6", JumpToHeading6);
-    bind(kb, Normal, "7", JumpToHeading7);
-    bind(kb, Normal, "8", JumpToHeading8);
-    bind(kb, Normal, "9", JumpToHeading9);
+    // Note: digits 1-9 act as a vim-style count prefix in Normal mode (e.g.
+    // `5j`) and are consumed before keybinding dispatch, so the
+    // JumpToHeading1-9 actions ship unbound. They remain available for users
+    // to bind to other keys in their config.
 
     // Search match navigation (when matches exist)
     bind(kb, Normal, "n", NextMatch);

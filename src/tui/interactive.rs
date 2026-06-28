@@ -284,7 +284,8 @@ impl InteractiveState {
                                         sub_idx: Some(nested_base + TABLE_OFFSET),
                                     };
 
-                                    let table_lines = 3 + rows.len();
+                                    // Renderer emits: top border + header + separator + rows + bottom border
+                                    let table_lines = 4 + rows.len();
 
                                     self.elements.push(InteractiveElement {
                                         id: nested_id,
@@ -634,7 +635,8 @@ impl InteractiveState {
                                         sub_idx: Some(nested_base + TABLE_OFFSET),
                                     };
 
-                                    let lines = 3 + rows.len();
+                                    // Renderer emits: top border + header + separator + rows + bottom border
+                                    let lines = 4 + rows.len();
 
                                     self.elements.push(InteractiveElement {
                                         id,
@@ -724,7 +726,7 @@ impl InteractiveState {
                         sub_idx: None,
                     };
 
-                    let lines = 3 + rows.len(); // Top border + header + separator + rows + bottom
+                    let lines = 4 + rows.len(); // Top border + header + separator + rows + bottom border
 
                     self.elements.push(InteractiveElement {
                         id,
@@ -940,11 +942,7 @@ impl InteractiveState {
                         .replace("</b>", "")
                         .replace("<em>", "")
                         .replace("</em>", "");
-                    let display = if clean_summary.len() > 15 {
-                        format!("{}...", &clean_summary[..12])
-                    } else {
-                        clean_summary
-                    };
+                    let display = crate::tui::ui::util::truncate_with_ellipsis(&clean_summary, 15);
                     format!("▸{} > ", display)
                 } else {
                     String::new()
@@ -963,30 +961,18 @@ impl InteractiveState {
                         .replace("</b>", "")
                         .replace("<em>", "")
                         .replace("</em>", "");
-                    let display = if clean_summary.len() > 20 {
-                        format!("{}...", &clean_summary[..17])
-                    } else {
-                        clean_summary
-                    };
+                    let display = crate::tui::ui::util::truncate_with_ellipsis(&clean_summary, 20);
                     format!("▸ {}", display)
                 }
                 ElementType::Link { link, .. } => {
-                    let text = if link.text.len() > 20 {
-                        format!("{}...", &link.text[..17])
-                    } else {
-                        link.text.clone()
-                    };
+                    let text = crate::tui::ui::util::truncate_with_ellipsis(&link.text, 20);
                     format!("Link: {}", text)
                 }
                 ElementType::Checkbox {
                     content, checked, ..
                 } => {
                     let mark = if *checked { "☑" } else { "☐" };
-                    let text = if content.len() > 15 {
-                        format!("{}...", &content[..12])
-                    } else {
-                        content.clone()
-                    };
+                    let text = crate::tui::ui::util::truncate_with_ellipsis(content, 15);
                     format!("{} {}", mark, text)
                 }
                 ElementType::CodeBlock { language, .. } => {
@@ -997,11 +983,7 @@ impl InteractiveState {
                     format!("Table: {}×{}", rows, cols)
                 }
                 ElementType::Image { alt, .. } => {
-                    let text = if alt.len() > 20 {
-                        format!("{}...", &alt[..17])
-                    } else {
-                        alt.clone()
-                    };
+                    let text = crate::tui::ui::util::truncate_with_ellipsis(alt, 20);
                     format!("Image: {}", text)
                 }
             };
@@ -1284,7 +1266,7 @@ fn count_single_block_lines(
         }
         Block::List { items, .. } => items.len(),
         Block::Blockquote { blocks, .. } => count_block_lines(blocks, mermaid_rows),
-        Block::Table { rows, .. } => 3 + rows.len(),
+        Block::Table { rows, .. } => 4 + rows.len(),
         Block::Image { .. } => BLOCK_IMAGE_TOTAL_LINES,
         Block::HorizontalRule => 1,
         Block::Details { blocks, .. } => 1 + count_block_lines(blocks, mermaid_rows),

@@ -33,12 +33,14 @@ treemd -s Installation doc.md # Extract section";
 #[command(about = "A markdown navigator with tree-based structural navigation")]
 #[command(long_about = LONG_ABOUT)]
 pub struct Cli {
-    /// Markdown file(s) to view (.md or .markdown), directory, or '-' for stdin
+    /// Markdown file(s) to view (.md or .markdown), directory, URL, or '-' for stdin
     ///
     /// Path to the markdown file(s) to open. Use '-' to read from stdin.
     /// If a directory is specified, opens file picker in that directory.
     /// Multiple files can be specified for the file picker.
     /// If no file is specified and stdin is piped, input is read from stdin.
+    /// http(s) URLs are fetched directly; `github:owner/repo` opens that
+    /// repository's README.
     ///
     /// Examples:
     ///   treemd README.md         # Open file
@@ -47,8 +49,17 @@ pub struct Cli {
     ///   treemd *.md              # Open file picker with matched files
     ///   treemd -                 # Read from stdin
     ///   cat doc.md | treemd -l   # Pipe markdown
+    ///   treemd https://raw.githubusercontent.com/rust-lang/rust/HEAD/README.md
+    ///   treemd github:epistates/treemd
     #[arg(add = markdown_file_completer())]
     pub file: Vec<PathBuf>,
+
+    /// Print a man page to stdout (roff format)
+    ///
+    /// Generates the treemd(1) man page for packaging:
+    ///   treemd --man-page > treemd.1
+    #[arg(long = "man-page")]
+    pub man_page: bool,
 
     /// Show heading at or before a specific line number (non-interactive)
     ///

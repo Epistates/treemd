@@ -1,7 +1,7 @@
 mod layout;
 mod popups;
 mod table;
-mod util;
+pub mod util;
 
 use layout::{DynamicLayout, Section};
 
@@ -184,22 +184,38 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
         };
         (&app.doc_search.query, app.doc_search.active, info)
     } else {
-        // Outline search
-        (&app.search_query, app.outline_search_active, String::new())
+        // Outline search — show how many headings the filter currently matches
+        let total = app.document.headings.len();
+        let shown = app
+            .outline_items
+            .iter()
+            .filter(|item| item.heading_index.is_some())
+            .count();
+        let info = if app.search_query.is_empty() {
+            String::new()
+        } else if shown == 0 {
+            " [no matches]".to_string()
+        } else {
+            format!(" [{}/{} headings]", shown, total)
+        };
+        (&app.search_query, app.outline_search_active, info)
     };
 
-    // Styling based on search type
+    let theme = &app.theme;
+
+    // Styling based on search type (accents derive from the theme so the
+    // bar respects custom themes and the 256-color compat layer)
     let (label, title, accent_color) = if is_doc_search {
         (
             "Find",
             " Content Search (Tab: switch to Outline) ",
-            Color::Cyan,
+            theme.link_fg,
         )
     } else {
         (
             "Filter",
             " Outline Search (Tab: switch to Content) ",
-            Color::Yellow,
+            theme.search_match_bg,
         )
     };
 
@@ -221,15 +237,17 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw(match_info),
     ];
 
-    // Add hint text - consistent for both modes
+    // Add hint text
     let hint = if is_active {
-        "  (Esc, Ctrl+U)"
+        "  (Esc: cancel • Ctrl+U: clear • Ctrl+W: del word)"
+    } else if is_doc_search {
+        "  (Esc: clear • Tab: switch • /: edit)"
     } else {
-        "  (Esc, Tab, /: edit)"
+        "  (Esc: clear • Tab: switch • s: edit)"
     };
     line_spans.push(Span::styled(
         hint.to_string(),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.help_desc_fg),
     ));
 
     let paragraph = Paragraph::new(Line::from(line_spans))
@@ -238,9 +256,9 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(accent_color))
                 .title(title)
-                .style(Style::default().bg(Color::Rgb(30, 30, 50))),
+                .style(Style::default().bg(theme.modal_bg())),
         )
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(theme.foreground));
 
     frame.render_widget(paragraph, area);
 }
@@ -789,11 +807,7 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
         } else if let Some(error) = app.mermaid_render_errors.get(&hash) {
             let prefix = "⚠ mermaid render failed: ";
             let max_msg_len = (inner.width as usize).saturating_sub(prefix.len());
-            let truncated = if error.len() > max_msg_len {
-                format!("{}…", &error[..max_msg_len.saturating_sub(1)])
-            } else {
-                error.clone()
-            };
+            let truncated = util::truncate_with_ellipsis(error, max_msg_len);
             let error_line = Line::from(vec![
                 Span::styled("⚠ ", Style::default().fg(Color::Yellow)),
                 Span::styled(
@@ -829,8 +843,9 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_multi_frame = app.image_modal.gif_frames.len() > 1;
 
     // Calculate modal area - centered on screen with padding
-    let modal_width = (area.width * 80) / 100;
-    let modal_height = (area.height * 80) / 100;
+    // (u32 math: u16 multiplication can overflow on very wide terminals)
+    let modal_width = (u32::from(area.width) * 80 / 100) as u16;
+    let modal_height = (u32::from(area.height) * 80 / 100) as u16;
     let modal_x = area.x + (area.width.saturating_sub(modal_width)) / 2;
     let modal_y = area.y + (area.height.saturating_sub(modal_height)) / 2;
 
@@ -1166,19 +1181,74 @@ fn render_border_only(
     }
 }
 
+/// The persistent mode chip shown at the left edge of the status bar.
+/// Visible even while a status message occupies the rest of the bar, so the
+/// user never loses track of which mode they're in.
+fn mode_chip(app: &App) -> Option<(&'static str, Style)> {
+    use crate::tui::app::AppMode;
+    let theme = &app.theme;
+
+    let chip_style = |accent: Color| {
+        Style::default()
+            .bg(accent)
+            .fg(theme.background)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    match app.mode {
+        AppMode::Interactive => {
+            let label = if app.interactive_state.is_in_table_mode() {
+                " TABLE "
+            } else {
+                " INTERACTIVE "
+            };
+            Some((label, chip_style(theme.heading_2)))
+        }
+        AppMode::LinkFollow => Some((" LINKS ", chip_style(theme.heading_3))),
+        AppMode::DocSearch => Some((" SEARCH ", chip_style(theme.heading_4))),
+        AppMode::Search => Some((" FILTER ", chip_style(theme.heading_4))),
+        AppMode::CellEdit => Some((" EDIT ", chip_style(theme.heading_5))),
+        AppMode::CommandPalette => Some((" PALETTE ", chip_style(theme.heading_1))),
+        AppMode::FilePicker | AppMode::FileSearch => Some((" FILES ", chip_style(theme.heading_3))),
+        _ => None,
+    }
+}
+
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     use crate::tui::app::AppMode;
 
-    // If there's a status message, display it prominently
+    let theme = &app.theme;
+    let mut spans: Vec<Span> = Vec::new();
+    if let Some((label, style)) = mode_chip(app) {
+        spans.push(Span::styled(label, style));
+        spans.push(Span::raw(" "));
+    }
+
+    // If there's a status message, it occupies the rest of the bar (the mode
+    // chip stays visible on the left)
     if let Some(ref msg) = app.status_message {
-        let status = Paragraph::new(msg.clone()).style(
+        spans.push(Span::styled(
+            format!(" {} ", msg),
             Style::default()
-                .bg(Color::Rgb(0, 80, 120))
-                .fg(Color::White)
+                .bg(theme.selection_bg)
+                .fg(theme.selection_fg)
                 .add_modifier(Modifier::BOLD),
-        );
+        ));
+        let status = Paragraph::new(Line::from(spans)).style(theme.status_bar_style());
         frame.render_widget(status, area);
         return;
+    }
+
+    // Pending vim-style count prefix (e.g. the "12" of "12j")
+    if let Some(count) = app.count_prefix {
+        spans.push(Span::styled(
+            format!(" {} ", count),
+            Style::default()
+                .bg(theme.selection_bg)
+                .fg(theme.selection_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
     }
 
     let status_text = if app.mode == AppMode::Interactive {
@@ -1199,7 +1269,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         let element_hint = app.interactive_state.get_status_hint();
 
         format!(
-            " [INTERACTIVE] {}/{} ({}%) • {}",
+            " {}/{} ({}%) • {}",
             current, total, percentage, element_hint
         )
     } else if app.mode == AppMode::LinkFollow {
@@ -1228,11 +1298,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                     LinkTarget::WikiLink { target, .. } => format!("[[{}]]", target),
                     LinkTarget::External(url) => {
                         // Truncate long URLs
-                        if url.len() > 40 {
-                            format!("{}...", &url[..37])
-                        } else {
-                            url.clone()
-                        }
+                        util::truncate_with_ellipsis(url, 40)
                     }
                 };
 
@@ -1247,7 +1313,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             "No links in current section".to_string()
         };
 
-        format!(" [LINKS] {} ", link_info)
+        format!(" {} ", link_info)
     } else {
         // Normal mode status - show position based on focus
         let (focus_indicator, position_info) = match app.focus {
@@ -1313,126 +1379,160 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         status_text, theme_name, raw_indicator, latex_indicator
     );
 
-    let status_style = if app.mode == AppMode::Interactive {
-        Style::default()
-            .bg(Color::Rgb(80, 60, 120))
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
-    } else if app.mode == AppMode::LinkFollow {
-        Style::default()
-            .bg(Color::Rgb(0, 100, 0))
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        app.theme.status_bar_style()
-    };
-
-    let status = Paragraph::new(status_text).style(status_style);
+    spans.push(Span::raw(status_text));
+    let status = Paragraph::new(Line::from(spans)).style(theme.status_bar_style());
 
     frame.render_widget(status, area);
 }
 
-/// Render the footer with context-aware keybinding hints
+/// Render the footer with context-aware keybinding hints.
+///
+/// Key labels are derived from the live keybindings (like the help overlay)
+/// so the footer stays accurate when the user remaps keys.
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
+    use crate::keybindings::{Action, KeybindingMode};
     use crate::tui::app::AppMode;
 
     let theme = &app.theme;
 
-    // Define keybindings based on current mode
-    let keys: Vec<(&str, &str)> = match app.mode {
+    // Look up the display label for an action's bound keys (e.g. "j/k")
+    let label = |mode: KeybindingMode, actions: &[Action]| -> String {
+        actions
+            .iter()
+            .filter_map(|a| app.keybindings.keys_for_action(mode, *a).into_iter().next())
+            .collect::<Vec<String>>()
+            .join("/")
+    };
+
+    // (mode, actions, description) per hint; labels resolved from bindings
+    type Hint = (KeybindingMode, &'static [Action], &'static str);
+    let hints: Vec<Hint> = match app.mode {
         AppMode::Interactive => {
+            use Action::*;
+            use KeybindingMode::{Interactive, InteractiveTable};
+
             // Check if we're in table mode
             if app.interactive_state.is_in_table_mode() {
                 vec![
-                    ("j/k", "Row"),
-                    ("h/l", "Col"),
-                    ("e", "Edit"),
-                    ("y", "Copy"),
-                    ("Esc", "Exit Table"),
+                    (
+                        InteractiveTable,
+                        &[InteractiveNext, InteractivePrevious],
+                        "Row",
+                    ),
+                    (
+                        InteractiveTable,
+                        &[InteractiveLeft, InteractiveRight],
+                        "Col",
+                    ),
+                    (InteractiveTable, &[InteractiveActivate], "Edit"),
+                    (InteractiveTable, &[CopyTableCell], "Copy"),
+                    (InteractiveTable, &[ExitMode], "Exit Table"),
                 ]
             } else {
                 // Get current element type for context-specific hints
                 use crate::tui::interactive::ElementType;
 
+                let nav: Hint = (
+                    Interactive,
+                    &[InteractiveNext, InteractivePrevious],
+                    "Navigate",
+                );
+                let exit: Hint = (Interactive, &[ExitInteractiveMode], "Exit");
                 match app.interactive_state.current_element() {
                     Some(elem) => match &elem.element_type {
                         ElementType::Checkbox { .. } => {
-                            vec![("j/k", "Navigate"), ("Space", "Toggle"), ("Esc", "Exit")]
+                            vec![nav, (Interactive, &[InteractiveActivate], "Toggle"), exit]
                         }
-                        ElementType::Table { .. } => {
-                            vec![
-                                ("j/k", "Navigate"),
-                                ("Enter", "Enter Table"),
-                                ("y", "Copy"),
-                                ("Esc", "Exit"),
-                            ]
-                        }
-                        ElementType::Link { .. } => {
-                            vec![
-                                ("j/k", "Navigate"),
-                                ("Enter", "Follow"),
-                                ("y", "Copy URL"),
-                                ("Esc", "Exit"),
-                            ]
-                        }
+                        ElementType::Table { .. } => vec![
+                            nav,
+                            (Interactive, &[InteractiveActivate], "Enter Table"),
+                            (Interactive, &[CopyContent], "Copy"),
+                            exit,
+                        ],
+                        ElementType::Link { .. } => vec![
+                            nav,
+                            (Interactive, &[InteractiveActivate], "Follow"),
+                            (Interactive, &[CopyContent], "Copy URL"),
+                            exit,
+                        ],
                         ElementType::Details { .. } => {
-                            vec![("j/k", "Navigate"), ("Enter", "Expand"), ("Esc", "Exit")]
+                            vec![nav, (Interactive, &[InteractiveActivate], "Expand"), exit]
                         }
                         ElementType::CodeBlock { .. } => {
-                            vec![("j/k", "Navigate"), ("y", "Copy"), ("Esc", "Exit")]
+                            vec![nav, (Interactive, &[CopyContent], "Copy"), exit]
                         }
                         ElementType::Image { .. } => {
-                            vec![("j/k", "Navigate"), ("Enter", "Open"), ("Esc", "Exit")]
+                            vec![nav, (Interactive, &[InteractiveActivate], "Open"), exit]
                         }
                     },
-                    None => vec![("j/k", "Navigate"), ("Enter", "Action"), ("Esc", "Exit")],
+                    None => vec![nav, (Interactive, &[InteractiveActivate], "Action"), exit],
                 }
             }
         }
         AppMode::LinkFollow => {
+            use Action::*;
+            use KeybindingMode::LinkFollow;
             vec![
-                ("Tab", "Next Link"),
-                ("1-9", "Jump"),
-                ("Enter", "Follow"),
-                ("y", "Copy URL"),
-                ("Esc", "Exit"),
+                (LinkFollow, &[NextLink], "Next Link"),
+                (LinkFollow, &[FollowLink], "Follow"),
+                (LinkFollow, &[CopyContent], "Copy URL"),
+                (LinkFollow, &[ExitMode], "Exit"),
             ]
         }
         AppMode::DocSearch => {
+            use Action::*;
+            use KeybindingMode::DocSearch;
             vec![
-                ("n/N", "Next/Prev"),
-                ("Tab", "Outline Search"),
-                ("Enter", "Accept"),
-                ("Esc", "Cancel"),
+                (DocSearch, &[NextMatch, PrevMatch], "Next/Prev"),
+                (DocSearch, &[ToggleSearchMode], "Outline Search"),
+                (DocSearch, &[ConfirmAction], "Accept"),
+                (DocSearch, &[ExitMode], "Cancel"),
             ]
         }
         AppMode::CellEdit => {
-            vec![("Enter", "Save"), ("Esc", "Cancel")]
+            use Action::*;
+            use KeybindingMode::CellEdit;
+            vec![
+                (CellEdit, &[ConfirmAction], "Save"),
+                (CellEdit, &[CancelAction], "Cancel"),
+            ]
         }
         AppMode::CommandPalette => {
-            vec![("j/k", "Navigate"), ("Enter", "Select"), ("Esc", "Cancel")]
+            use Action::*;
+            use KeybindingMode::CommandPalette;
+            vec![
+                (
+                    CommandPalette,
+                    &[CommandPaletteNext, CommandPalettePrev],
+                    "Navigate",
+                ),
+                (CommandPalette, &[ConfirmAction], "Select"),
+                (CommandPalette, &[ExitMode], "Cancel"),
+            ]
         }
         _ => {
+            use Action::*;
+            use KeybindingMode::Normal;
             // Normal mode - show based on focus
             match app.focus {
                 Focus::Outline => {
                     vec![
-                        ("j/k", "Navigate"),
-                        ("Enter", "Select"),
-                        ("/", "Search"),
-                        ("i", "Interactive"),
-                        ("f", "Links"),
-                        ("?", "Help"),
+                        (Normal, &[Next, Previous], "Navigate"),
+                        (Normal, &[ToggleExpand], "Expand"),
+                        (Normal, &[EnterDocSearch], "Search"),
+                        (Normal, &[EnterInteractiveMode], "Interactive"),
+                        (Normal, &[EnterLinkFollowMode], "Links"),
+                        (Normal, &[ToggleHelp], "Help"),
                     ]
                 }
                 Focus::Content => {
                     vec![
-                        ("j/k", "Scroll"),
-                        ("/", "Search"),
-                        ("i", "Interactive"),
-                        ("f", "Links"),
-                        ("y", "Copy"),
-                        ("?", "Help"),
+                        (Normal, &[Next, Previous], "Scroll"),
+                        (Normal, &[EnterDocSearch], "Search"),
+                        (Normal, &[EnterInteractiveMode], "Interactive"),
+                        (Normal, &[EnterLinkFollowMode], "Links"),
+                        (Normal, &[CopyContent], "Copy"),
+                        (Normal, &[ToggleHelp], "Help"),
                     ]
                 }
             }
@@ -1440,14 +1540,19 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     // Build styled spans using flat_map pattern
-    let spans: Vec<Span> = keys
+    let spans: Vec<Span> = hints
         .iter()
-        .flat_map(|(key, desc)| {
-            vec![
+        .filter_map(|(mode, actions, desc)| {
+            let key = label(*mode, actions);
+            if key.is_empty() {
+                return None; // action unbound in user config — hide the hint
+            }
+            Some(vec![
                 Span::styled(format!(" {} ", key), theme.help_key_style()),
                 Span::styled(format!("{} ", desc), theme.help_desc_style()),
-            ]
+            ])
         })
+        .flatten()
         .collect();
 
     let line = Line::from(spans);
@@ -1904,6 +2009,10 @@ fn render_markdown_enhanced(
                 content,
                 blocks: nested,
             } => {
+                // GFM alerts / Obsidian callouts: > [!NOTE], > [!warning] …
+                if let Some(callout_lines) = render_callout_lines(content, theme) {
+                    lines.extend(callout_lines);
+                } else
                 // If we have nested blocks, render them recursively
                 if !nested.is_empty() {
                     for nested_block in nested {
@@ -1993,20 +2102,17 @@ fn render_markdown_enhanced(
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
-                img_line.push(Span::styled(
-                    "🖼 ",
-                    Style::default().fg(Color::Rgb(150, 150, 150)),
-                ));
+                img_line.push(Span::styled("🖼 ", Style::default().fg(theme.list_bullet)));
                 img_line.push(Span::styled(
                     alt.clone(),
                     Style::default()
-                        .fg(Color::Rgb(100, 150, 200))
+                        .fg(theme.link_fg)
                         .add_modifier(Modifier::ITALIC),
                 ));
                 img_line.push(Span::raw(" "));
                 img_line.push(Span::styled(
                     format!("({})", src),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme.blockquote_fg),
                 ));
                 lines.push(Line::from(img_line));
 
@@ -2169,9 +2275,10 @@ fn render_markdown_enhanced(
                 }
             }
             ContentBlock::HorizontalRule => {
+                let width = available_width.map(|w| w as usize).unwrap_or(60).max(1);
                 lines.push(Line::from(vec![Span::styled(
-                    "─".repeat(60),
-                    Style::default().fg(Color::Rgb(80, 80, 100)),
+                    "─".repeat(width),
+                    Style::default().fg(theme.border_unfocused),
                 )]));
             }
         }
@@ -2324,6 +2431,96 @@ fn safe_slice(s: &str, start: usize, end: usize) -> Option<&str> {
     Some(&s[start..end])
 }
 
+/// A recognized GFM alert / Obsidian callout marker like `[!NOTE]` or
+/// `[!warning] Custom title` at the start of a blockquote.
+struct CalloutMarker {
+    kind: String,
+    title: String,
+}
+
+/// Parse the first line of a blockquote for a callout marker.
+fn parse_callout_marker(first_line: &str) -> Option<CalloutMarker> {
+    let trimmed = first_line.trim();
+    let rest = trimmed.strip_prefix("[!")?;
+    let end = rest.find(']')?;
+    let kind_raw = &rest[..end];
+    if kind_raw.is_empty()
+        || !kind_raw
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+
+    // Obsidian fold markers (`[!note]+` / `[!note]-`) and optional title
+    let mut after = rest[end + 1..].trim_start();
+    if let Some(stripped) = after.strip_prefix(['+', '-']) {
+        after = stripped.trim_start();
+    }
+
+    let title = if after.is_empty() {
+        // Title-case the kind: NOTE -> Note
+        let lower = kind_raw.to_ascii_lowercase();
+        let mut chars = lower.chars();
+        match chars.next() {
+            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            None => return None,
+        }
+    } else {
+        after.to_string()
+    };
+
+    Some(CalloutMarker {
+        kind: kind_raw.to_ascii_uppercase(),
+        title,
+    })
+}
+
+/// Icon and accent color for a callout kind (GFM alerts + common Obsidian
+/// callout kinds; unknown kinds get a neutral default).
+fn callout_decoration(kind: &str, theme: &Theme) -> (&'static str, Color) {
+    match kind {
+        "NOTE" | "INFO" => ("ℹ", theme.link_fg),
+        "TIP" | "HINT" | "SUCCESS" | "CHECK" | "DONE" => ("💡", theme.heading_3),
+        "IMPORTANT" => ("❗", theme.heading_1),
+        "WARNING" | "ATTENTION" => ("⚠", theme.search_match_bg),
+        "CAUTION" | "DANGER" | "ERROR" | "BUG" | "FAILURE" | "FAIL" => {
+            ("🛑", theme.search_current_bg)
+        }
+        "QUESTION" | "FAQ" | "HELP" => ("❓", theme.heading_4),
+        "EXAMPLE" => ("✏", theme.heading_5),
+        "QUOTE" | "CITE" => ("❝", theme.blockquote_fg),
+        "TODO" => ("☐", theme.heading_2),
+        "ABSTRACT" | "SUMMARY" | "TLDR" => ("📋", theme.heading_2),
+        _ => ("❯", theme.link_fg),
+    }
+}
+
+/// Render a blockquote as a styled callout if its first line carries a
+/// callout marker. Returns None when the blockquote is not a callout.
+fn render_callout_lines(content: &str, theme: &Theme) -> Option<Vec<Line<'static>>> {
+    let mut content_lines = content.lines();
+    let marker = parse_callout_marker(content_lines.next()?)?;
+    let (icon, accent) = callout_decoration(&marker.kind, theme);
+
+    let bar = || Span::styled("▌ ", Style::default().fg(accent));
+    let mut lines = vec![Line::from(vec![
+        bar(),
+        Span::styled(
+            format!("{} {}", icon, marker.title),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ),
+    ])];
+
+    for line in content_lines {
+        let mut spans = vec![bar()];
+        spans.extend(format_inline_markdown(line, theme));
+        lines.push(Line::from(spans));
+    }
+
+    Some(lines)
+}
+
 fn render_block_to_lines(
     block: &ContentBlock,
     highlighter: &SyntaxHighlighter,
@@ -2468,6 +2665,11 @@ fn render_block_to_lines(
             }
         }
         ContentBlock::Blockquote { content, blocks } => {
+            // GFM alerts / Obsidian callouts: > [!NOTE], > [!warning] …
+            if let Some(callout_lines) = render_callout_lines(content, theme) {
+                lines.extend(callout_lines);
+                return lines;
+            }
             // Render blockquote with > prefix
             let formatted = format_inline_markdown(content, theme);
             let mut quote_spans = vec![Span::styled(
@@ -2505,9 +2707,10 @@ fn render_block_to_lines(
             lines.push(Line::from(image_spans));
         }
         ContentBlock::HorizontalRule => {
+            let width = available_width.map(|w| w as usize).unwrap_or(40).max(1);
             lines.push(Line::from(vec![Span::styled(
-                "─".repeat(40),
-                Style::default().fg(Color::Rgb(80, 80, 100)),
+                "─".repeat(width),
+                Style::default().fg(theme.border_unfocused),
             )]));
         }
     }
@@ -2567,7 +2770,7 @@ fn render_inline_elements(
                 spans.push(Span::styled(
                     value.clone(),
                     Style::default()
-                        .fg(Color::Rgb(120, 120, 120))
+                        .fg(theme.blockquote_fg)
                         .add_modifier(Modifier::CROSSED_OUT),
                 ));
             }
@@ -2695,4 +2898,56 @@ pub(crate) fn format_inline_markdown<'a>(text: &str, theme: &Theme) -> Vec<Span<
     }
 
     spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn callout_marker_basic_kinds() {
+        let m = parse_callout_marker("[!NOTE]").unwrap();
+        assert_eq!(m.kind, "NOTE");
+        assert_eq!(m.title, "Note");
+
+        let m = parse_callout_marker("[!warning]").unwrap();
+        assert_eq!(m.kind, "WARNING");
+        assert_eq!(m.title, "Warning");
+    }
+
+    #[test]
+    fn callout_marker_custom_title_and_fold() {
+        let m = parse_callout_marker("[!tip] Read this first").unwrap();
+        assert_eq!(m.kind, "TIP");
+        assert_eq!(m.title, "Read this first");
+
+        let m = parse_callout_marker("[!note]- Folded title").unwrap();
+        assert_eq!(m.kind, "NOTE");
+        assert_eq!(m.title, "Folded title");
+    }
+
+    #[test]
+    fn callout_marker_rejects_non_markers() {
+        assert!(parse_callout_marker("plain quote").is_none());
+        assert!(parse_callout_marker("[!]").is_none());
+        assert!(parse_callout_marker("[! has space]").is_none());
+        assert!(parse_callout_marker("[note]").is_none());
+    }
+
+    #[test]
+    fn callout_render_produces_header_and_body() {
+        let theme = Theme::ocean_dark();
+        let lines = render_callout_lines("[!NOTE]\nbody text", &theme).unwrap();
+        assert_eq!(lines.len(), 2);
+        let header: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(header.contains("Note"));
+        let body: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(body.contains("body text"));
+    }
+
+    #[test]
+    fn non_callout_blockquote_is_untouched() {
+        let theme = Theme::ocean_dark();
+        assert!(render_callout_lines("just a quote", &theme).is_none());
+    }
 }

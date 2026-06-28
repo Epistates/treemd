@@ -42,6 +42,28 @@ fn terminal_char_width(c: char) -> usize {
     }
 }
 
+/// Truncate text to at most `max_width` terminal columns, appending `…` when
+/// truncation occurs. Width-aware (CJK, emoji) and never slices inside a
+/// multi-byte character.
+pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
+    if terminal_width(text) <= max_width {
+        return text.to_string();
+    }
+    let budget = max_width.saturating_sub(1); // reserve one column for '…'
+    let mut width = 0usize;
+    let mut out = String::new();
+    for c in text.chars() {
+        let w = terminal_char_width(c);
+        if width + w > budget {
+            break;
+        }
+        width += w;
+        out.push(c);
+    }
+    out.push('…');
+    out
+}
+
 /// Calculate a popup area with minimum size constraints.
 ///
 /// Returns a `Rect` that is centered within the parent area, sized as a
@@ -61,9 +83,12 @@ pub fn popup_area(
     min_width: u16,
     min_height: u16,
 ) -> Rect {
-    // Calculate percentage-based dimensions
-    let pct_width = area.width * percent_x / 100;
-    let pct_height = area.height * percent_y / 100;
+    // Calculate percentage-based dimensions (u32 math: u16 * u16 can overflow
+    // on very wide terminals)
+    let pct_width =
+        (u32::from(area.width) * u32::from(percent_x) / 100).min(u16::MAX as u32) as u16;
+    let pct_height =
+        (u32::from(area.height) * u32::from(percent_y) / 100).min(u16::MAX as u32) as u16;
 
     // Apply minimum constraints, but don't exceed parent
     let width = pct_width.max(min_width).min(area.width);

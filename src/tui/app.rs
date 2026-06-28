@@ -88,6 +88,9 @@ pub enum CommandAction {
     /// Expand headings at a specific level (parsed from command argument)
     ExpandLevel,
     Quit,
+    /// Forward to the regular keybinding action dispatch — lets the palette
+    /// cover every command without duplicating handlers
+    Dispatch(Action),
 }
 
 /// A command in the palette
@@ -286,6 +289,90 @@ pub const PALETTE_COMMANDS: &[PaletteCommand] = &[
         CommandAction::ExpandLevel,
     ),
     PaletteCommand::new(
+        "Theme picker",
+        &["theme", "colors"],
+        "Choose a color theme (live preview)",
+        CommandAction::Dispatch(Action::ToggleThemePicker),
+    ),
+    PaletteCommand::new(
+        "Search content",
+        &["/", "find", "search"],
+        "Search the document content",
+        CommandAction::Dispatch(Action::EnterDocSearch),
+    ),
+    PaletteCommand::new(
+        "Filter outline",
+        &["s", "filter"],
+        "Filter outline headings",
+        CommandAction::Dispatch(Action::EnterSearchMode),
+    ),
+    PaletteCommand::new(
+        "Interactive mode",
+        &["i", "interactive"],
+        "Navigate tables, checkboxes, links and code blocks",
+        CommandAction::Dispatch(Action::EnterInteractiveMode),
+    ),
+    PaletteCommand::new(
+        "Link mode",
+        &["f", "links", "follow"],
+        "Follow links in the current section",
+        CommandAction::Dispatch(Action::EnterLinkFollowMode),
+    ),
+    PaletteCommand::new(
+        "Open in editor",
+        &["e", "edit", "editor"],
+        "Open the file in $VISUAL/$EDITOR at the current position",
+        CommandAction::Dispatch(Action::OpenInEditor),
+    ),
+    PaletteCommand::new(
+        "Open file picker",
+        &["o", "open", "files"],
+        "Browse and open markdown files",
+        CommandAction::Dispatch(Action::OpenFilePicker),
+    ),
+    PaletteCommand::new(
+        "Set bookmark",
+        &["m", "mark", "bookmark"],
+        "Bookmark the current position",
+        CommandAction::Dispatch(Action::SetBookmark),
+    ),
+    PaletteCommand::new(
+        "Jump to bookmark",
+        &["'", "gotomark"],
+        "Jump to the bookmarked position",
+        CommandAction::Dispatch(Action::JumpToBookmark),
+    ),
+    PaletteCommand::new(
+        "Copy section",
+        &["y", "copy", "yank"],
+        "Copy current section content to clipboard",
+        CommandAction::Dispatch(Action::CopyContent),
+    ),
+    PaletteCommand::new(
+        "Copy anchor link",
+        &["anchor"],
+        "Copy the current heading's anchor link",
+        CommandAction::Dispatch(Action::CopyAnchor),
+    ),
+    PaletteCommand::new(
+        "Toggle TODO filter",
+        &["todo", "tasks"],
+        "Show only sections containing open tasks",
+        CommandAction::Dispatch(Action::ToggleTodoFilter),
+    ),
+    PaletteCommand::new(
+        "Go back",
+        &["back", "b"],
+        "Go back to the previous file",
+        CommandAction::Dispatch(Action::GoBack),
+    ),
+    PaletteCommand::new(
+        "Go forward",
+        &["forward"],
+        "Go forward in navigation history",
+        CommandAction::Dispatch(Action::GoForward),
+    ),
+    PaletteCommand::new(
         "Quit",
         &["q", "quit", "exit"],
         "Exit treemd",
@@ -374,10 +461,25 @@ pub struct ImageModalState {
     pub animation_paused: bool,
 }
 
+/// A high-level edit applied to whichever text-input field is active.
+/// Keys are translated to edits in one place so every input field gets the
+/// same editing behavior (and modifier chords never insert literal chars).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextInputEdit {
+    Insert(char),
+    /// Ctrl+U — clear the whole input
+    Clear,
+    /// Ctrl+W — delete the trailing word
+    DeleteWord,
+}
+
 /// A pending table cell edit that hasn't been saved to file yet
 #[derive(Debug, Clone)]
 pub struct PendingEdit {
-    /// Which table in the file (0-indexed)
+    /// Source line (0-indexed) where the table's section starts; table
+    /// counting for this edit begins at this line
+    pub section_start_line: usize,
+    /// Which table within the section (0-indexed)
     pub table_index: usize,
     /// Row within the table (0 = header, 1+ = data rows, excludes separator)
     pub row: usize,
@@ -1793,10 +1895,11 @@ impl App {
             AppMode::Search => self.show_search = false,
             AppMode::DocSearch => self.accept_doc_search(),
             AppMode::CommandPalette => {
-                // Execute command - Quit is handled separately
-                let should_quit = self.execute_selected_command();
-                if should_quit {
-                    return Some(ActionResult::Quit);
+                // Execute command - propagate non-trivial results (Quit,
+                // RunEditor, Redraw) to the main loop
+                match self.execute_selected_command() {
+                    ActionResult::Continue => {}
+                    result => return Some(result),
                 }
             }
             AppMode::CellEdit => {
@@ -1831,19 +1934,23 @@ impl App {
         }
     }
 
+    /// Drop all buffered edits and clear the unsaved-changes flag.
+    pub fn discard_pending_edits(&mut self) {
+        self.pending_edits.clear();
+        self.has_unsaved_changes = false;
+    }
+
     /// Handle discard and quit action (quit without saving)
     fn handle_discard_and_quit(&mut self) -> Option<ActionResult> {
         match self.mode {
             AppMode::ConfirmSaveBeforeQuit => {
                 // Discard changes and quit
-                self.pending_edits.clear();
-                self.has_unsaved_changes = false;
+                self.discard_pending_edits();
                 Some(ActionResult::Quit)
             }
             AppMode::ConfirmSaveBeforeNav => {
                 // Discard changes and quit (instead of navigating)
-                self.pending_edits.clear();
-                self.has_unsaved_changes = false;
+                self.discard_pending_edits();
                 self.pending_navigation = None;
                 Some(ActionResult::Quit)
             }
@@ -1856,8 +1963,7 @@ impl App {
         match self.mode {
             AppMode::ConfirmSaveBeforeNav => {
                 // Discard changes and navigate
-                self.pending_edits.clear();
-                self.has_unsaved_changes = false;
+                self.discard_pending_edits();
                 self.execute_pending_navigation();
             }
             AppMode::ConfirmSaveBeforeQuit => {
@@ -2012,15 +2118,17 @@ impl App {
         self.set_status_message(msg);
     }
 
-    /// Set a status message with automatic timeout tracking
+    /// Set an informational status message that auto-expires after a few
+    /// seconds. Messages assigned directly to `status_message` (without a
+    /// timestamp) are treated as sticky and dismissed on the next keypress.
     pub fn set_status_message(&mut self, msg: &str) {
         self.status_message = Some(msg.to_string());
         self.status_message_time = Some(Instant::now());
     }
 
-    /// Clear status message if it has expired (default 1 second timeout)
+    /// Clear status message if it has expired
     pub fn clear_expired_status_message(&mut self) {
-        const STATUS_MESSAGE_TIMEOUT: Duration = Duration::from_secs(1);
+        const STATUS_MESSAGE_TIMEOUT: Duration = Duration::from_secs(3);
 
         if let Some(time) = self.status_message_time
             && time.elapsed() >= STATUS_MESSAGE_TIMEOUT
@@ -2028,6 +2136,126 @@ impl App {
             self.status_message = None;
             self.status_message_time = None;
         }
+    }
+
+    /// Dismiss a sticky status message (one set without a timestamp, e.g.
+    /// errors). Called on the next keypress so errors stay visible until the
+    /// user acts, while timed info messages expire on their own.
+    pub fn dismiss_sticky_status_message(&mut self) {
+        if self.status_message.is_some() && self.status_message_time.is_none() {
+            self.status_message = None;
+        }
+    }
+
+    /// Delete the trailing whitespace-delimited word from a string (Ctrl+W).
+    fn delete_last_word(s: &mut String) {
+        while s.chars().last().is_some_and(char::is_whitespace) {
+            s.pop();
+        }
+        while s.chars().last().is_some_and(|c| !c.is_whitespace()) {
+            s.pop();
+        }
+    }
+
+    /// Route a text edit to whichever input field is currently active
+    /// (outline search, doc search, link search, file search, command
+    /// palette, cell edit). Returns true if an active field consumed it.
+    pub fn apply_text_input_edit(&mut self, edit: TextInputEdit) -> bool {
+        use TextInputEdit::*;
+
+        // Outline search
+        if self.show_search && self.outline_search_active {
+            match edit {
+                Insert(c) => self.search_input(c),
+                Clear => {
+                    self.search_query.clear();
+                    self.filter_outline();
+                }
+                DeleteWord => {
+                    Self::delete_last_word(&mut self.search_query);
+                    self.filter_outline();
+                }
+            }
+            return true;
+        }
+
+        // Doc search
+        if self.mode == AppMode::DocSearch && self.doc_search.active {
+            match edit {
+                Insert(c) => self.doc_search_input(c),
+                Clear => {
+                    self.doc_search.query.clear();
+                    self.update_doc_search_matches();
+                }
+                DeleteWord => {
+                    Self::delete_last_word(&mut self.doc_search.query);
+                    self.update_doc_search_matches();
+                }
+            }
+            return true;
+        }
+
+        // Link search
+        if self.mode == AppMode::LinkFollow && self.link_picker.active {
+            match edit {
+                Insert(c) => self.link_search_push(c),
+                Clear => {
+                    self.link_picker.query.clear();
+                    self.update_link_filter();
+                }
+                DeleteWord => {
+                    Self::delete_last_word(&mut self.link_picker.query);
+                    self.update_link_filter();
+                }
+            }
+            return true;
+        }
+
+        // File search
+        if (self.mode == AppMode::FilePicker && self.file_picker.active)
+            || self.mode == AppMode::FileSearch
+        {
+            match edit {
+                Insert(c) => self.file_search_push(c),
+                Clear => {
+                    self.file_picker.query.clear();
+                    self.update_file_filter();
+                }
+                DeleteWord => {
+                    Self::delete_last_word(&mut self.file_picker.query);
+                    self.update_file_filter();
+                }
+            }
+            return true;
+        }
+
+        // Command palette
+        if self.mode == AppMode::CommandPalette {
+            match edit {
+                Insert(c) => self.command_palette_input(c),
+                Clear => {
+                    self.command_palette.query.clear();
+                    self.filter_commands();
+                }
+                DeleteWord => {
+                    Self::delete_last_word(&mut self.command_palette.query);
+                    self.filter_commands();
+                }
+            }
+            return true;
+        }
+
+        // Cell edit
+        if self.mode == AppMode::CellEdit {
+            match edit {
+                Insert(c) => self.cell_edit_value.push(c),
+                Clear => self.cell_edit_value.clear(),
+                DeleteWord => Self::delete_last_word(&mut self.cell_edit_value),
+            }
+            return true;
+        }
+
+        false
     }
 
     /// Accumulate a digit into the vim-style count prefix
@@ -3437,7 +3665,7 @@ impl App {
     }
 
     /// Execute selected command and return whether to quit
-    pub fn execute_selected_command(&mut self) -> bool {
+    pub fn execute_selected_command(&mut self) -> ActionResult {
         if let Some(&cmd_idx) = self
             .command_palette
             .filtered
@@ -3450,12 +3678,12 @@ impl App {
             self.execute_command_action(action, &query)
         } else {
             self.mode = AppMode::Normal;
-            false
+            ActionResult::Continue
         }
     }
 
-    /// Execute a command action, returns true if should quit
-    fn execute_command_action(&mut self, action: CommandAction, query: &str) -> bool {
+    /// Execute a command action
+    fn execute_command_action(&mut self, action: CommandAction, query: &str) -> ActionResult {
         match action {
             CommandAction::SaveWidth => {
                 match self.config.set_outline_width(self.outline_width) {
@@ -3464,51 +3692,51 @@ impl App {
                             && self.outline_width != 30
                             && self.outline_width != 40;
                         self.set_status_message(&format!(
-                            "✓ Width {}% saved to config",
+                            "\u{2713} Width {}% saved to config",
                             self.outline_width
                         ));
                     }
                     Err(e) => {
-                        self.set_status_message(&format!("✗ Failed to save: {}", e));
+                        self.set_status_message(&format!("\u{2717} Failed to save: {}", e));
                     }
                 }
-                false
+                ActionResult::Continue
             }
             CommandAction::ToggleOutline => {
                 self.toggle_outline();
-                false
+                ActionResult::Continue
             }
             CommandAction::ToggleHeadingMarkers => {
                 self.toggle_heading_markers();
-                false
+                ActionResult::Continue
             }
             CommandAction::ToggleMouseCapture => {
                 self.toggle_mouse_capture();
-                false
+                ActionResult::Continue
             }
             CommandAction::ToggleHelp => {
                 self.toggle_help();
-                false
+                ActionResult::Continue
             }
             CommandAction::ToggleRawSource => {
                 self.toggle_raw_source();
-                false
+                ActionResult::Continue
             }
             CommandAction::JumpToTop => {
                 self.first();
-                false
+                ActionResult::Continue
             }
             CommandAction::JumpToBottom => {
                 self.last();
-                false
+                ActionResult::Continue
             }
             CommandAction::CollapseAll => {
                 self.collapse_all();
-                false
+                ActionResult::Continue
             }
             CommandAction::ExpandAll => {
                 self.expand_all();
-                false
+                ActionResult::Continue
             }
             CommandAction::CollapseLevel => {
                 // Parse level from query (e.g., "collapse 2" -> 2)
@@ -3517,7 +3745,7 @@ impl App {
                 } else {
                     self.collapse_all();
                 }
-                false
+                ActionResult::Continue
             }
             CommandAction::ExpandLevel => {
                 // Parse level from query (e.g., "expand 2" -> 2)
@@ -3526,29 +3754,31 @@ impl App {
                 } else {
                     self.expand_all();
                 }
-                false
+                ActionResult::Continue
             }
             CommandAction::SaveFile => {
                 if let Err(e) = self.save_pending_edits_to_file() {
-                    self.set_status_message(&format!("✗ Save failed: {}", e));
+                    self.set_status_message(&format!("\u{2717} Save failed: {}", e));
                 }
-                false
+                ActionResult::Continue
             }
             CommandAction::Undo => {
                 if let Err(e) = self.undo_last_edit() {
-                    self.set_status_message(&format!("✗ Undo failed: {}", e));
+                    self.set_status_message(&format!("\u{2717} Undo failed: {}", e));
                 }
-                false
+                ActionResult::Continue
             }
             CommandAction::Quit => {
                 if self.has_unsaved_changes {
                     // Show confirmation dialog instead of quitting immediately
                     self.mode = AppMode::ConfirmSaveBeforeQuit;
-                    false
+                    ActionResult::Continue
                 } else {
-                    true
+                    ActionResult::Quit
                 }
             }
+            // Forward to the regular keybinding action dispatch
+            CommandAction::Dispatch(action) => self.execute_action(action),
         }
     }
 
@@ -4694,8 +4924,12 @@ impl App {
             .position(state.content_scroll as usize);
     }
 
-    /// Reload current file from disk (used after external editing)
-    pub fn reload_current_file(&mut self) -> Result<(), String> {
+    /// Reload current file from disk (used after external editing).
+    ///
+    /// Returns `Ok(false)` when the on-disk content is identical to the
+    /// in-memory document (e.g. the watcher echoing back our own save),
+    /// in which case nothing is reloaded.
+    pub fn reload_current_file(&mut self) -> Result<bool, String> {
         // Save current state to restore after reload
         let current_selection = self.selected_heading_text().map(|s| s.to_string());
         let current_scroll = self.content_scroll;
@@ -4703,6 +4937,10 @@ impl App {
         // Reload the file
         let content = std::fs::read_to_string(&self.current_file_path)
             .map_err(|e| format!("Failed to reload file: {}", e))?;
+
+        if content == self.document.content {
+            return Ok(false);
+        }
 
         let document = crate::parser::parse_markdown(&content);
         let filename = self
@@ -4725,7 +4963,7 @@ impl App {
             self.content_scroll_state = self.content_scroll_state.position(current_scroll as usize);
         }
 
-        Ok(())
+        Ok(true)
     }
 
     /// Enter interactive mode - build element index and enter mode
@@ -4793,16 +5031,23 @@ impl App {
             std::fs::write(&path, &default_content)
                 .map_err(|e| format!("Failed to create file: {}", e))?;
 
-            // Load the new file
-            let relative_path = path
-                .file_name()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| path.clone());
-
             self.pending_file_create_message = None;
             self.mode = AppMode::Normal;
 
-            // Load the newly created file
+            // Load the newly created file via its path relative to the
+            // current document's directory — using only the file name here
+            // would resolve to the wrong directory for wikilinks like
+            // [[diary/notes]]
+            let current_dir = self
+                .current_file_path
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            let relative_path = path
+                .strip_prefix(&current_dir)
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| path.clone());
+
             self.load_file(&relative_path, None)?;
             self.status_message = Some(format!("✓ Created and opened {}", relative_path.display()));
             self.exit_link_follow_mode();
@@ -4904,30 +5149,58 @@ impl App {
         item_idx: usize,
         checked: bool,
     ) -> Result<(), String> {
-        // Get the checkbox content text to use as identifier
-        let checkbox_content = {
-            let content = self.current_section_content();
+        use crate::parser::content::parse_content;
+        use crate::parser::output::Block;
 
-            use crate::parser::content::parse_content;
-            let blocks = parse_content(&content, 0);
-
-            if let Some(crate::parser::output::Block::List { items, .. }) = blocks.get(block_idx) {
-                items.get(item_idx).map(|item| item.content.clone())
-            } else {
-                None
-            }
+        let clean = |raw: &str| -> String {
+            raw.trim_start()
+                .trim_start_matches("[x]")
+                .trim_start_matches("[X]")
+                .trim_start_matches("[ ]")
+                .trim()
+                .to_string()
         };
 
-        let checkbox_content =
-            checkbox_content.ok_or_else(|| "Could not find checkbox content".to_string())?;
+        // Identify the checkbox text and its occurrence index among identical
+        // checkboxes (same text, same state) in this section, so duplicates
+        // toggle the right line.
+        let content = self.current_section_content();
+        let blocks = parse_content(&content, 0);
 
-        // Read the current file
-        let file_content = std::fs::read_to_string(&self.current_file_path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
+        let target_text = if let Some(Block::List { items, .. }) = blocks.get(block_idx) {
+            items.get(item_idx).map(|item| clean(&item.content))
+        } else {
+            None
+        };
+        let target_text =
+            target_text.ok_or_else(|| "Could not find checkbox content".to_string())?;
 
-        // Find and toggle the checkbox in the file content
-        let new_content =
-            self.toggle_checkbox_by_content(&file_content, &checkbox_content, checked)?;
+        let mut occurrence = 0usize;
+        'outer: for (b_i, block) in blocks.iter().enumerate() {
+            if let Block::List { items, .. } = block {
+                for (i_i, item) in items.iter().enumerate() {
+                    if b_i == block_idx && i_i == item_idx {
+                        break 'outer;
+                    }
+                    if item.checked == Some(checked) && clean(&item.content) == target_text {
+                        occurrence += 1;
+                    }
+                }
+            }
+        }
+
+        // Apply the toggle on the in-memory content (which includes any
+        // buffered table edits) so toggling can never drop them.
+        let had_pending = self.has_unsaved_changes;
+        let line_range = self.current_section_line_range();
+        let new_content = crate::tui::edits::toggle_checkbox(
+            &self.document.content,
+            line_range,
+            &target_text,
+            checked,
+            occurrence,
+            crate::parser::utils::strip_markdown_inline,
+        )?;
 
         // Atomic write: write to temp file, then rename (prevents data corruption)
         use std::io::Write;
@@ -4951,6 +5224,12 @@ impl App {
         temp_file
             .persist(&self.current_file_path)
             .map_err(|e| format!("Failed to save file: {}", e))?;
+
+        // Any buffered table edits were persisted along with the toggle
+        if had_pending {
+            self.pending_edits.clear();
+            self.has_unsaved_changes = false;
+        }
 
         // Save scroll position and interactive element index before reload
         let saved_scroll = self.content_scroll;
@@ -4989,72 +5268,44 @@ impl App {
         self.suppress_file_watch = true;
 
         let new_state = if checked { "unchecked" } else { "checked" };
-        self.status_message = Some(format!("✓ Checkbox {} and saved", new_state));
+        self.status_message = Some(if had_pending {
+            format!(
+                "✓ Checkbox {} and saved (pending edits included)",
+                new_state
+            )
+        } else {
+            format!("✓ Checkbox {} and saved", new_state)
+        });
 
         Ok(())
     }
 
-    /// Toggle a checkbox in markdown content by matching the content text
-    fn toggle_checkbox_by_content(
-        &self,
-        file_content: &str,
-        checkbox_text: &str,
-        current_checked: bool,
-    ) -> Result<String, String> {
-        let lines: Vec<&str> = file_content.lines().collect();
-        let mut result = Vec::new();
-        let mut found = false;
+    /// 0-indexed line number of a byte offset in the document content.
+    fn line_of_offset(&self, offset: usize) -> usize {
+        let clamped = offset.min(self.document.content.len());
+        self.document.content[..clamped].matches('\n').count()
+    }
 
-        // Clean the checkbox text to match (remove any checkbox markers if present)
-        let clean_text = checkbox_text
-            .trim_start()
-            .trim_start_matches("[x]")
-            .trim_start_matches("[X]")
-            .trim_start_matches("[ ]")
-            .trim();
-
-        for line in lines {
-            let trimmed = line.trim_start();
-
-            // Check if this is a checkbox line
-            if (trimmed.starts_with("- [ ]")
-                || trimmed.starts_with("- [x]")
-                || trimmed.starts_with("- [X]"))
-                && !found
-            {
-                // Extract the text after the checkbox marker
-                let line_text = trimmed
-                    .trim_start_matches("- [ ]")
-                    .trim_start_matches("- [x]")
-                    .trim_start_matches("- [X]")
-                    .trim();
-
-                // Check if this matches our target checkbox
-                let stripped_line_text = crate::parser::utils::strip_markdown_inline(line_text);
-                if stripped_line_text == clean_text {
-                    // Toggle the checkbox
-                    let new_line = if current_checked {
-                        // Change [x] or [X] to [ ]
-                        line.replacen("[x]", "[ ]", 1).replacen("[X]", "[ ]", 1)
-                    } else {
-                        // Change [ ] to [x]
-                        line.replacen("[ ]", "[x]", 1)
-                    };
-                    result.push(new_line);
-                    found = true;
-                } else {
-                    result.push(line.to_string());
-                }
-            } else {
-                result.push(line.to_string());
-            }
-        }
-
-        if !found {
-            return Err(format!("Checkbox not found in file: '{}'", clean_text));
-        }
-
-        Ok(result.join("\n") + "\n")
+    /// 0-indexed `[start, end)` source line range of the currently selected
+    /// section (heading line through the line before the next heading at the
+    /// same or higher level), or the whole document when nothing is selected.
+    fn current_section_line_range(&self) -> (usize, usize) {
+        // Exclusive upper bound in the same 0-indexed line space as
+        // `line_of_offset` (newline count), so start/end/total never disagree.
+        let total = self.line_of_offset(self.document.content.len()) + 1;
+        let Some(idx) = self.selected_heading_index() else {
+            return (0, total);
+        };
+        let Some(heading) = self.document.headings.get(idx) else {
+            return (0, total);
+        };
+        let start = self.line_of_offset(heading.offset);
+        let end = self.document.headings[idx + 1..]
+            .iter()
+            .find(|h| h.level <= heading.level)
+            .map(|h| self.line_of_offset(h.offset))
+            .unwrap_or(total);
+        (start, end)
     }
 
     /// Follow a link from interactive mode
@@ -5238,29 +5489,31 @@ impl App {
 
         // Calculate the table index for this edit
         let table_index = self.calculate_current_table_index()?;
+        let section_start_line = self.current_section_line_range().0;
 
-        // Store the edit in the pending buffer for undo capability
-        let pending_edit = PendingEdit {
-            table_index,
-            row: self.cell_edit_row,
-            col: self.cell_edit_col,
-            original_value: self.cell_edit_original_value.clone(),
-            new_value: sanitized_value.clone(),
-        };
-        self.pending_edits.push(pending_edit);
-        self.has_unsaved_changes = true;
-
-        // Apply the edit to the in-memory document content
-        let new_content = self.replace_table_cell_in_file(
+        // Apply the edit to the in-memory document content first; only
+        // record it as pending once it has actually been applied.
+        let new_content = crate::tui::edits::replace_table_cell(
             &self.document.content,
+            section_start_line,
             table_index,
             self.cell_edit_row,
             self.cell_edit_col,
             &sanitized_value,
         )?;
-
-        // Update the in-memory document content
         self.document.content = new_content;
+
+        // Store the edit in the pending buffer for undo capability
+        let pending_edit = PendingEdit {
+            section_start_line,
+            table_index,
+            row: self.cell_edit_row,
+            col: self.cell_edit_col,
+            original_value: self.cell_edit_original_value.clone(),
+            new_value: sanitized_value,
+        };
+        self.pending_edits.push(pending_edit);
+        self.has_unsaved_changes = true;
 
         // Re-parse headings if needed (table edits don't affect heading structure)
         // The document tree stays the same, only content changed
@@ -5274,7 +5527,9 @@ impl App {
         Ok(())
     }
 
-    /// Calculate the table index for the currently selected table element
+    /// Calculate the table index (0-based, within the current section) for
+    /// the currently selected table element. Paired with the section start
+    /// line, this unambiguously identifies the table for the file writer.
     fn calculate_current_table_index(&self) -> Result<usize, String> {
         use crate::parser::content::parse_content;
         use crate::parser::output::Block;
@@ -5296,31 +5551,7 @@ impl App {
                     .filter(|b| matches!(b, Block::Table { .. }))
                     .count();
 
-                // Use heading offset to find section start (avoids unreliable string search)
-                let section_start = self
-                    .selected_heading_index()
-                    .and_then(|idx| self.document.headings.get(idx))
-                    .map(|h| h.offset)
-                    .unwrap_or(0);
-                let content_before_section =
-                    &self.document.content[..section_start.min(self.document.content.len())];
-
-                // Count tables (groups of | lines) before section
-                let mut table_count_before = 0;
-                let mut in_table = false;
-                for line in content_before_section.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with('|') && trimmed.ends_with('|') {
-                        if !in_table {
-                            in_table = true;
-                            table_count_before += 1;
-                        }
-                    } else {
-                        in_table = false;
-                    }
-                }
-
-                return Ok(table_count_before + tables_before_in_section);
+                return Ok(tables_before_in_section);
             }
         }
 
@@ -5379,8 +5610,9 @@ impl App {
     pub fn undo_last_edit(&mut self) -> Result<(), String> {
         if let Some(edit) = self.pending_edits.pop() {
             // Apply the original value back to the in-memory content
-            let new_content = self.replace_table_cell_in_file(
+            let new_content = crate::tui::edits::replace_table_cell(
                 &self.document.content,
+                edit.section_start_line,
                 edit.table_index,
                 edit.row,
                 edit.col,
@@ -5405,94 +5637,6 @@ impl App {
             self.status_message = Some("Nothing to undo".to_string());
             Ok(())
         }
-    }
-
-    /// Find and replace a cell in a specific table
-    /// table_index: which table to modify (0-indexed among tables in the content)
-    fn replace_table_cell_in_file(
-        &self,
-        content: &str,
-        table_index: usize,
-        row: usize,
-        col: usize,
-        new_value: &str,
-    ) -> Result<String, String> {
-        let lines: Vec<&str> = content.lines().collect();
-        let mut result = Vec::new();
-        let mut in_table = false;
-        let mut table_row_idx = 0;
-        let mut current_table_index = 0;
-        let mut modified = false;
-
-        for line in lines {
-            let trimmed = line.trim();
-
-            // Detect table start (line starting with |)
-            if trimmed.starts_with('|') && trimmed.ends_with('|') {
-                if !in_table {
-                    in_table = true;
-                    table_row_idx = 0;
-                }
-
-                // Skip separator rows (| --- | --- |)
-                if trimmed.contains("---") {
-                    result.push(line.to_string());
-                    continue;
-                }
-
-                // Only modify the target table at the target row
-                if current_table_index == table_index && table_row_idx == row && !modified {
-                    // Replace this row's cell
-                    let new_line = self.replace_cell_in_row(line, col, new_value);
-                    result.push(new_line);
-                    modified = true;
-                } else {
-                    result.push(line.to_string());
-                }
-
-                table_row_idx += 1;
-            } else {
-                if in_table {
-                    // Exiting a table - increment table counter
-                    in_table = false;
-                    current_table_index += 1;
-                }
-                result.push(line.to_string());
-            }
-        }
-
-        if modified {
-            Ok(result.join("\n"))
-        } else {
-            Err(format!(
-                "Table {} not found or row {} not found",
-                table_index, row
-            ))
-        }
-    }
-
-    /// Replace a specific cell in a table row line
-    fn replace_cell_in_row(&self, line: &str, col: usize, new_value: &str) -> String {
-        // Split by | and reconstruct
-        let parts: Vec<&str> = line.split('|').collect();
-
-        // Table format: | cell0 | cell1 | cell2 |
-        // After split: ["", " cell0 ", " cell1 ", " cell2 ", ""]
-        let mut new_parts = Vec::new();
-
-        for (i, part) in parts.iter().enumerate() {
-            if i == 0 || i == parts.len() - 1 {
-                // Keep empty parts at start/end
-                new_parts.push(part.to_string());
-            } else if i - 1 == col {
-                // This is the cell to replace (accounting for leading empty part)
-                new_parts.push(format!(" {} ", new_value));
-            } else {
-                new_parts.push(part.to_string());
-            }
-        }
-
-        new_parts.join("|")
     }
 
     /// Resolve an image path relative to the current markdown file.

@@ -12,6 +12,16 @@ homepage = "https://github.com/epistates/treemd"
 documentation = "https://docs.rs/treemd"
 readme = "README.md"
 rust-version = "1.90"
+# Keep the crates.io package small — excludes the demo GIF (4.3 MB), CI
+# config, and dev tooling
+exclude = [
+    "assets/",
+    ".github/",
+    "justfile",
+    "scripts/",
+    "tests/docs/",
+    "docs/",
+]
 
 [lib]
 name = "treemd"
@@ -25,6 +35,10 @@ path = "src/main.rs"
 # CLI framework
 clap = { version = "4.6", features = ["derive"] }
 clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
+clap_mangen = "0.2"
+
+# Remote document fetching (treemd <url>, treemd github:owner/repo)
+ureq = "3"
 
 unicode-width = "0.2"
 
