@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-22
+
+### Added
+
+- **Remote Markdown documents** - Open `https://` URLs directly or use `github:owner/repo` shorthand to browse a repository's README
+- **GFM and Obsidian callouts** - Render blockquote callouts such as `> [!NOTE]` with dedicated labels and styling
+- **Generated man pages** - `treemd --man-page` prints a complete manual page suitable for installation with `man`
+- **Query-language documentation and integration coverage** - Added user and implementation guides plus end-to-end fixtures for selectors, pipelines, expressions, and section extraction
+
+### Changed
+
+- **Query evaluation and section extraction were unified** - Chained selectors and pipelines now preserve their input context, while all heading-based extraction uses the parser's byte offsets and code-block-aware structure
+- **Interactive editing is transactional** - Checkbox and table edits are computed by pure, fence-aware transforms and recorded only after a successful edit; live reload refuses to overwrite buffered changes
+- **TUI interaction was modernized** - `Esc` consistently backs out, `q` quits, text-entry fields share editing shortcuts, status messages have a unified lifecycle, and help/footer/palette content follows the active keybindings and theme
+- **Dependencies were refreshed** - Updated the full lockfile, including `turbovault-parser` 1.6, `clap_mangen` 0.3, `mermaid-rs-renderer` 0.3, `regex` 1.13, and `open` 5.4
+- **Release automation was hardened** - CI now covers Rust 1.90, default/all/minimal feature sets, strict Clippy and formatting, package validation, dependency auditing, and locked release builds across Linux, macOS, and Windows; weekly Cargo and GitHub Actions updates are enabled
+
+### Fixed
+
+- **Query-language correctness** - Fixed chained selectors, object-expression context, subtraction lexing, malformed-number errors, `elif` parsing, array indexing, per-element `any`/`all`/`sort_by`/`group_by`, Unicode string lengths, oversized repetition, invalid regular expressions, and recursion-depth handling
+- **Missing and incorrectly scoped selectors** - Implemented paragraph, blockquote, and frontmatter selectors, and constrained code/link descendant queries to their parent section
+- **Markdown section edge cases** - CRLF input, setext headings, tilde fences, indented heading-like text in code, headings at EOF, and documents without ATX headings no longer panic or produce incorrect sections
+- **Buffered edits could be lost** - External file changes can no longer silently discard unsaved table edits
+- **Checkbox and table edits could target or rewrite the wrong content** - Checkbox toggles now respect the current section, list marker, occurrence, state, and fenced code; table edits preserve escaped pipes, CRLF, trailing newlines, and table boundaries
+- **Unicode and very wide terminals could panic** - Display truncation is now Unicode-width-aware and popup/modal sizing avoids `u16` overflow
+- **TUI correctness regressions** - Fixed wikilink subdirectory creation, editor mouse-capture handoff, table line counting, outline filter counts, and modifier chords inserting literal characters
+- **Markdown fixtures were unintentionally ignored** - Narrowed the repository's Markdown ignore rules so documentation and regression fixtures are tracked
+
 ## [0.5.12] - 2026-06-06
 
 ### Added

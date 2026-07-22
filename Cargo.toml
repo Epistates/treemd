@@ -1,6 +1,6 @@
 [package]
 name = "treemd"
-version = "0.5.12"
+version = "0.6.0"
 edition = "2024"
 authors = ["epistates, inc. <nick@epistates.com>"]
 description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
@@ -35,7 +35,7 @@ path = "src/main.rs"
 # CLI framework
 clap = { version = "4.6", features = ["derive"] }
 clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
-clap_mangen = "0.2"
+clap_mangen = "0.3"
 
 # Remote document fetching (treemd <url>, treemd github:owner/repo)
 ureq = "3"
@@ -43,7 +43,7 @@ ureq = "3"
 unicode-width = "0.2"
 
 # Turbovault integration - OFM parsing with code-block awareness
-turbovault-parser = "1.5.0"
+turbovault-parser = "1.6.0"
 
 # Serialization for JSON output
 serde = { version = "1.0", features = ["derive"] }
@@ -51,7 +51,7 @@ serde_json = "1.0"
 
 # Query language support
 indexmap = { version = "2.14", features = ["serde"] }
-regex = "1.12"
+regex = "1.13"
 
 # TUI framework
 ratatui = { version = "0.30", features = ["crossterm_0_29", "unstable-rendered-line-info"] }
@@ -70,7 +70,7 @@ syntect = { version = "5.3", default-features = false, features = ["default-synt
 arboard = { version = "3.6", features = ["wayland-data-control"] }
 
 # Open URLs in default browser
-open = "5.3"
+open = "5.4"
 
 # Atomic file operations
 tempfile = "3.27"
@@ -97,8 +97,8 @@ opensesame = { version = "0.1.1", features = ["serde"] }
 libc = "0.2"
 
 # Mermaid diagram rendering (pure Rust, no external tools)
-# NOTE: pre-1.0 crate in early development; semver pins to >=0.2.0, <0.3.0
-mermaid-rs-renderer = { version = "0.2", default-features = false, optional = true }
+# NOTE: pre-1.0 crate in early development; semver pins to >=0.3.0, <0.4.0
+mermaid-rs-renderer = { version = "0.3", default-features = false, optional = true }
 resvg = { version = "0.47", optional = true }
 
 [features]

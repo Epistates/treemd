@@ -26,7 +26,11 @@ run-links:
 
 # Run all tests
 test:
-    cargo test
+    cargo test --all-targets --all-features --locked
+
+# Run tests without optional/default features
+test-minimal:
+    cargo test --all-targets --no-default-features --locked
 
 # Run tests with output shown
 test-verbose:
@@ -34,11 +38,11 @@ test-verbose:
 
 # Check code without building
 check:
-    cargo check
+    cargo check --all-targets --all-features --locked
 
 # Run clippy for linting
 lint:
-    cargo clippy -- -D warnings
+    cargo clippy --all-targets --all-features --locked -- -D warnings
 
 # Format code with rustfmt
 fmt:
@@ -66,12 +70,17 @@ uninstall:
 update:
     cargo update
 
+# Audit dependencies. The ignored quick-xml advisories are build-time-only in
+# wayland-scanner, which parses bundled protocol XML rather than user input.
+audit:
+    cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+
 # Show outdated dependencies
 outdated:
     cargo outdated
 
 # Full CI check: format, lint, test, build
-ci: fmt-check lint test release
+ci: fmt-check lint test test-minimal audit release
     @echo "✅ All CI checks passed!"
 
 # Quick test of link following feature
