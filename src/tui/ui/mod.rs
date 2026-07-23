@@ -552,10 +552,7 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
     // Only render images that have placeholder space reserved (line_range > 1 line).
     // Nested images in details/lists have 1-line ranges with no placeholder space.
     for elem in &app.interactive_state.elements {
-        if let ElementType::Image {
-            src, block_idx: _, ..
-        } = &elem.element_type
-        {
+        if let ElementType::Image { src, .. } = &elem.element_type {
             let (line_start, line_end) = elem.line_range;
 
             // Skip images without placeholder space (nested in details/lists)
@@ -2462,10 +2459,8 @@ fn parse_callout_marker(first_line: &str) -> Option<CalloutMarker> {
         // Title-case the kind: NOTE -> Note
         let lower = kind_raw.to_ascii_lowercase();
         let mut chars = lower.chars();
-        match chars.next() {
-            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-            None => return None,
-        }
+        let c = chars.next()?;
+        c.to_uppercase().collect::<String>() + chars.as_str()
     } else {
         after.to_string()
     };
