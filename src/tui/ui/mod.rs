@@ -201,7 +201,7 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
         (&app.search_query, app.outline_search_active, info)
     };
 
-    let theme = &app.theme;
+    let theme = app.theme.clone();
 
     // Styling based on search type (accents derive from the theme so the
     // bar respects custom themes and the 256-color compat layer)
@@ -220,16 +220,10 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     // Build search bar with query
-    let query_display = if is_active {
-        format!("{}_", query)
-    } else {
-        query.clone()
-    };
-
     let mut line_spans = vec![
         Span::raw(format!("{}: ", label)),
         Span::styled(
-            query_display,
+            query.clone(),
             Style::default()
                 .fg(accent_color)
                 .add_modifier(Modifier::BOLD),
@@ -261,6 +255,17 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
         .style(Style::default().fg(theme.foreground));
 
     frame.render_widget(paragraph, area);
+
+    if is_active && area.width > 2 {
+        use unicode_width::UnicodeWidthStr;
+        let cursor_offset = format!("{label}: {query}").width() as u16;
+        let cursor_x = area
+            .x
+            .saturating_add(1)
+            .saturating_add(cursor_offset)
+            .min(area.right().saturating_sub(2));
+        frame.set_cursor_position((cursor_x, area.y.saturating_add(1)));
+    }
 }
 
 fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -522,7 +527,7 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let theme = &app.theme;
+    let theme = app.theme.clone();
 
     // Account for borders and padding
     let inner = area.inner(ratatui::layout::Margin {
@@ -548,92 +553,112 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
         None
     };
 
+    // Clone the small amount of layout metadata needed below. Rendering marks
+    // animations visible and mutates protocol state, which intentionally must
+    // not hold a borrow into the interactive element index.
+    let images: Vec<_> = app
+        .interactive_state
+        .elements
+        .iter()
+        .filter_map(|element| match &element.element_type {
+            ElementType::Image { src, .. } => Some((element.id, element.line_range, src.clone())),
+            _ => None,
+        })
+        .collect();
+
     // Render all images that are visible in the current scroll viewport.
     // Only render images that have placeholder space reserved (line_range > 1 line).
     // Nested images in details/lists have 1-line ranges with no placeholder space.
-    for elem in &app.interactive_state.elements {
-        if let ElementType::Image { src, .. } = &elem.element_type {
-            let (line_start, line_end) = elem.line_range;
+    for (element_id, (line_start, line_end), src) in images {
+        // Skip images without placeholder space (nested in details/lists)
+        if line_end.saturating_sub(line_start) < 3 {
+            continue;
+        }
 
-            // Skip images without placeholder space (nested in details/lists)
-            if line_end.saturating_sub(line_start) < 3 {
+        // Check if this image is visible in current scroll window
+        let scroll = app.content_scroll as usize;
+        let viewport_height = app.content_viewport_height as usize;
+        let viewport_end = scroll + viewport_height;
+
+        // Skip if image is outside visible area
+        if line_end < scroll || line_start >= viewport_end {
+            continue;
+        }
+
+        // Calculate Y position: convert line number to screen coordinate
+        // Line positions are relative to the full document, need to account for scroll
+        let y_offset = if line_start >= scroll {
+            (line_start - scroll) as u16
+        } else {
+            0
+        };
+
+        let image_y = inner.y + y_offset;
+
+        // Only render if there's space on screen
+        if image_y >= inner.bottom() {
+            continue;
+        }
+
+        let available_height = inner.bottom().saturating_sub(image_y);
+        if available_height < 3 {
+            continue; // Not enough space for image
+        }
+
+        let image_height = available_height.min(max_image_height);
+
+        // Resolve image path and use cached protocol
+        if let Ok(image_path) = app.resolve_image_path(&src) {
+            if !app.image_protocol_cache.contains_key(&image_path) {
                 continue;
             }
 
-            // Check if this image is visible in current scroll window
-            let scroll = app.content_scroll as usize;
-            let viewport_height = app.content_viewport_height as usize;
-            let viewport_end = scroll + viewport_height;
+            // Check if this image is selected
+            let is_selected = selected_image_id == Some(element_id);
 
-            // Skip if image is outside visible area
-            if line_end < scroll || line_start >= viewport_end {
-                continue;
-            }
-
-            // Calculate Y position: convert line number to screen coordinate
-            // Line positions are relative to the full document, need to account for scroll
-            let y_offset = if line_start >= scroll {
-                (line_start - scroll) as u16
-            } else {
-                0
+            // Reserve border padding unconditionally so changing selection
+            // never changes the StatefulImage resize target.
+            let image_area = Rect {
+                x: inner.x,
+                y: image_y,
+                width: max_image_width.min(inner.width),
+                height: image_height,
             };
+            let render_area = image_area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 1,
+            });
 
-            let image_y = inner.y + y_offset;
+            // If selected, render a selection border around the image
+            if is_selected {
+                let border_style = Style::default()
+                    .fg(theme.selection_indicator_fg)
+                    .bg(theme.selection_indicator_bg)
+                    .add_modifier(Modifier::BOLD);
 
-            // Only render if there's space on screen
-            if image_y >= inner.bottom() {
+                let border = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(border_style)
+                    .title(" ▶ Selected ")
+                    .title_alignment(ratatui::layout::Alignment::Left);
+
+                // Render border first
+                frame.render_widget(border, image_area);
+            }
+
+            let Some(protocol_state) = app.image_protocol_cache.get_mut(&image_path) else {
                 continue;
+            };
+            if !protocol_state.has_completed_frame() {
+                let loading = Paragraph::new("Rendering image…")
+                    .alignment(ratatui::layout::Alignment::Center)
+                    .style(Style::default().fg(theme.blockquote_fg));
+                frame.render_widget(loading, render_area);
             }
 
-            let available_height = inner.bottom().saturating_sub(image_y);
-            if available_height < 3 {
-                continue; // Not enough space for image
-            }
-
-            let image_height = available_height.min(max_image_height);
-
-            // Resolve image path and use cached protocol
-            if let Ok(image_path) = app.resolve_image_path(src)
-                && let Some(protocol_state) = app.image_protocol_cache.get_mut(&image_path)
-            {
-                let resize = Resize::Scale(Some(FilterType::Triangle));
-
-                // Check if this image is selected
-                let is_selected = selected_image_id == Some(elem.id);
-
-                // Calculate image area - add border space when selected
-                let image_area = Rect {
-                    x: inner.x,
-                    y: image_y,
-                    width: max_image_width.min(inner.width),
-                    height: image_height,
-                };
-
-                // If selected, render a selection border around the image
-                let render_area = if is_selected {
-                    let border_style = Style::default()
-                        .fg(theme.selection_indicator_fg)
-                        .bg(theme.selection_indicator_bg)
-                        .add_modifier(Modifier::BOLD);
-
-                    let border = Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(border_style)
-                        .title(" ▶ Selected ")
-                        .title_alignment(ratatui::layout::Alignment::Left);
-
-                    // Render border first
-                    frame.render_widget(border.clone(), image_area);
-
-                    // Return inner area for image (inside border)
-                    border.inner(image_area)
-                } else {
-                    image_area
-                };
-
-                let img_widget = StatefulImage::new().resize(resize);
-                frame.render_stateful_widget(img_widget, render_area, protocol_state);
-            }
+            let resize = Resize::Scale(Some(FilterType::Triangle));
+            let img_widget = StatefulImage::new().resize(resize);
+            frame.render_stateful_widget(img_widget, render_area, protocol_state);
         }
     }
 }
@@ -825,10 +850,9 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     use ratatui_image::{FilterType, Resize, StatefulImage};
-    use std::time::Duration;
 
     // Must have frames available
-    if !app.is_image_modal_open() || app.image_modal.gif_frames.is_empty() {
+    if !app.is_image_modal_open() || app.image_modal_frame_count() == 0 {
         return;
     }
 
@@ -837,7 +861,9 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme_foreground = app.theme.foreground;
     let theme_heading_1 = app.theme.heading_1;
 
-    let is_multi_frame = app.image_modal.gif_frames.len() > 1;
+    let frame_count = app.image_modal_frame_count();
+    let is_multi_frame = frame_count > 1;
+    let modal_path = app.image_modal.path.clone();
 
     // Calculate modal area - centered on screen with padding
     // (u32 math: u16 multiplication can overflow on very wide terminals)
@@ -879,37 +905,7 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Check if Kitty is handling animation
     let kitty_animating = app.has_kitty_animation();
-
-    // For software animation (non-Kitty terminals), handle frame timing
-    let is_animating = is_multi_frame && !app.image_modal.animation_paused && !kitty_animating;
-
-    // When animating (software or Kitty), avoid overwriting the image area
-    let avoid_image_area = is_animating || kitty_animating;
-
-    if is_animating && let Some(last_update) = app.image_modal.last_frame_update {
-        let current_frame = &app.image_modal.gif_frames[app.image_modal.frame_index];
-        let frame_delay = Duration::from_millis(current_frame.delay_ms as u64);
-
-        if last_update.elapsed() >= frame_delay {
-            app.image_modal.frame_index =
-                (app.image_modal.frame_index + 1) % app.image_modal.gif_frames.len();
-            app.image_modal.last_frame_update = Some(std::time::Instant::now());
-        }
-    }
-
-    // Only create a new protocol when frame actually changes (software animation only).
-    // Skip this entirely when Kitty handles animation.
-    if !kitty_animating {
-        let needs_new_protocol =
-            app.image_modal.last_rendered_frame != Some(app.image_modal.frame_index);
-        if needs_new_protocol && let Some(picker) = &mut app.picker {
-            let current_img = app.image_modal.gif_frames[app.image_modal.frame_index]
-                .image
-                .clone();
-            app.image_modal.state = Some(picker.new_resize_protocol(current_img));
-            app.image_modal.last_rendered_frame = Some(app.image_modal.frame_index);
-        }
-    }
+    let iterm_animating = app.has_native_iterm_modal_animation();
 
     // Get the active protocol for sizing (even Kitty needs this for layout)
     if let Some(protocol_state) = &mut app.image_modal.state {
@@ -924,122 +920,15 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
             height: image_size.height,
         };
 
-        // Clear and render background to hide underlying UI (sidebars, etc.)
-        // During animation, we avoid overwriting the image area to prevent flicker.
+        // Clear and render the modal normally. ratatui-image marks protocol
+        // cells with the appropriate diff options and must be the final widget
+        // rendered into its area.
         let bg_style = Style::default()
             .bg(theme_background)
             .fg(theme_foreground)
             .add_modifier(Modifier::DIM);
-
-        // For non-animating state, just clear and fill the entire screen
-        if !avoid_image_area {
-            // Clear the entire screen first to hide sidebars
-            frame.render_widget(Clear, area);
-            frame.render_widget(Block::default().style(bg_style), area);
-        } else {
-            // During animation, clear all regions EXCEPT the image area to avoid flicker
-            // This includes: outer background + modal interior padding around image
-
-            // 1. Outer background - 4 strips around the modal
-            // Top strip (above modal) - full width
-            if modal_area.y > area.y {
-                let top_bg = Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: area.width,
-                    height: modal_area.y - area.y,
-                };
-                frame.render_widget(Clear, top_bg);
-                frame.render_widget(Block::default().style(bg_style), top_bg);
-            }
-            // Bottom strip (below modal) - full width
-            let modal_bottom = modal_area.y + modal_area.height;
-            if modal_bottom < area.y + area.height {
-                let bottom_bg = Rect {
-                    x: area.x,
-                    y: modal_bottom,
-                    width: area.width,
-                    height: (area.y + area.height) - modal_bottom,
-                };
-                frame.render_widget(Clear, bottom_bg);
-                frame.render_widget(Block::default().style(bg_style), bottom_bg);
-            }
-            // Left strip (left of modal, modal height only)
-            if modal_area.x > area.x {
-                let left_bg = Rect {
-                    x: area.x,
-                    y: modal_area.y,
-                    width: modal_area.x - area.x,
-                    height: modal_area.height,
-                };
-                frame.render_widget(Clear, left_bg);
-                frame.render_widget(Block::default().style(bg_style), left_bg);
-            }
-            // Right strip (right of modal, modal height only)
-            let modal_right = modal_area.x + modal_area.width;
-            if modal_right < area.x + area.width {
-                let right_bg = Rect {
-                    x: modal_right,
-                    y: modal_area.y,
-                    width: (area.x + area.width) - modal_right,
-                    height: modal_area.height,
-                };
-                frame.render_widget(Clear, right_bg);
-                frame.render_widget(Block::default().style(bg_style), right_bg);
-            }
-
-            // 2. Modal interior padding - 4 strips between modal border and image
-            let modal_bg = Style::default().bg(theme_background).fg(theme_foreground);
-
-            // Top padding (between modal top border and image top)
-            if image_area.y > inner_area.y {
-                let top_pad = Rect {
-                    x: inner_area.x,
-                    y: inner_area.y,
-                    width: inner_area.width,
-                    height: image_area.y - inner_area.y,
-                };
-                frame.render_widget(Clear, top_pad);
-                frame.render_widget(Block::default().style(modal_bg), top_pad);
-            }
-            // Bottom padding (between image bottom and modal bottom border)
-            let image_bottom = image_area.y + image_area.height;
-            let inner_bottom = inner_area.y + inner_area.height;
-            if image_bottom < inner_bottom {
-                let bottom_pad = Rect {
-                    x: inner_area.x,
-                    y: image_bottom,
-                    width: inner_area.width,
-                    height: inner_bottom - image_bottom,
-                };
-                frame.render_widget(Clear, bottom_pad);
-                frame.render_widget(Block::default().style(modal_bg), bottom_pad);
-            }
-            // Left padding (between modal left border and image left, image height only)
-            if image_area.x > inner_area.x {
-                let left_pad = Rect {
-                    x: inner_area.x,
-                    y: image_area.y,
-                    width: image_area.x - inner_area.x,
-                    height: image_area.height,
-                };
-                frame.render_widget(Clear, left_pad);
-                frame.render_widget(Block::default().style(modal_bg), left_pad);
-            }
-            // Right padding (between image right and modal right border, image height only)
-            let image_right = image_area.x + image_area.width;
-            let inner_right = inner_area.x + inner_area.width;
-            if image_right < inner_right {
-                let right_pad = Rect {
-                    x: image_right,
-                    y: image_area.y,
-                    width: inner_right - image_right,
-                    height: image_area.height,
-                };
-                frame.render_widget(Clear, right_pad);
-                frame.render_widget(Block::default().style(modal_bg), right_pad);
-            }
-        }
+        frame.render_widget(Clear, area);
+        frame.render_widget(Block::default().style(bg_style), area);
 
         // Build title with frame info and controls for GIFs
         let title = if is_multi_frame {
@@ -1048,20 +937,24 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 "▶"
             };
-            // Show Kitty indicator when using native animation
-            let mode = if kitty_animating { "Kitty" } else { "GIF" };
+            let mode = if kitty_animating {
+                "Kitty"
+            } else if iterm_animating {
+                "iTerm"
+            } else {
+                "GIF"
+            };
             format!(
                 " {} {}/{} {} | ←/→:step Space:play/pause q:close ",
                 mode,
                 app.image_modal.frame_index + 1,
-                app.image_modal.gif_frames.len(),
+                frame_count,
                 state
             )
         } else {
             " Image | q/Esc: Close ".to_string()
         };
 
-        // Render modal border (but NOT over image area during animation)
         let modal_border = ratatui::widgets::Block::default()
             .borders(Borders::ALL)
             .border_style(
@@ -1073,107 +966,21 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
             .title_alignment(ratatui::layout::Alignment::Center)
             .style(Style::default().bg(theme_background).fg(theme_foreground));
 
-        // Only render the border frame (not the interior) during animation
-        // to avoid overwriting the previous image before new one is drawn
-        if avoid_image_area {
-            // Render border edges only, preserving image area
-            render_border_only(frame, &modal_border, modal_area, image_area);
-        } else {
-            // Static image or paused - safe to render full modal
-            frame.render_widget(modal_border, modal_area);
-        }
+        frame.render_widget(modal_border, modal_area);
 
-        // Render image via ratatui-image ONLY when Kitty is NOT handling animation.
-        // For Kitty animation, the terminal renders the image directly via graphics protocol.
-        if !kitty_animating {
+        // Native terminal animation renders the original GIF directly. Paused
+        // and manually stepped frames continue through ratatui-image.
+        if !kitty_animating && !iterm_animating {
             let img_widget = StatefulImage::new().resize(resize);
             frame.render_stateful_widget(img_widget, image_area, protocol_state);
         }
-    }
-}
 
-/// Render only the border portions of a block, avoiding the image area.
-/// This prevents flickering during GIF animation by not overwriting
-/// the previous frame before the new one is drawn.
-fn render_border_only(
-    frame: &mut Frame,
-    block: &ratatui::widgets::Block,
-    modal_area: Rect,
-    image_area: Rect,
-) {
-    use ratatui::widgets::Widget;
-
-    // Top border row (full width of modal)
-    let top_row = Rect {
-        x: modal_area.x,
-        y: modal_area.y,
-        width: modal_area.width,
-        height: 1,
-    };
-    block.clone().render(top_row, frame.buffer_mut());
-
-    // Bottom border row (full width of modal)
-    if modal_area.height > 1 {
-        let bottom_row = Rect {
-            x: modal_area.x,
-            y: modal_area.y + modal_area.height - 1,
-            width: modal_area.width,
-            height: 1,
-        };
-        block.clone().render(bottom_row, frame.buffer_mut());
-    }
-
-    // Left border column (between top and bottom, avoiding image)
-    if modal_area.height > 2 {
-        let middle_height = modal_area.height - 2;
-        // Left side - from border to image start
-        let left_strip_width = image_area.x.saturating_sub(modal_area.x);
-        if left_strip_width > 0 {
-            let left_strip = Rect {
-                x: modal_area.x,
-                y: modal_area.y + 1,
-                width: left_strip_width,
-                height: middle_height,
-            };
-            block.clone().render(left_strip, frame.buffer_mut());
-        }
-
-        // Right side - from image end to border
-        let image_right = image_area.x + image_area.width;
-        let modal_right = modal_area.x + modal_area.width;
-        if image_right < modal_right {
-            let right_strip = Rect {
-                x: image_right,
-                y: modal_area.y + 1,
-                width: modal_right - image_right,
-                height: middle_height,
-            };
-            block.clone().render(right_strip, frame.buffer_mut());
-        }
-
-        // Top padding (above image, inside border)
-        let padding_top_height = image_area.y.saturating_sub(modal_area.y + 1);
-        if padding_top_height > 0 && image_area.width > 0 {
-            let top_pad = Rect {
-                x: image_area.x,
-                y: modal_area.y + 1,
-                width: image_area.width,
-                height: padding_top_height,
-            };
-            block.clone().render(top_pad, frame.buffer_mut());
-        }
-
-        // Bottom padding (below image, inside border)
-        let image_bottom = image_area.y + image_area.height;
-        let modal_inner_bottom = modal_area.y + modal_area.height - 1;
-        if image_bottom < modal_inner_bottom {
-            let bottom_pad = Rect {
-                x: image_area.x,
-                y: image_bottom,
-                width: image_area.width,
-                height: modal_inner_bottom - image_bottom,
-            };
-            block.clone().render(bottom_pad, frame.buffer_mut());
+        if let Some(path) = modal_path {
+            app.stage_iterm_animation(
+                &path,
+                crate::tui::app::ItermAnimationSurface::Modal,
+                image_area,
+            );
         }
     }
 }

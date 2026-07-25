@@ -305,7 +305,7 @@ fn main() -> Result<()> {
         // Initialize terminal with explicit error handling
         // When stdin is piped, we use /dev/tty for input (handled by tui::tty module)
         use crossterm::ExecutableCommand;
-        use crossterm::event::EnableMouseCapture;
+        use crossterm::event::{EnableBracketedPaste, EnableMouseCapture};
         use crossterm::terminal::EnterAlternateScreen;
         use std::io::stdout;
 
@@ -327,10 +327,12 @@ fn main() -> Result<()> {
         // Mouse capture: best-effort. Some terminals don't support it; that's
         // fine — keyboard navigation still works.
         let _ = stdout().execute(EnableMouseCapture);
+        // Treat pasted text as one event so it can never execute keybindings.
+        let _ = stdout().execute(EnableBracketedPaste);
 
         let backend = ratatui::backend::CrosstermBackend::new(stdout());
         let mut terminal = ratatui::Terminal::new(backend).inspect_err(|_| {
-            treemd::tui::tty::disable_raw_mode().ok();
+            treemd::tui::tty::restore();
         })?;
 
         // Get filename and path (use placeholders for stdin)
@@ -369,8 +371,9 @@ fn main() -> Result<()> {
         let result = treemd::tui::run(&mut terminal, app);
 
         // Cleanup terminal state
-        use crossterm::event::DisableMouseCapture;
+        use crossterm::event::{DisableBracketedPaste, DisableMouseCapture};
         use crossterm::terminal::LeaveAlternateScreen;
+        stdout().execute(DisableBracketedPaste).ok();
         stdout().execute(DisableMouseCapture).ok();
         stdout().execute(LeaveAlternateScreen).ok();
         treemd::tui::tty::disable_raw_mode().ok();

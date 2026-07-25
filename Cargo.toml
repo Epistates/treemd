@@ -54,7 +54,7 @@ indexmap = { version = "2.14", features = ["serde"] }
 regex = "1.13"
 
 # TUI framework
-ratatui = { version = "0.30", features = ["crossterm_0_29", "unstable-rendered-line-info"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache", "unstable-rendered-line-info"] }
 crossterm = "0.29"
 color-eyre = "0.6"
 
@@ -119,5 +119,6 @@ codegen-units = 1
 # Strip symbols from binary to reduce size
 strip = true
 
-# Abort on panic for smaller binary size
-panic = "abort"
+# Keep unwinding enabled so panic isolation around third-party image/render
+# work can recover and report an error instead of terminating the TUI.
+panic = "unwind"

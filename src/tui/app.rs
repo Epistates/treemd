@@ -2,17 +2,19 @@ use crate::config::Config;
 use crate::keybindings::{Action, KeybindingMode, Keybindings};
 use crate::parser::{Document, HeadingNode, Link, extract_links};
 use crate::tui::help_text;
+use crate::tui::image_cache::{AsyncProtocol, GifAdvance, ImageWorker, StreamingGif};
 use crate::tui::interactive::{ElementType, InteractiveState};
+use crate::tui::iterm_animation;
 use crate::tui::kitty_animation::{self, KittyAnimation};
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
 use crate::tui::theme::{Theme, ThemeName};
 use crossterm::event::{KeyCode, KeyModifiers};
 use indexmap::IndexMap;
+use ratatui::layout::Rect;
 use ratatui::widgets::{ListState, ScrollbarState};
-#[cfg(all(feature = "mermaid", unix))]
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -452,9 +454,9 @@ pub struct LinkPickerState {
 #[derive(Default)]
 pub struct ImageModalState {
     pub path: Option<std::path::PathBuf>,
-    pub state: Option<ratatui_image::protocol::StatefulProtocol>,
+    pub(crate) state: Option<AsyncProtocol>,
     pub gif_frames: Vec<crate::tui::image_cache::GifFrame>,
-    pub frame_protocols: Vec<ratatui_image::protocol::StatefulProtocol>,
+    pub frame_delays_ms: Vec<u32>,
     pub frame_index: usize,
     pub last_rendered_frame: Option<usize>,
     pub last_frame_update: Option<Instant>,
@@ -489,6 +491,23 @@ pub struct PendingEdit {
     pub original_value: String,
     /// The new value after editing
     pub new_value: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ItermAnimationSurface {
+    Modal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ItermAnimationTarget {
+    path: PathBuf,
+    surface: ItermAnimationSurface,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ItermAnimationPlacement {
+    target: ItermAnimationTarget,
+    area: Rect,
 }
 
 pub struct App {
@@ -602,12 +621,20 @@ pub struct App {
     // Terminal graphics protocol picker (with fallback font size)
     pub picker: Option<ratatui_image::picker::Picker>,
 
+    // Shared resize/encode worker. StatefulImage rendering stays non-blocking.
+    image_worker: Option<ImageWorker>,
+
     // Cached image protocols keyed by resolved path (avoids re-decoding from disk every frame)
-    /// Decoded image protocols. Bounded LRU-ish cache: insertion-ordered, with
+    /// Decoded image protocols. Bounded LRU cache: access-ordered, with
     /// the oldest entries evicted when capacity is reached. Keeping recently
     /// seen images survives navigation between sections so the user doesn't
     /// pay the decode cost on every back-and-forth.
-    pub image_protocol_cache: IndexMap<PathBuf, ratatui_image::protocol::StatefulProtocol>,
+    pub(crate) image_protocol_cache: IndexMap<PathBuf, AsyncProtocol>,
+
+    // Streaming inline GIF state, keyed with the corresponding protocol cache.
+    // Unlike the modal viewer this retains only the compositing canvas, keeping
+    // long README recordings memory-bounded.
+    inline_gif_animations: HashMap<PathBuf, StreamingGif>,
 
     // Image modal viewing state (path, current frame, GIF playback).
     pub image_modal: ImageModalState,
@@ -616,12 +643,19 @@ pub struct App {
     pub kitty_animation: Option<KittyAnimation>,
     pub use_kitty_animation: bool, // Whether to use native Kitty animation
 
+    // Native iTerm2 GIF playback. The original file is transferred after the
+    // Ratatui frame is flushed, so no large OSC payload enters a buffer cell.
+    iterm_animation_target: Option<ItermAnimationTarget>,
+    iterm_animation_staged: Option<ItermAnimationPlacement>,
+    iterm_animation_sent: Option<ItermAnimationPlacement>,
+    iterm_animation_failed: bool,
+
     // Image rendering control (can be disabled via config or CLI)
     pub images_enabled: bool,
 
     // Mermaid diagram rendering cache: source hash → rendered protocol
     #[cfg(all(feature = "mermaid", unix))]
-    pub mermaid_protocol_cache: HashMap<u64, ratatui_image::protocol::StatefulProtocol>,
+    pub(crate) mermaid_protocol_cache: HashMap<u64, AsyncProtocol>,
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_render_errors: HashMap<u64, String>,
     #[cfg(all(feature = "mermaid", unix))]
@@ -717,6 +751,11 @@ impl App {
 
         // Load keybindings from config (before config is moved)
         let keybindings = config.keybindings();
+
+        // Picker detection must happen after entering the alternate screen.
+        // A single worker then services every protocol without blocking draws.
+        let picker = images_enabled.then(Self::init_picker).flatten();
+        let image_worker = picker.as_ref().map(|_| ImageWorker::new());
 
         Self {
             document,
@@ -817,14 +856,13 @@ impl App {
 
             // Terminal graphics protocol picker with fallback (like figif)
             // Only initialize if images are enabled
-            picker: if images_enabled {
-                Self::init_picker()
-            } else {
-                None
-            },
+            picker,
+
+            image_worker,
 
             // Cached image protocols (populated after index_elements)
             image_protocol_cache: IndexMap::new(),
+            inline_gif_animations: HashMap::new(),
 
             // Image modal viewing state (path, GIF playback, etc.)
             image_modal: ImageModalState::default(),
@@ -832,6 +870,10 @@ impl App {
             // Native Kitty animation
             kitty_animation: None,
             use_kitty_animation: images_enabled && kitty_animation::is_kitty_terminal(),
+            iterm_animation_target: None,
+            iterm_animation_staged: None,
+            iterm_animation_sent: None,
+            iterm_animation_failed: false,
 
             // Image rendering control
             images_enabled,
@@ -867,7 +909,13 @@ impl App {
         let mut picker = match Picker::from_query_stdio() {
             Ok(picker) => {
                 let font_size = picker.font_size();
-                if font_size.width < 4 || font_size.height < 4 {
+                // Reject malformed or implausible terminal responses before
+                // they can become enormous image allocations.
+                if font_size.width < 4
+                    || font_size.height < 4
+                    || font_size.width > 128
+                    || font_size.height > 256
+                {
                     Picker::halfblocks()
                 } else {
                     picker
@@ -876,13 +924,37 @@ impl App {
             Err(_) => Picker::halfblocks(),
         };
 
-        if Self::should_use_env_protocol_fallback(&picker)
+        // iTerm2 3.6 answers the Kitty capability probe, but its Kitty
+        // implementation is not compatible with ratatui-image's Unicode
+        // placeholder renderer. ratatui-image's own compatibility matrix
+        // specifies the iTerm2 protocol for iTerm, so prefer it over the
+        // otherwise-authoritative probe result.
+        if Self::is_iterm2_terminal() {
+            picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2);
+        } else if Self::should_use_env_protocol_fallback(&picker)
             && let Some(protocol) = Self::detect_image_protocol_fallback()
         {
             picker.set_protocol_type(protocol);
         }
 
         Some(picker)
+    }
+
+    fn is_iterm2_terminal() -> bool {
+        let term_program = std::env::var("TERM_PROGRAM").ok();
+        let lc_terminal = std::env::var("LC_TERMINAL").ok();
+        Self::is_iterm2_environment(term_program.as_deref(), lc_terminal.as_deref())
+    }
+
+    fn is_iterm2_environment(term_program: Option<&str>, lc_terminal: Option<&str>) -> bool {
+        term_program == Some("iTerm.app") || lc_terminal == Some("iTerm2")
+    }
+
+    fn can_use_native_iterm_animation(&self) -> bool {
+        self.images_enabled
+            && !self.iterm_animation_failed
+            && Self::is_iterm2_terminal()
+            && std::env::var_os("TMUX").is_none()
     }
 
     fn should_use_env_protocol_fallback(picker: &ratatui_image::picker::Picker) -> bool {
@@ -940,7 +1012,7 @@ impl App {
     ///
     /// Decodes any new images and creates stateful protocols, keeping
     /// previously cached images so navigation back and forth doesn't re-decode.
-    /// Bounded by `IMAGE_CACHE_LIMIT`; oldest entries are evicted when full.
+    /// Bounded by `IMAGE_CACHE_LIMIT`; least-recently-used entries are evicted.
     pub fn populate_image_cache(&mut self) {
         const IMAGE_CACHE_LIMIT: usize = 32;
         use std::collections::HashSet as ImgSet;
@@ -975,13 +1047,19 @@ impl App {
                 Err(_) => continue,
             };
 
-            if self.image_protocol_cache.contains_key(&path) {
+            // Touch existing entries so index 0 remains the least recently used.
+            if let Some(protocol) = self.image_protocol_cache.shift_remove(&path) {
+                self.image_protocol_cache.insert(path, protocol);
                 continue;
             }
-
-            let img_data = match crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
-                Ok(data) => data,
-                Err(_) => continue,
+            // GIFs are decoded incrementally so an embedded terminal recording
+            // can play without retaining every full-size RGBA frame.
+            let (img_data, animation) = match StreamingGif::open(&path) {
+                Ok((animation, first_frame)) => (first_frame, Some(animation)),
+                Err(_) => match crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
+                    Ok(data) => (data, None),
+                    Err(_) => continue,
+                },
             };
 
             let picker = match self.picker.as_mut() {
@@ -990,14 +1068,199 @@ impl App {
             };
 
             let protocol = picker.new_resize_protocol(img_data);
-            self.image_protocol_cache.insert(path, protocol);
+            let Some(worker) = &self.image_worker else {
+                continue;
+            };
+            self.image_protocol_cache
+                .insert(path.clone(), worker.wrap(protocol));
+            if let Some(animation) = animation {
+                self.inline_gif_animations.insert(path, animation);
+            }
 
-            // Evict oldest entries when over capacity (FIFO is a reasonable
-            // proxy for LRU here without bringing in a dedicated LRU crate).
+            // Evict the least recently used entry when over capacity.
             while self.image_protocol_cache.len() > IMAGE_CACHE_LIMIT {
-                self.image_protocol_cache.shift_remove_index(0);
+                if let Some((evicted_path, _)) = self.image_protocol_cache.shift_remove_index(0) {
+                    self.inline_gif_animations.remove(&evicted_path);
+                }
             }
         }
+    }
+
+    /// Synchronize native GIF playback with the open image viewer.
+    ///
+    /// Merely selecting an embedded GIF is intentionally a first-frame still.
+    /// Playback begins only after the user opens the image viewer.
+    pub(crate) fn sync_native_animation_activation(&mut self) -> bool {
+        // iTerm2 animates the original GIF without clearing between frames.
+        // Avoid this direct-output path inside ordinary tmux sessions, where
+        // passthrough wrapping varies by configuration.
+        let use_native_iterm = self.can_use_native_iterm_animation();
+
+        let native_target = if use_native_iterm
+            && self.is_image_modal_open()
+            && !self.image_modal.animation_paused
+            && self.image_modal_frame_count() > 1
+        {
+            self.image_modal
+                .path
+                .as_ref()
+                .map(|path| ItermAnimationTarget {
+                    path: path.clone(),
+                    surface: ItermAnimationSurface::Modal,
+                })
+        } else {
+            None
+        };
+
+        let target_changed = self.iterm_animation_target != native_target;
+        if target_changed {
+            self.iterm_animation_target = native_target;
+            self.iterm_animation_staged = None;
+            self.iterm_animation_sent = None;
+        }
+
+        for animation in self.inline_gif_animations.values_mut() {
+            animation.set_active(false);
+        }
+
+        target_changed
+    }
+
+    /// Reset layout information before a Ratatui frame computes image areas.
+    pub(crate) fn prepare_iterm_animation_frame(&mut self) {
+        self.iterm_animation_staged = None;
+    }
+
+    /// Record the exact cell rectangle where a native GIF should be anchored.
+    pub(crate) fn stage_iterm_animation(
+        &mut self,
+        path: &std::path::Path,
+        surface: ItermAnimationSurface,
+        area: Rect,
+    ) {
+        let Some(target) = self.iterm_animation_target.as_ref() else {
+            return;
+        };
+        if target.path == path && target.surface == surface && !area.is_empty() {
+            self.iterm_animation_staged = Some(ItermAnimationPlacement {
+                target: target.clone(),
+                area,
+            });
+        }
+    }
+
+    /// Transfer a staged GIF after Ratatui has flushed its frame.
+    pub(crate) fn transmit_staged_iterm_animation<W: Write>(
+        &mut self,
+        writer: &mut W,
+    ) -> io::Result<bool> {
+        let Some(placement) = self.iterm_animation_staged.clone() else {
+            return Ok(false);
+        };
+        if self.iterm_animation_sent.as_ref() == Some(&placement) {
+            return Ok(false);
+        }
+
+        iterm_animation::transmit_gif(writer, &placement.target.path, placement.area)?;
+        self.iterm_animation_sent = Some(placement);
+        // Native playback begins at the first frame when FileEnd is received.
+        // Start the lightweight UI counter from the same point.
+        self.image_modal.frame_index = 0;
+        self.image_modal.last_frame_update = Some(Instant::now());
+        Ok(true)
+    }
+
+    pub(crate) fn disable_iterm_animation(&mut self, error: &io::Error) {
+        self.iterm_animation_failed = true;
+        self.iterm_animation_target = None;
+        self.iterm_animation_staged = None;
+        self.iterm_animation_sent = None;
+        self.image_modal.animation_paused = true;
+        self.image_modal.frame_index = 0;
+        self.status_message = Some(format!(
+            "⚠ Native iTerm GIF playback failed; showing a still frame: {error}"
+        ));
+        self.status_message_time = None;
+    }
+
+    pub(crate) fn has_native_iterm_modal_animation(&self) -> bool {
+        self.iterm_animation_target
+            .as_ref()
+            .is_some_and(|target| target.surface == ItermAnimationSurface::Modal)
+    }
+
+    pub(crate) fn image_modal_frame_count(&self) -> usize {
+        if self.image_modal.frame_delays_ms.is_empty() {
+            self.image_modal.gif_frames.len()
+        } else {
+            self.image_modal.frame_delays_ms.len()
+        }
+    }
+
+    fn image_modal_frame_delay_ms(&self, index: usize) -> Option<u32> {
+        self.image_modal
+            .frame_delays_ms
+            .get(index)
+            .copied()
+            .or_else(|| {
+                self.image_modal
+                    .gif_frames
+                    .get(index)
+                    .map(|frame| frame.delay_ms)
+            })
+    }
+
+    /// Advance visible GIFs whose frame deadline has elapsed.
+    ///
+    /// A new frame is only decoded after the previous frame has completed
+    /// resize/encode, providing natural backpressure to the single image worker.
+    pub(crate) fn advance_inline_animations(&mut self) -> bool {
+        let paths: Vec<_> = self.inline_gif_animations.keys().cloned().collect();
+        let mut changed = false;
+        let mut finished = Vec::new();
+        let mut failures = Vec::new();
+
+        for path in paths {
+            if self
+                .image_protocol_cache
+                .get(&path)
+                .is_none_or(AsyncProtocol::has_in_flight_work)
+            {
+                continue;
+            }
+
+            let advance = self
+                .inline_gif_animations
+                .get_mut(&path)
+                .map_or(GifAdvance::Finished, StreamingGif::advance);
+            match advance {
+                GifAdvance::Waiting => {}
+                GifAdvance::Frame(image) => {
+                    let Some(picker) = self.picker.as_ref() else {
+                        continue;
+                    };
+                    let replacement = picker.new_resize_protocol(image);
+                    if let Some(protocol) = self.image_protocol_cache.get_mut(&path) {
+                        protocol.replace_protocol(replacement);
+                        changed = true;
+                    }
+                }
+                GifAdvance::Finished => finished.push(path),
+                GifAdvance::Failed(error) => failures.push((path, error)),
+            }
+        }
+
+        for path in finished {
+            self.inline_gif_animations.remove(&path);
+        }
+        for (path, error) in failures {
+            self.inline_gif_animations.remove(&path);
+            self.status_message = Some(format!("✗ GIF playback failed: {error}"));
+            self.status_message_time = None;
+            changed = true;
+        }
+
+        changed
     }
 
     /// Render a mermaid diagram and cache the result as a StatefulProtocol.
@@ -1051,7 +1314,11 @@ impl App {
                     };
                     let rows = dims.1.div_ceil(font_h) as usize;
                     let protocol = picker.new_resize_protocol(img);
-                    self.mermaid_protocol_cache.insert(hash, protocol);
+                    let Some(worker) = &self.image_worker else {
+                        return false;
+                    };
+                    self.mermaid_protocol_cache
+                        .insert(hash, worker.wrap(protocol));
                     self.mermaid_image_dims.insert(hash, dims);
                     self.mermaid_placeholder_rows.insert(hash, rows.max(1));
                     self.mermaid_needs_reindex = true;
@@ -1113,6 +1380,33 @@ impl App {
 
         // Try to resolve and load the image
         if let Ok(path) = self.resolve_image_path(image_src) {
+            // iTerm2 accepts and animates the original GIF. Retain only its
+            // delays and first frame instead of hundreds of full RGBA canvases.
+            if self.can_use_native_iterm_animation()
+                && let Ok(delays) =
+                    crate::tui::image_cache::ImageCache::extract_gif_frame_delays(&path)
+                && delays.len() > 1
+                && let Ok(first_frame) =
+                    crate::tui::image_cache::ImageCache::extract_first_frame(&path)
+                && let Some(picker) = &mut self.picker
+            {
+                let initial_protocol = picker.new_resize_protocol(first_frame.clone());
+                let Some(worker) = &self.image_worker else {
+                    return;
+                };
+                self.image_modal.path = Some(path);
+                self.image_modal.state = Some(worker.wrap(initial_protocol));
+                self.image_modal.gif_frames = vec![crate::tui::image_cache::GifFrame {
+                    image: first_frame,
+                    delay_ms: delays[0],
+                }];
+                self.image_modal.frame_delays_ms = delays;
+                self.image_modal.frame_index = 0;
+                self.image_modal.last_rendered_frame = Some(0);
+                self.image_modal.last_frame_update = Some(Instant::now());
+                return;
+            }
+
             // Load all frames (for GIF animation)
             if let Ok(frames) = crate::tui::image_cache::ImageCache::extract_all_frames(&path)
                 && !frames.is_empty()
@@ -1122,11 +1416,15 @@ impl App {
                 // Subsequent frames will be created on-demand during animation
                 // to avoid memory overhead of pre-computing all protocols.
                 let initial_protocol = picker.new_resize_protocol(frames[0].image.clone());
+                let Some(worker) = &self.image_worker else {
+                    return;
+                };
 
                 self.image_modal.path = Some(path);
-                self.image_modal.state = Some(initial_protocol);
+                self.image_modal.state = Some(worker.wrap(initial_protocol));
+                self.image_modal.frame_delays_ms =
+                    frames.iter().map(|frame| frame.delay_ms).collect();
                 self.image_modal.gif_frames = frames;
-                self.image_modal.frame_protocols.clear(); // Not used anymore
                 self.image_modal.frame_index = 0;
                 self.image_modal.last_rendered_frame = Some(0); // Mark first frame as rendered
                 self.image_modal.last_frame_update = Some(Instant::now());
@@ -1142,7 +1440,7 @@ impl App {
         self.image_modal.path = None;
         self.image_modal.state = None;
         self.image_modal.gif_frames.clear();
-        self.image_modal.frame_protocols.clear();
+        self.image_modal.frame_delays_ms.clear();
         self.image_modal.frame_index = 0;
         self.image_modal.last_rendered_frame = None;
         self.image_modal.last_frame_update = None;
@@ -1151,32 +1449,30 @@ impl App {
 
     /// Go to previous frame in GIF animation
     pub fn modal_prev_frame(&mut self) {
-        if self.image_modal.gif_frames.is_empty() {
+        let len = self.image_modal_frame_count();
+        if len == 0 {
             return;
         }
         // Stop Kitty animation - it doesn't support frame stepping, so fall back to software
         self.stop_kitty_animation();
         // Pause animation when manually stepping
         self.image_modal.animation_paused = true;
-        let len = self.image_modal.gif_frames.len();
         self.image_modal.frame_index = (self.image_modal.frame_index + len - 1) % len;
-        // Force re-render of the new frame
-        self.image_modal.last_rendered_frame = None;
+        self.replace_current_modal_frame();
     }
 
     /// Go to next frame in GIF animation
     pub fn modal_next_frame(&mut self) {
-        if self.image_modal.gif_frames.is_empty() {
+        let len = self.image_modal_frame_count();
+        if len == 0 {
             return;
         }
         // Stop Kitty animation - it doesn't support frame stepping, so fall back to software
         self.stop_kitty_animation();
         // Pause animation when manually stepping
         self.image_modal.animation_paused = true;
-        self.image_modal.frame_index =
-            (self.image_modal.frame_index + 1) % self.image_modal.gif_frames.len();
-        // Force re-render of the new frame
-        self.image_modal.last_rendered_frame = None;
+        self.image_modal.frame_index = (self.image_modal.frame_index + 1) % len;
+        self.replace_current_modal_frame();
     }
 
     /// Stop and delete Kitty animation, falling back to software rendering.
@@ -1191,6 +1487,7 @@ impl App {
 
     /// Toggle animation play/pause
     pub fn modal_toggle_animation(&mut self) {
+        let was_native_iterm = self.has_native_iterm_modal_animation();
         self.image_modal.animation_paused = !self.image_modal.animation_paused;
 
         // Control Kitty animation if active
@@ -1203,7 +1500,11 @@ impl App {
             }
         }
 
-        if !self.image_modal.animation_paused {
+        if self.image_modal.animation_paused && was_native_iterm {
+            // The terminal-owned animation is cleared on the next update.
+            // Prepare the corresponding still frame for paused display.
+            self.replace_current_modal_frame();
+        } else if !self.image_modal.animation_paused {
             // Reset the timer when resuming
             self.image_modal.last_frame_update = Some(Instant::now());
         }
@@ -1212,6 +1513,135 @@ impl App {
     /// Check if image modal is open
     pub fn is_image_modal_open(&self) -> bool {
         self.image_modal.path.is_some()
+    }
+
+    fn replace_current_modal_frame(&mut self) {
+        let image = self
+            .image_modal
+            .gif_frames
+            .get(self.image_modal.frame_index)
+            .map(|frame| frame.image.clone())
+            .or_else(|| {
+                let path = self.image_modal.path.as_ref()?;
+                crate::tui::image_cache::ImageCache::extract_gif_frame(
+                    path,
+                    self.image_modal.frame_index,
+                )
+                .ok()
+            });
+        let Some(image) = image else {
+            return;
+        };
+        let Some(picker) = self.picker.as_ref() else {
+            return;
+        };
+        let replacement = picker.new_resize_protocol(image);
+        if let Some(state) = self.image_modal.state.as_mut() {
+            state.replace_protocol(replacement);
+            self.image_modal.last_rendered_frame = Some(self.image_modal.frame_index);
+        }
+    }
+
+    /// Advance modal GIF state in the update loop, never from the view.
+    pub(crate) fn advance_modal_animation(&mut self) -> bool {
+        if !self.is_image_modal_open()
+            || self.image_modal.animation_paused
+            || self.image_modal_frame_count() <= 1
+            || self.has_kitty_animation()
+        {
+            return false;
+        }
+
+        let native_iterm = self.has_native_iterm_modal_animation();
+        if !native_iterm {
+            let Some(state) = self.image_modal.state.as_ref() else {
+                return false;
+            };
+            if state.has_in_flight_work() || !state.has_completed_frame() {
+                return false;
+            }
+        }
+
+        let Some(last_update) = self.image_modal.last_frame_update else {
+            return false;
+        };
+        let Some(delay_ms) = self.image_modal_frame_delay_ms(self.image_modal.frame_index) else {
+            return false;
+        };
+        let delay = Duration::from_millis(delay_ms.into());
+        if last_update.elapsed() < delay {
+            return false;
+        }
+
+        self.image_modal.frame_index =
+            (self.image_modal.frame_index + 1) % self.image_modal_frame_count();
+        self.image_modal.last_frame_update = Some(Instant::now());
+        if !native_iterm {
+            self.replace_current_modal_frame();
+        }
+        true
+    }
+
+    /// Apply completed resize/encode work to its originating image state.
+    ///
+    /// Results may arrive after a resize or GIF frame has superseded them;
+    /// `AsyncProtocol` generation checks discard those stale completions.
+    pub fn process_image_results(&mut self) -> bool {
+        let Some(worker) = &self.image_worker else {
+            return false;
+        };
+        let results = worker.drain();
+        let had_results = !results.is_empty();
+
+        for result in results {
+            let mut result = Some(result);
+            let mut error = None;
+
+            if self
+                .image_modal
+                .state
+                .as_ref()
+                .is_some_and(|state| state.matches(result.as_ref().expect("result is present")))
+            {
+                error = self
+                    .image_modal
+                    .state
+                    .as_mut()
+                    .and_then(|state| state.update(result.take().expect("result is present")));
+            }
+
+            if result.is_some()
+                && let Some(state) = self
+                    .image_protocol_cache
+                    .values_mut()
+                    .find(|state| state.matches(result.as_ref().expect("result is present")))
+            {
+                error = state.update(result.take().expect("result is present"));
+            }
+
+            #[cfg(all(feature = "mermaid", unix))]
+            if result.is_some()
+                && let Some(state) = self
+                    .mermaid_protocol_cache
+                    .values_mut()
+                    .find(|state| state.matches(result.as_ref().expect("result is present")))
+            {
+                error = state.update(result.take().expect("result is present"));
+            }
+
+            if let Some(error) = error {
+                self.status_message = Some(format!("✗ Image encoding failed: {error}"));
+                self.status_message_time = None;
+            }
+        }
+
+        had_results
+    }
+
+    pub fn has_pending_image_work(&self) -> bool {
+        self.image_worker
+            .as_ref()
+            .is_some_and(ImageWorker::has_pending)
     }
 
     /// Start Kitty native animation for GIF playback.
@@ -1223,7 +1653,7 @@ impl App {
         // 2. We have multiple frames (GIF)
         // 3. Animation hasn't started yet
         if !self.use_kitty_animation
-            || self.image_modal.gif_frames.len() <= 1
+            || self.image_modal_frame_count() <= 1
             || self.kitty_animation.is_some()
         {
             return false;
@@ -1262,29 +1692,37 @@ impl App {
     /// Returns None if not animating, Some(Duration) otherwise.
     /// Used by the event loop to optimize poll timeout for smooth animation.
     pub fn time_until_next_frame(&self) -> Option<std::time::Duration> {
-        // Kitty handles animation timing internally - no client-side timing needed
-        if self.kitty_animation.is_some() {
-            return None;
-        }
-
-        // Must be in image modal with multiple frames and not paused
-        if !self.is_image_modal_open()
-            || self.image_modal.gif_frames.len() <= 1
+        // iTerm2 handles pixels internally, but the UI still follows the GIF's
+        // frame delays so its progress counter remains useful.
+        let modal_deadline = if self.kitty_animation.is_some()
+            || !self.is_image_modal_open()
+            || self.image_modal_frame_count() <= 1
             || self.image_modal.animation_paused
         {
-            return None;
-        }
-
-        let last_update = self.image_modal.last_frame_update?;
-        let current_frame = &self.image_modal.gif_frames[self.image_modal.frame_index];
-        let frame_delay = std::time::Duration::from_millis(current_frame.delay_ms as u64);
-        let elapsed = last_update.elapsed();
-
-        if elapsed >= frame_delay {
-            // Frame is due now - return minimal duration to trigger immediate redraw
-            Some(std::time::Duration::from_millis(1))
+            None
         } else {
-            Some(frame_delay - elapsed)
+            self.image_modal.last_frame_update.and_then(|last_update| {
+                let frame_delay = std::time::Duration::from_millis(u64::from(
+                    self.image_modal_frame_delay_ms(self.image_modal.frame_index)?,
+                ));
+                Some(
+                    frame_delay
+                        .saturating_sub(last_update.elapsed())
+                        .max(std::time::Duration::from_millis(1)),
+                )
+            })
+        };
+
+        let inline_deadline = self
+            .inline_gif_animations
+            .values()
+            .filter_map(StreamingGif::time_until_next_frame)
+            .min();
+
+        match (modal_deadline, inline_deadline) {
+            (Some(modal), Some(inline)) => Some(modal.min(inline)),
+            (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+            (None, None) => None,
         }
     }
 
@@ -2252,6 +2690,57 @@ impl App {
                 Clear => self.cell_edit_value.clear(),
                 DeleteWord => Self::delete_last_word(&mut self.cell_edit_value),
             }
+            return true;
+        }
+
+        false
+    }
+
+    /// Insert a bracketed paste into the active single-line input.
+    ///
+    /// Newlines and tabs become spaces and other control characters are
+    /// dropped, so pasted terminal escape sequences can never become commands.
+    /// Filters are recomputed once for the complete paste rather than once per
+    /// character.
+    pub fn apply_text_input_paste(&mut self, pasted: &str) -> bool {
+        let text: String = pasted
+            .chars()
+            .filter_map(|character| match character {
+                '\r' | '\n' | '\t' => Some(' '),
+                character if character.is_control() => None,
+                character => Some(character),
+            })
+            .collect();
+
+        if self.show_search && self.outline_search_active {
+            self.search_query.push_str(&text);
+            self.filter_outline();
+            return true;
+        }
+        if self.mode == AppMode::DocSearch && self.doc_search.active {
+            self.doc_search.query.push_str(&text);
+            self.update_doc_search_matches();
+            return true;
+        }
+        if self.mode == AppMode::LinkFollow && self.link_picker.active {
+            self.link_picker.query.push_str(&text);
+            self.update_link_filter();
+            return true;
+        }
+        if (self.mode == AppMode::FilePicker && self.file_picker.active)
+            || self.mode == AppMode::FileSearch
+        {
+            self.file_picker.query.push_str(&text);
+            self.update_file_filter();
+            return true;
+        }
+        if self.mode == AppMode::CommandPalette {
+            self.command_palette.query.push_str(&text);
+            self.filter_commands();
+            return true;
+        }
+        if self.mode == AppMode::CellEdit {
+            self.cell_edit_value.push_str(&text);
             return true;
         }
 
@@ -5854,6 +6343,13 @@ mod image_picker_tests {
         picker.set_protocol_type(ProtocolType::Kitty);
 
         assert!(!App::should_use_env_protocol_fallback(&picker));
+    }
+
+    #[test]
+    fn iterm_environment_overrides_partial_kitty_capability() {
+        assert!(App::is_iterm2_environment(Some("iTerm.app"), None));
+        assert!(App::is_iterm2_environment(None, Some("iTerm2")));
+        assert!(!App::is_iterm2_environment(Some("kitty"), None));
     }
 }
 

@@ -3,6 +3,7 @@ mod edits;
 mod help_text;
 mod image_cache;
 mod interactive;
+mod iterm_animation;
 mod kitty_animation;
 #[cfg(all(feature = "mermaid", unix))]
 mod mermaid;
@@ -19,12 +20,11 @@ pub use terminal_compat::{ColorMode, TerminalCapabilities};
 pub use theme::ThemeName;
 
 use crate::keybindings::Action;
+use crate::tui::image_cache::IMAGE_WORK_POLL_INTERVAL;
 use color_eyre::Result;
 use crossterm::ExecutableCommand;
 use crossterm::event::{KeyCode, MouseEvent, MouseEventKind};
-use crossterm::terminal::{
-    BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
-};
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use opensesame::{Editor, EditorConfig};
 use ratatui::DefaultTerminal;
 use std::io::stdout;
@@ -42,11 +42,14 @@ fn run_editor(
     editor_config: &EditorConfig,
     mouse_captured: bool,
 ) -> Result<()> {
-    use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+    use crossterm::event::{
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    };
 
     // Leave alternate screen, disable raw mode and release the mouse so the
     // editor gets full terminal control (a child editor inheriting
     // mouse-reporting mode behaves erratically)
+    let _ = stdout().execute(DisableBracketedPaste);
     stdout().execute(LeaveAlternateScreen)?;
     if mouse_captured {
         let _ = stdout().execute(DisableMouseCapture);
@@ -66,6 +69,7 @@ fn run_editor(
 
     // Restore terminal state
     stdout().execute(EnterAlternateScreen)?;
+    let _ = stdout().execute(EnableBracketedPaste);
     if mouse_captured {
         let _ = stdout().execute(EnableMouseCapture);
     }
@@ -105,20 +109,34 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     let mut needs_redraw = true;
 
     loop {
+        if app.sync_native_animation_activation() {
+            // Direct terminal images outlive Ratatui buffer cells. Clear once
+            // when their target changes so a deselected or moved GIF cannot
+            // remain painted at its old location.
+            terminal.clear()?;
+            needs_redraw = true;
+        }
+        if app.process_image_results() {
+            needs_redraw = true;
+        }
+        if app.advance_modal_animation() {
+            needs_redraw = true;
+        }
+        if app.advance_inline_animations() {
+            needs_redraw = true;
+        }
+
         if needs_redraw {
-            // Use synchronized output when animating GIFs (reduces flicker).
-            let use_sync = app.is_image_modal_open()
-                && app.image_modal.gif_frames.len() > 1
-                && !app.has_kitty_animation();
+            app.prepare_iterm_animation_frame();
+            let draw_result = terminal.draw(|frame| ui::render(frame, &mut app));
+            draw_result?;
 
-            if use_sync {
-                let _ = stdout().execute(BeginSynchronizedUpdate);
-            }
-
-            terminal.draw(|frame| ui::render(frame, &mut app))?;
-
-            if use_sync {
-                let _ = stdout().execute(EndSynchronizedUpdate);
+            let mut output = stdout();
+            if let Err(error) = app.transmit_staged_iterm_animation(&mut output) {
+                app.disable_iterm_animation(&error);
+                terminal.clear()?;
+                needs_redraw = true;
+                continue;
             }
 
             // If mermaid image dims arrived during this frame, schedule an immediate
@@ -169,9 +187,12 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         // Poll for events with dynamic timeout:
         // - When GIF is animating: use time until next frame (for smooth playback)
         // - Otherwise: 100ms for responsive UI updates
-        let poll_timeout = app
+        let mut poll_timeout = app
             .time_until_next_frame()
             .unwrap_or(Duration::from_millis(100));
+        if app.has_pending_image_work() {
+            poll_timeout = poll_timeout.min(IMAGE_WORK_POLL_INTERVAL);
+        }
         let event_ready = tty::poll_event(poll_timeout)?;
 
         // Check the file watcher every iteration, regardless of whether there
@@ -235,8 +256,13 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         }
 
         if !event_ready {
+            if app.has_pending_image_work() {
+                // The next loop drains completed work. If the worker is still
+                // busy, the short dynamic timeout remains in effect.
+                continue;
+            }
             // GIF animation needs redraw on timeout
-            if app.is_image_modal_open() && app.image_modal.gif_frames.len() > 1 {
+            if app.is_image_modal_open() && app.image_modal_frame_count() > 1 {
                 needs_redraw = true;
             }
             continue;
@@ -246,6 +272,13 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         needs_redraw = true;
 
         let event = tty::read_event()?;
+
+        // Bracketed paste arrives as one event, preventing pasted text from
+        // being interpreted as navigation commands.
+        if let Some(pasted) = event.as_paste_event() {
+            app.apply_text_input_paste(pasted);
+            continue;
+        }
 
         // Mouse handling — keep simple: scroll wheel scrolls content / outline.
         if let Some(mouse) = event.as_mouse_event() {

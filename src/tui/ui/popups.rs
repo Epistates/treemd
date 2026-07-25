@@ -419,10 +419,8 @@ pub fn render_cell_edit_overlay(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Clear, edit_area);
 
     // Create edit display
-    let edit_text = format!(
-        "Edit Cell [{},{}]: {}_",
-        app.cell_edit_row, app.cell_edit_col, app.cell_edit_value
-    );
+    let edit_prefix = format!("Edit Cell [{},{}]: ", app.cell_edit_row, app.cell_edit_col);
+    let edit_text = format!("{edit_prefix}{}", app.cell_edit_value);
 
     let paragraph = Paragraph::new(vec![
         Line::from(vec![Span::styled(
@@ -452,6 +450,18 @@ pub fn render_cell_edit_overlay(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     frame.render_widget(paragraph, edit_area);
+
+    if edit_area.width > 2 {
+        use unicode_width::UnicodeWidthStr;
+        let cursor_offset =
+            edit_prefix.width() as u16 + app.cell_edit_value.as_str().width() as u16;
+        let cursor_x = edit_area
+            .x
+            .saturating_add(1)
+            .saturating_add(cursor_offset)
+            .min(edit_area.right().saturating_sub(2));
+        frame.set_cursor_position((cursor_x, edit_area.y.saturating_add(3)));
+    }
 }
 
 /// Render file creation confirmation dialog
@@ -712,7 +722,6 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
                 &app.command_palette.query,
                 Style::default().fg(theme.modal_text()),
             ),
-            Span::styled(" ", Style::default().bg(theme.foreground)), // Cursor (reverse-video for gapless rendering)
         ]),
         Line::from(""),
     ];
@@ -787,6 +796,17 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
     );
 
     frame.render_widget(paragraph, area);
+
+    if area.width > 2 {
+        use unicode_width::UnicodeWidthStr;
+        let cursor_offset = 2 + app.command_palette.query.as_str().width() as u16;
+        let cursor_x = area
+            .x
+            .saturating_add(1)
+            .saturating_add(cursor_offset)
+            .min(area.right().saturating_sub(2));
+        frame.set_cursor_position((cursor_x, area.y.saturating_add(3)));
+    }
 }
 
 /// Render the file picker modal

@@ -249,12 +249,13 @@ pub fn resume_raw_mode() -> io::Result<()> {
 /// Safe to call from a panic hook or during shutdown.
 pub fn restore() {
     use crossterm::ExecutableCommand;
-    use crossterm::event::DisableMouseCapture;
+    use crossterm::event::{DisableBracketedPaste, DisableMouseCapture};
     use crossterm::terminal::LeaveAlternateScreen;
     use std::io::stdout;
 
     // Each step is best-effort — some terminals reject mouse capture commands,
     // and we still want to leave the altscreen and drop raw mode.
+    let _ = stdout().execute(DisableBracketedPaste);
     let _ = stdout().execute(DisableMouseCapture);
     let _ = stdout().execute(LeaveAlternateScreen);
     let _ = disable_raw_mode();
