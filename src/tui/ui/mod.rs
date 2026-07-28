@@ -968,14 +968,18 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
 
         frame.render_widget(modal_border, modal_area);
 
-        // Native terminal animation renders the original GIF directly. Paused
-        // and manually stepped frames continue through ratatui-image.
-        if !kitty_animating && !iterm_animating {
+        let first_frame_ready = protocol_state.has_completed_frame();
+
+        // Keep identical image cells in Ratatui's virtual buffer after iTerm
+        // takes over. Removing them would make the diff engine print clearing
+        // cells across the native animation on the following title redraw.
+        // Because the encoded still is unchanged, Ratatui emits it only once.
+        if !kitty_animating {
             let img_widget = StatefulImage::new().resize(resize);
             frame.render_stateful_widget(img_widget, image_area, protocol_state);
         }
 
-        if let Some(path) = modal_path {
+        if first_frame_ready && let Some(path) = modal_path {
             app.stage_iterm_animation(
                 &path,
                 crate::tui::app::ItermAnimationSurface::Modal,
