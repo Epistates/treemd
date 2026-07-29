@@ -70,8 +70,8 @@ cat FILE.md | treemd -s "Full Heading Text" -  # Pipe stdin, extract from stream
 Attach `-o` to `--list` or `--tree` only (not `-s`):
 
 - `-o plain`: Human-readable text (default)
-- `-o json`: JSON array for scripting/parsing (works with `--list` and `--tree`)
-- `-o tree`: Box-drawing tree structure (`--tree` only; using with `--list` returns an error)
+- `-o json`: JSON for scripting/parsing. The shape differs by mode: `--list -o json` emits a nested document object (`.document.metadata` plus a recursive `.document.sections[]` tree carrying each section's content and blocks), while `--tree -o json` emits a flat array of `{"level", "text"}` objects.
+- `-o tree`: Box-drawing tree structure (`--tree` only; using it with `--list` prints `Use --tree for tree output` and exits `1`)
 
 For tql (`-q`) queries, use `--query-output` instead of `-o`. Available formats:
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agent skill definition** - `skills/treemd/` documents the CLI and tql for coding agents, so they can survey and extract from large markdown files without loading them whole
+
 ### Fixed
 
 - **`.code[lang]` selected by body text instead of language** - `.code[rust]` matched any block whose contents mentioned "rust" while missing actual ` ```rust ` blocks; language filters are now whole-string and case-insensitive, and block bodies remain searchable through `select(contains(...))`
