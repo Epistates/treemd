@@ -301,26 +301,28 @@ impl Engine {
                 let pattern_lower = pattern.to_lowercase();
                 Ok(elements
                     .into_iter()
-                    .filter(|v| {
-                        let text = v.to_text().to_lowercase();
-                        if *exact {
-                            text == pattern_lower
-                        } else {
-                            text.contains(&pattern_lower)
+                    .filter(|v| match v {
+                        // A bracket filter on a code block selects by language,
+                        // not by body text — `.code[rust]` means "Rust code
+                        // blocks". Use `select(contains(...))` to search bodies.
+                        Value::Code(code) => code_matches_language(code, pattern),
+                        _ => {
+                            let text = v.to_text().to_lowercase();
+                            if *exact {
+                                text == pattern_lower
+                            } else {
+                                text.contains(&pattern_lower)
+                            }
                         }
                     })
                     .collect())
             }
             Filter::Type { type_name, .. } => Ok(elements
                 .into_iter()
-                .filter(|v| {
-                    if let Value::Link(link) = v {
-                        link.link_type.as_str() == type_name
-                    } else if let Value::Code(code) = v {
-                        code.language.as_deref() == Some(type_name)
-                    } else {
-                        false
-                    }
+                .filter(|v| match v {
+                    Value::Link(link) => link.link_type.as_str() == type_name,
+                    Value::Code(code) => code_matches_language(code, type_name),
+                    _ => false,
                 })
                 .collect()),
         }
@@ -1110,6 +1112,16 @@ fn apply_index(mut values: Vec<Value>, index: &IndexOp) -> Result<Vec<Value>, Qu
     }
 }
 
+/// Matches a code block against a language name from a bracket filter.
+///
+/// The comparison is whole-string and case-insensitive, so `.code[java]` never
+/// matches a JavaScript block. Fenced blocks with no info string match nothing.
+fn code_matches_language(code: &CodeValue, language: &str) -> bool {
+    code.language
+        .as_deref()
+        .is_some_and(|lang| lang.eq_ignore_ascii_case(language))
+}
+
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
@@ -1339,9 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn test_code_blocks_with_content_filter_in_list() {
-        // Note: Language filtering via .code[rust] currently uses text filter (matches content)
-        // For content-based filtering, we can test with content patterns
+    fn test_code_blocks_with_language_filter_in_list() {
         let md = r#"## Examples
 
 1. Python example:
@@ -1354,16 +1364,71 @@ mod tests {
    fn main() {}
    ```"#;
 
-        // Filter by content (text filter matches the code content)
-        let results = eval(md, ".code[main]");
-        assert_eq!(
-            results.len(),
-            1,
-            "Should find 1 code block containing 'main'"
-        );
+        let results = eval(md, ".code[rust]");
+        assert_eq!(results.len(), 1, "Should find 1 Rust code block");
 
         if let Value::Code(c) = &results[0] {
+            assert_eq!(c.language.as_deref(), Some("rust"));
             assert!(c.content.contains("fn main"));
+        } else {
+            panic!("Expected Code value");
         }
+    }
+
+    #[test]
+    fn test_code_language_filter_ignores_body_text() {
+        let md = r#"```python
+# rust is mentioned here
+```
+
+```rust
+fn main() {}
+```"#;
+
+        // `[rust]` selects by language, so the Python block that merely
+        // mentions "rust" in its body must not match.
+        let results = eval(md, ".code[rust]");
+        assert_eq!(results.len(), 1);
+        if let Value::Code(c) = &results[0] {
+            assert_eq!(c.language.as_deref(), Some("rust"));
+        } else {
+            panic!("Expected Code value");
+        }
+
+        // Bodies stay searchable through select().
+        let by_body = eval(md, r#".code | select(contains("mentioned"))"#);
+        assert_eq!(by_body.len(), 1);
+        if let Value::Code(c) = &by_body[0] {
+            assert_eq!(c.language.as_deref(), Some("python"));
+        } else {
+            panic!("Expected Code value");
+        }
+    }
+
+    #[test]
+    fn test_code_language_filter_is_whole_string_and_case_insensitive() {
+        let md = r#"```javascript
+let x = 1;
+```
+
+```Rust
+fn main() {}
+```"#;
+
+        // A prefix must not match a longer language name.
+        assert_eq!(eval(md, ".code[java]").len(), 0);
+        assert_eq!(eval(md, ".code[javascript]").len(), 1);
+
+        // Case-insensitive, in both the quoted and unquoted forms.
+        assert_eq!(eval(md, ".code[rust]").len(), 1);
+        assert_eq!(eval(md, r#".code["rust"]"#).len(), 1);
+    }
+
+    #[test]
+    fn test_code_language_filter_skips_blocks_without_language() {
+        let md = "```\nplain fence\n```\n\n```rust\nfn main() {}\n```";
+
+        assert_eq!(eval(md, ".code").len(), 2);
+        assert_eq!(eval(md, ".code[rust]").len(), 1);
     }
 }
