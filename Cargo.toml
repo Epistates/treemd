@@ -21,6 +21,7 @@ exclude = [
     "scripts/",
     "tests/docs/",
     "docs/",
+    "skills/",
 ]
 
 [lib]
