@@ -7,13 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-30
+
 ### Added
 
+- **Terminal-native GIF playback** - Kitty and iTerm2 now animate GIFs themselves. iTerm2 receives the original file over a chunked multipart OSC transfer, so playback stays smooth and the TUI cursor is left undisturbed
+- **Bracketed paste** - Pasted text arrives as a single event and is sanitized before reaching an input field, so escape sequences in a paste can never trigger keybindings
 - **Agent skill definition** - `skills/treemd/` documents the CLI and tql for coding agents, so they can survey and extract from large markdown files without loading them whole
+
+### Changed
+
+- **Image encoding moved off the render path** - A single shared background worker prepares resize/encode work while rendering continues with the last completed frame; a generation counter discards results that a newer image or terminal size has superseded
+- **Inline GIFs stream instead of buffering every frame** - Inline playback retains one compositing canvas and decoder rather than expanding long recordings into hundreds of full-size RGBA frames, and the decoded-protocol cache is now a bounded LRU
+- **Release builds unwind on panic** - The release profile no longer aborts, so panic isolation around third-party image and render work can report an error instead of terminating the TUI
+- **ratatui is built without default features** - Only `crossterm_0_29`, `layout-cache`, and `unstable-rendered-line-info` are enabled
 
 ### Fixed
 
-- **`.code[lang]` selected by body text instead of language** - `.code[rust]` matched any block whose contents mentioned "rust" while missing actual ` ```rust ` blocks; language filters are now whole-string and case-insensitive, and block bodies remain searchable through `select(contains(...))`
+- **`.code[lang]` selected by body text instead of language** - `.code[rust]` matched any block whose body mentioned "rust" while missing blocks actually tagged `rust`; language filters are now whole-string and case-insensitive, and block bodies remain searchable through `select(contains(...))`
+- **Animated GIFs flickered in the image viewer** - The still image now stays in Ratatui's buffer once a terminal takes over animation, so a title redraw no longer paints clearing cells across the native animation, and native playback waits for the first encoded frame
+- **Terminal state could leak on exit** - Shutdown and the panic hook now disable bracketed paste alongside mouse capture and the alternate screen
 
 ## [0.6.0] - 2026-07-22
 
