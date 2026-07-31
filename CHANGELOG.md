@@ -7,15 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **`.img` reported almost no images** - Only images in tight list items were found, because a standalone `![alt](src)` is a paragraph containing an inline image and only top-level image blocks were collected. Images written standalone, inline in a sentence, in a heading, and in a blockquote now reach `.img` and `stats`
-- **Front matter was invisible to map builtins** - `keys`, `values`, `has`, `count`, and `empty` matched only object literals, so `.frontmatter | keys` returned nothing and `has("draft")` was `false` for a key that existed
-
-### Changed
-
-- **The query-language guide now marks what is unimplemented** - `docs/QUERY_LANGUAGE.md` was a design spec presented as a reference; every construct in it was checked against the engine, and the navigation functions, regex filters, parenthesized commas, and property-projection shorthand are now labelled with the working alternative. Its error-message and output-format examples were replaced with real output, including the fact that `-o` is silently ignored alongside `-q`
-
 ## [0.7.0] - 2026-07-30
 
 ### Added
@@ -30,10 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Inline GIFs stream instead of buffering every frame** - Inline playback retains one compositing canvas and decoder rather than expanding long recordings into hundreds of full-size RGBA frames, and the decoded-protocol cache is now a bounded LRU
 - **Release builds unwind on panic** - The release profile no longer aborts, so panic isolation around third-party image and render work can report an error instead of terminating the TUI
 - **ratatui is built without default features** - Only `crossterm_0_29`, `layout-cache`, and `unstable-rendered-line-info` are enabled
+- **The query-language guide now marks what is unimplemented** - `docs/QUERY_LANGUAGE.md` was a design spec presented as a reference; every construct in it was checked against the engine, and the navigation functions, regex filters, parenthesized commas, and property-projection shorthand are now labelled with the working alternative. Its error-message and output-format examples were replaced with real output, including the fact that `-o` is silently ignored alongside `-q`
 
 ### Fixed
 
 - **`.code[lang]` selected by body text instead of language** - `.code[rust]` matched any block whose body mentioned "rust" while missing blocks actually tagged `rust`; language filters are now whole-string and case-insensitive, and block bodies remain searchable through `select(contains(...))`
+- **`.img` reported almost no images** - Only images in tight list items were found, because a standalone `![alt](src)` is a paragraph containing an inline image and only top-level image blocks were collected. Images written standalone, inline in a sentence, in a heading, and in a blockquote now reach `.img` and `stats`
+- **Front matter was invisible to map builtins** - `keys`, `values`, `has`, `count`, and `empty` matched only object literals, so `.frontmatter | keys` returned nothing and `has("draft")` was `false` for a key that existed
 - **Animated GIFs flickered in the image viewer** - The still image now stays in Ratatui's buffer once a terminal takes over animation, so a title redraw no longer paints clearing cells across the native animation, and native playback waits for the first encoded frame
 - **Terminal state could leak on exit** - Shutdown and the panic hook now disable bracketed paste alongside mouse capture and the alternate screen
 
