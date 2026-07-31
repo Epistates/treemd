@@ -121,8 +121,10 @@ fn fn_count(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
         Value::Array(a) => a.len(),
         // jq counts Unicode codepoints, not bytes.
         Value::String(s) => s.chars().count(),
-        Value::Object(o) => o.len(),
-        _ => 1,
+        other => match other.as_map() {
+            Some(map) => map.len(),
+            None => 1,
+        },
     };
     Ok(vec![Value::Number(count as f64)])
 }
@@ -214,11 +216,11 @@ fn fn_flatten(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryErr
 
 fn fn_keys(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
+    if let Some(map) = input.as_map() {
+        let keys: Vec<Value> = map.keys().map(|k| Value::String(k.clone())).collect();
+        return Ok(vec![Value::Array(keys)]);
+    }
     match input {
-        Value::Object(o) => {
-            let keys: Vec<Value> = o.keys().map(|k| Value::String(k.clone())).collect();
-            Ok(vec![Value::Array(keys)])
-        }
         Value::Array(a) => {
             let keys: Vec<Value> = (0..a.len()).map(|i| Value::Number(i as f64)).collect();
             Ok(vec![Value::Array(keys)])
@@ -229,11 +231,11 @@ fn fn_keys(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
 
 fn fn_values(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
+    if let Some(map) = input.as_map() {
+        let values: Vec<Value> = map.values().cloned().collect();
+        return Ok(vec![Value::Array(values)]);
+    }
     match input {
-        Value::Object(o) => {
-            let values: Vec<Value> = o.values().cloned().collect();
-            Ok(vec![Value::Array(values)])
-        }
         Value::Array(a) => Ok(vec![Value::Array(a.clone())]),
         _ => Ok(vec![Value::Array(vec![])]),
     }
@@ -245,8 +247,7 @@ fn fn_empty(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
         Value::Null => true,
         Value::String(s) => s.is_empty(),
         Value::Array(a) => a.is_empty(),
-        Value::Object(o) => o.is_empty(),
-        _ => false,
+        other => other.as_map().is_some_and(|map| map.is_empty()),
     };
     Ok(vec![Value::Bool(is_empty)])
 }
@@ -399,10 +400,7 @@ fn fn_has(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> 
     let input = args.first().unwrap_or(&Value::Null);
     let key = args.get(1).map(|v| v.to_text()).unwrap_or_default();
 
-    let result = match input {
-        Value::Object(o) => o.contains_key(&key),
-        _ => false,
-    };
+    let result = input.as_map().is_some_and(|map| map.contains_key(&key));
 
     Ok(vec![Value::Bool(result)])
 }

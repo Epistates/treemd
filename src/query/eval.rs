@@ -10,6 +10,7 @@ use super::error::{QueryError, QueryErrorKind};
 use super::registry::Registry;
 use super::value::*;
 use crate::parser::Document;
+use crate::parser::output::InlineElement;
 
 /// Evaluation context passed to functions.
 pub struct EvalContext {
@@ -842,6 +843,27 @@ struct ExtractedBlocks {
     blockquotes: Vec<BlockquoteValue>,
 }
 
+/// Collects images carried as inline elements rather than standalone blocks.
+///
+/// The parser only emits a top-level `Block::Image` when an image is not
+/// wrapped in a paragraph — which in practice means tight list items. A
+/// standalone `![alt](src)` line is a paragraph in CommonMark, so without this
+/// the most common form of image would never reach `.img` or `stats`.
+fn collect_inline_images(inline: &[InlineElement], out: &mut ExtractedBlocks) {
+    for element in inline {
+        if let InlineElement::Image {
+            alt, src, title, ..
+        } = element
+        {
+            out.images.push(ImageValue {
+                alt: alt.clone(),
+                src: src.clone(),
+                title: title.clone(),
+            });
+        }
+    }
+}
+
 fn extract_blocks(doc: &Document) -> ExtractedBlocks {
     use crate::parser::content::parse_content;
     use crate::parser::links::extract_links;
@@ -892,10 +914,14 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                             .collect(),
                     });
                 }
-                Block::Paragraph { content, .. } => {
+                Block::Paragraph { content, inline } => {
+                    collect_inline_images(inline, out);
                     out.paragraphs.push(ParagraphValue {
                         content: content.clone(),
                     });
+                }
+                Block::Heading { inline, .. } => {
+                    collect_inline_images(inline, out);
                 }
                 Block::List { ordered, items } => {
                     for item in items {
@@ -1430,5 +1456,75 @@ fn main() {}
 
         assert_eq!(eval(md, ".code").len(), 2);
         assert_eq!(eval(md, ".code[rust]").len(), 1);
+    }
+
+    fn image_srcs(md: &str) -> Vec<String> {
+        eval(md, ".img")
+            .into_iter()
+            .filter_map(|v| match v {
+                Value::Image(i) => Some(i.src),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_images_are_found_in_every_block_position() {
+        // A standalone image is a paragraph containing one inline image, so
+        // each of these reaches `.img` only by scanning inline elements.
+        assert_eq!(image_srcs("![a](a.png)"), ["a.png"]);
+        assert_eq!(image_srcs("# T\n\n![a](a.png)"), ["a.png"]);
+        assert_eq!(image_srcs("Text with ![a](a.png) inside."), ["a.png"]);
+        assert_eq!(image_srcs("> ![a](a.png)"), ["a.png"]);
+        assert_eq!(image_srcs("# Title ![a](a.png)"), ["a.png"]);
+        // Tight list items are the one case the parser reports as a block.
+        assert_eq!(image_srcs("- item ![a](a.png)"), ["a.png"]);
+    }
+
+    #[test]
+    fn test_multiple_images_are_collected_in_document_order() {
+        let md = "![a](a.png)\n\n![b](b.png)\n\n> ![c](c.png)";
+        assert_eq!(image_srcs(md), ["a.png", "b.png", "c.png"]);
+    }
+
+    #[test]
+    fn test_image_is_not_double_counted() {
+        // Guards the block and inline paths from both claiming one image.
+        assert_eq!(image_srcs("- item ![a](a.png)").len(), 1);
+        assert_eq!(image_srcs("![a](a.png)").len(), 1);
+    }
+
+    #[test]
+    fn test_frontmatter_is_treated_as_a_map_by_builtins() {
+        let md = "---\ntitle: Doc\ndraft: false\n---\n\n# T";
+
+        let keys = eval(md, ".frontmatter | keys");
+        assert_eq!(keys.len(), 1);
+        if let Value::Array(items) = &keys[0] {
+            let names: Vec<String> = items.iter().map(|v| v.to_text()).collect();
+            assert!(names.contains(&"title".to_string()));
+            assert!(names.contains(&"draft".to_string()));
+        } else {
+            panic!("Expected Array of keys");
+        }
+
+        assert_eq!(
+            eval(md, r#".frontmatter | has("title")"#)[0].to_text(),
+            "true"
+        );
+        assert_eq!(
+            eval(md, r#".frontmatter | has("nope")"#)[0].to_text(),
+            "false"
+        );
+        assert_eq!(eval(md, ".frontmatter | count")[0].to_text(), "2");
+        assert_eq!(eval(md, ".frontmatter | empty")[0].to_text(), "false");
+    }
+
+    #[test]
+    fn test_object_literals_still_behave_as_maps() {
+        let md = "# T";
+
+        assert_eq!(eval(md, r#"{a: 1} | has("a")"#)[0].to_text(), "true");
+        assert_eq!(eval(md, "{a: 1, b: 2} | count")[0].to_text(), "2");
     }
 }

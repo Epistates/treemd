@@ -139,6 +139,18 @@ impl Value {
         }
     }
 
+    /// Borrow the key/value pairs of a map-like value.
+    ///
+    /// Front matter and constructed objects share a representation, so
+    /// builtins that walk keys should accept either rather than matching
+    /// `Object` alone and silently ignoring front matter.
+    pub fn as_map(&self) -> Option<&IndexMap<String, Value>> {
+        match self {
+            Value::Object(map) | Value::FrontMatter(map) => Some(map),
+            _ => None,
+        }
+    }
+
     /// Get a property from this value by name.
     ///
     /// This is the core property access mechanism used by `.property` syntax.

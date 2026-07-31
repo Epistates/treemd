@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`.img` reported almost no images** - Only images in tight list items were found, because a standalone `![alt](src)` is a paragraph containing an inline image and only top-level image blocks were collected. Images written standalone, inline in a sentence, in a heading, and in a blockquote now reach `.img` and `stats`
+- **Front matter was invisible to map builtins** - `keys`, `values`, `has`, `count`, and `empty` matched only object literals, so `.frontmatter | keys` returned nothing and `has("draft")` was `false` for a key that existed
+
 ## [0.7.0] - 2026-07-30
 
 ### Added
