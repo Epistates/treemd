@@ -1,8 +1,13 @@
 # treemd Query Language (tql)
 
-> **Status**: Design Specification
-> **Version**: 1.0.0-draft
+> **Status**: Design specification — describes the intended language, not only what ships today
+> **Verified against**: treemd 0.7.0
 > **Goal**: jq-like querying for Markdown - maximum DX and utility
+
+Everything here is implemented **except** the constructs marked
+**Not implemented**. Those parse-error or return "Unknown function" today;
+each one names the working alternative where there is one. For the reference
+covering only shipped behavior, run `treemd --query-help`.
 
 ## Design Philosophy
 
@@ -47,7 +52,7 @@ treemd -q '.h1[Installation] | content' doc.md  # Section content
 | `.h1` - `.h6` | Headings at specific level | `.h2` |
 | `.h[text]` | Heading matching text (fuzzy) | `.h[Install]` |
 | `.h["text"]` | Heading matching text (exact) | `.h["Getting Started"]` |
-| `.h[/regex/]` | Heading matching regex | `.h[/Chapter \d+/]` |
+| `.h[/regex/]` | **Not implemented** — use `.h \| select(matches("Chapter [0-9]+"))` | `.h[/Chapter \d+/]` |
 | `.h1[text]` | Level + text filter combined | `.h1[Features]` |
 
 ### Code Blocks
@@ -55,9 +60,12 @@ treemd -q '.h1[Installation] | content' doc.md  # Section content
 | Selector | Description | Example |
 |----------|-------------|---------|
 | `.code` | All code blocks | `.code` |
-| `.code[lang]` | Code blocks with language | `.code[rust]` |
+| `.code[lang]` | Code blocks with language (whole-string, case-insensitive) | `.code[rust]` |
 | `.code["lang"]` | Same, explicit string | `.code["python"]` |
-| `.code[/regex/]` | Language matching regex | `.code[/^(js\|ts)$/]` |
+| `.code[/regex/]` | **Not implemented** — use `.code \| select(.lang == "js" or .lang == "ts")` | `.code[/^(js\|ts)$/]` |
+
+A bracket filter on `.code` matches the **language**, never the block body.
+To search bodies, use `.code | select(contains("TODO"))`.
 
 ### Links
 
@@ -73,12 +81,23 @@ treemd -q '.h1[Installation] | content' doc.md  # Section content
 
 | Selector | Description |
 |----------|-------------|
-| `.img` | All images |
+| `.img` | All images (see caveats below) |
 | `.table` | All tables |
 | `.list` | All lists |
 | `.blockquote` | All blockquotes |
 | `.para` | All paragraphs |
 | `.frontmatter` | YAML front matter |
+
+`.img` finds images written standalone, inline in a sentence, in a heading, in
+a blockquote, and in a tight list item. Three cases are still missed because of
+how the underlying parser reports them:
+
+- **Images wrapped in a link** — `[![badge](b.png)](https://ci.example)` is not
+  reported, so README badge rows come back empty and `stats` undercounts.
+- **Loose list items** (items separated by blank lines) do not expose their
+  content as blocks, so images inside them are missed.
+- **Image titles** — `![a](x.png "Title")` puts `x.png "Title"` in `.src` and
+  leaves `.title` empty, rather than splitting the two.
 
 ### Document
 
@@ -106,6 +125,11 @@ treemd -q '.h1[Installation] | content' doc.md  # Section content
 ```
 
 ### Navigation Functions
+
+**Not implemented.** Every function in this section reports
+`Unknown function` today. Use the hierarchy operators above instead:
+`.h1[Features] > .h2` covers the `children` case and `.h1 >> .h2` covers
+`descendants`.
 
 ```bash
 .h2[0] | parent              # Parent heading of first h2
@@ -172,9 +196,12 @@ Comma generates multiple outputs:
 
 ```bash
 .h1, .h2                     # Both h1s and h2s
-(.h1, .h2) | text            # Text of h1s and h2s
 .code[rust], .code[python]   # Rust and Python code
 ```
+
+A comma **inside parentheses** is not implemented — `(.h1, .h2) | text`
+fails with `Expected ')', found ','`. Pipe each branch separately instead:
+`.h1 | text, .h2 | text`.
 
 ---
 
@@ -226,9 +253,12 @@ Comma generates multiple outputs:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `.src` | string | Image source URL |
+| `.src` | string | Image source URL (includes the title when one is present) |
 | `.alt` | string | Alt text |
-| `.title` | string? | Title attribute |
+| `.title` | string? | Title attribute — currently always empty |
+
+Access these as properties (`.img[0].alt`). Only `src`/`url`/`href` exist as
+pipe functions; `.img | alt` reports `Unknown function`.
 
 ---
 
@@ -339,15 +369,20 @@ Build custom JSON structures:
 [.h2[].text]
 [.h | {level, text}]
 
-# Nested structure
+# Nested structure (requires the `children` navigation function, see above)
 {
   title: .h1[0].text,
   sections: [.h2[] | {title: .text, subsections: [.children[].text]}]
 }
+```
 
-# Property projection (shorthand)
-.h | {level, text}              # {level: .level, text: .text}
-.link | {text, url, type}
+**Property projection shorthand is not implemented.** Every key needs an
+explicit value, so `{level, text}` fails with `Expected ':', found ','`.
+Write the pairs out:
+
+```bash
+.h | {level: .level, text: .text}
+.link | {text: .text, url: .url, type: .type}
 ```
 
 ---
@@ -386,6 +421,11 @@ For documents with YAML front matter:
 
 ## Output Formats
 
+Queries select their format with `--query-output`, **not** `-o`. The `-o` flag
+applies to `--list`/`--tree` and is silently ignored alongside `-q`, so
+`treemd -q '.h2' -o json` prints plain text and exits `0`. Supported values are
+`plain` (default), `json`, `json-pretty`, `jsonl`, `md`, and `tree`.
+
 ### Plain Text (Default)
 
 ```bash
@@ -398,12 +438,11 @@ $ treemd -q '.h2' doc.md
 ### JSON
 
 ```bash
-$ treemd -q '.h2' -o json doc.md
-[
-  {"level": 2, "text": "Introduction", "line": 5},
-  {"level": 2, "text": "Installation", "line": 12},
-  {"level": 2, "text": "Usage", "line": 25}
-]
+$ treemd -q '.h2' --query-output json doc.md
+[{"type":"heading","level":2,"text":"Introduction","line":5},{"type":"heading","level":2,"text":"Installation","line":12}]
+
+$ treemd -q '.h2' --query-output json-pretty doc.md   # same data, indented
+$ treemd -q '.h2' --query-output jsonl doc.md         # one object per line
 ```
 
 ### Line-Delimited (for Piping)
@@ -428,12 +467,12 @@ Run the following command:
 ### Tree Format
 
 ```bash
-$ treemd -q '.h' -o tree doc.md
+$ treemd -q '.h' --query-output tree doc.md
 ├─ # Title
-│  ├─ ## Introduction
-│  ├─ ## Installation
-│  │  └─ ### Prerequisites
-│  └─ ## Usage
+├─ ## Introduction
+├─ ## Installation
+├─ ### Prerequisites
+└─ ## Usage
 ```
 
 ---
@@ -472,18 +511,16 @@ treemd -q '.h | levels' doc.md
 treemd -q '.h1[Examples] >> .code | select(.text | lines > 20)' doc.md
 
 # All images with alt text as JSON
-treemd -q '.img | {alt, src}' -o json doc.md
+treemd -q '.img | {alt: .alt, src: .src}' --query-output json doc.md
 
 # Find TODOs in code comments
-treemd -q '.code | select(.text | contains("TODO"))' doc.md
+treemd -q '.code | select(contains("TODO"))' doc.md
 
 # Links grouped by type
 treemd -q '.link | group_by(.type)' doc.md
 
-# First code block in each h2 section
-treemd -q '.h2[] | (.text, (.children | .code[0] | .text // "none"))' doc.md
-
 # Heading hierarchy as nested JSON
+# Needs the `children` navigation function, which is not implemented
 treemd -q '[.h1[] | {
   title: .text,
   sections: [.children[] | {title: .text, subsections: [.children[].text]}]
@@ -510,41 +547,44 @@ done
 diff <(treemd -q '.h | text' a.md) <(treemd -q '.h | text' b.md)
 
 # Generate sitemap JSON
-treemd -q '[.h[] | {level, text, slug: (.text | slugify)}]' -o json doc.md
+treemd -q '[.h[] | {level: .level, text: .text, slug: (.text | slugify)}]' --query-output json doc.md
 ```
 
 ---
 
 ## Error Messages
 
-treemd provides helpful, Rust-quality error messages:
+Parse errors carry a source span pointing at the offending token. All errors
+go to stderr and exit `1`.
+
+```
+$ treemd -q '.h2 | | text' doc.md
+error: Expected expression, found '|'
+  --> query
+  |
+1 | .h2 | | text
+          ^  unexpected token
+```
+
+The richer diagnostics below are the target, not current behavior. Today
+semantic errors are a single line with no span, no `help:` line, and no
+"did you mean" suggestion:
 
 ```
 $ treemd -q '.h99' doc.md
-error: Invalid heading level '.h99'
-  --> query:1:2
-  |
-1 | .h99
-  |  ^^^ heading levels must be 1-6, or use '.h' for any level
-  |
-help: did you mean '.h6'?
-
-$ treemd -q '.h1[Missing]' doc.md
-warning: No heading matches 'Missing'
-  --> doc.md
-  |
-  = note: available h1 headings: "Introduction", "Installation", "Usage"
-  = help: use '.h1' to list all h1 headings
+error: Property 'h99' not found on document
 
 $ treemd -q '.h1 | nonexistent' doc.md
 error: Unknown function 'nonexistent'
-  --> query:1:8
-  |
-1 | .h1 | nonexistent
-  |       ^^^^^^^^^^^ not a recognized function
-  |
-help: similar functions: 'next', 'nth', 'not'
-      see 'treemd --query-help' for all functions
+```
+
+A filter that matches nothing is **not** an error — it prints nothing and
+exits `0`, so scripts should test for empty output rather than exit status:
+
+```
+$ treemd -q '.h1[Missing]' doc.md
+$ echo $?
+0
 ```
 
 ---
@@ -592,6 +632,9 @@ identifier  = [a-zA-Z_] [a-zA-Z0-9_]* ;
 
 ## Implementation Phases
 
+Phases 1, 3, and 4 have shipped. Phase 2 shipped except for the navigation
+functions, which remain the largest gap between this spec and the engine.
+
 ### Phase 1: Core (MVP)
 - Element selectors: `.h`, `.h1-6`, `.code`, `.link`, `.img`, `.table`
 - Basic filters: `[text]`, `[lang]`, `[type]`
@@ -603,7 +646,7 @@ identifier  = [a-zA-Z_] [a-zA-Z0-9_]* ;
 
 ### Phase 2: Navigation
 - Hierarchy: `>`, `>>`
-- Navigation: `parent`, `children`, `siblings`, `next`, `prev`
+- Navigation (not implemented): `parent`, `children`, `siblings`, `next`, `prev`
 - More properties: `.line`, `.offset`, `.slug`
 - More filters: `startswith`, `endswith`, `matches`
 

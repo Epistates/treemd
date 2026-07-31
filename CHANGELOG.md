@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`.img` reported almost no images** - Only images in tight list items were found, because a standalone `![alt](src)` is a paragraph containing an inline image and only top-level image blocks were collected. Images written standalone, inline in a sentence, in a heading, and in a blockquote now reach `.img` and `stats`
 - **Front matter was invisible to map builtins** - `keys`, `values`, `has`, `count`, and `empty` matched only object literals, so `.frontmatter | keys` returned nothing and `has("draft")` was `false` for a key that existed
 
+### Changed
+
+- **The query-language guide now marks what is unimplemented** - `docs/QUERY_LANGUAGE.md` was a design spec presented as a reference; every construct in it was checked against the engine, and the navigation functions, regex filters, parenthesized commas, and property-projection shorthand are now labelled with the working alternative. Its error-message and output-format examples were replaced with real output, including the fact that `-o` is silently ignored alongside `-q`
+
 ## [0.7.0] - 2026-07-30
 
 ### Added

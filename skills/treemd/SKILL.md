@@ -63,7 +63,7 @@ treemd -s "Full Heading Text" FILE.md     # Extract heading + content (must matc
 cat FILE.md | treemd -s "Full Heading Text" -  # Pipe stdin, extract from stream
 ```
 
-> **Important**: `-s` requires the **exact full heading text** (including emoji and parentheses). Partial/fuzzy matches like `treemd -s "Installation"` will return `Section 'Installation' not found`. The `-o` flag has no effect in `-s` mode — output is always plain markdown.
+> **Important**: `-s` requires the **exact full heading text** (including emoji and parentheses). A partial match fails: given a heading `## 📦 Installation (from source)`, `treemd -s "Installation"` exits `1` with `Section 'Installation' not found`, while the full text succeeds. Use `-l --filter` first to recover the exact heading, then pass it verbatim. The `-o` flag has no effect in `-s` mode — output is always plain markdown.
 
 #### Output Format Options
 
