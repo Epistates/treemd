@@ -100,7 +100,7 @@ libc = "0.2"
 # Mermaid diagram rendering (pure Rust, no external tools)
 # NOTE: pre-1.0 crate in early development; semver pins to >=0.3.0, <0.4.0
 mermaid-rs-renderer = { version = "0.3", default-features = false, optional = true }
-resvg = { version = "0.47", optional = true }
+resvg = { version = "0.48", optional = true }
 
 [features]
 default = ["unstable-dynamic", "mermaid"]
