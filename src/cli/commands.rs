@@ -94,6 +94,19 @@ pub struct Cli {
     #[arg(long = "filter", value_name = "PATTERN")]
     pub filter: Option<String>,
 
+    /// Show each heading's line range as `[start-end]` (non-interactive)
+    ///
+    /// Appends the 1-indexed line range to every heading in --list or --tree
+    /// plain output: `start` is the line the heading itself is on, `end` is
+    /// the last line before the next heading at the same or a shallower
+    /// level (or the last line of the document). Lets a downstream reader —
+    /// human or LLM — fetch only the lines for a section of interest instead
+    /// of loading the whole file.
+    ///
+    /// Example: -l -n prints `## Installation [12-34]`
+    #[arg(short = 'n', long = "line-numbers")]
+    pub line_numbers: bool,
+
     /// Show only headings at specific level (1-6)
     ///
     /// Filters headings by their level:

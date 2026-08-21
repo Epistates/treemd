@@ -75,6 +75,7 @@ Use it to:
 | **Tree visualization** | Hierarchical display with `--tree` |
 | **Section extraction** | Extract by heading name with `-s` |
 | **Smart filtering** | Filter by text or level (`--filter`, `-L`) |
+| **Line ranges** | Append each heading's `[start-end]` line range with `-n` |
 | **Multiple formats** | Plain text or JSON output (`-o json`) |
 | **Statistics** | Count headings by level (`--count`) |
 | **Stdin support** | Pipe markdown content (`cat doc.md \| treemd -q '.h'`) |
@@ -293,6 +294,16 @@ treemd -l -L 2 README.md                # Only ## headings
 treemd --count README.md                # Count by level
 treemd -l -o json README.md             # JSON output
 ```
+
+#### Line ranges
+
+```bash
+treemd -l -n README.md                  # Each heading with its [start-end] line range
+treemd --tree -n README.md              # Same, in tree form
+```
+
+Useful for LLM-driven workflows: read the heading list first, then fetch only
+the line range for the section that matters instead of the whole file.
 
 ### Query Language
 

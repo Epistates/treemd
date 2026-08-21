@@ -227,6 +227,71 @@ fn tree_with_level_narrows_tree() {
 }
 
 // ------------------------------------------------------------------
+// -n / --line-numbers
+// ------------------------------------------------------------------
+
+#[test]
+fn list_with_line_numbers_appends_ranges() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", "-n", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(lines.len(), 5);
+    // "Title" is h1 and nests every other heading in the fixture, so its
+    // range must run through the end of the document.
+    assert_eq!(lines[0], "# Title [1-24]");
+    // "Conclusion" is the last heading and has no children.
+    assert_eq!(lines[4], "## Conclusion [22-24]");
+    for line in &lines {
+        assert!(
+            line.contains('[') && line.ends_with(']'),
+            "missing line range: {line}"
+        );
+    }
+}
+
+#[test]
+fn list_without_line_numbers_has_no_ranges() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains('['), "unexpected line range: {stdout}");
+}
+
+#[test]
+fn tree_with_line_numbers_appends_ranges() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["--tree", "-n", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Title [1-24]"));
+    assert!(stdout.contains("Conclusion [22-24]"));
+}
+
+#[test]
+fn list_with_line_numbers_and_level_filter_keeps_document_wide_ranges() {
+    // Ranges must reflect the full document even when the *displayed* set
+    // of headings is narrowed by --level.
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", "-n", "-L", "2", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].starts_with("## Installation ["));
+    assert!(lines[1].starts_with("## Usage ["));
+    assert!(lines[2].starts_with("## Conclusion ["));
+}
+
+#[test]
+fn list_json_output_ignores_line_numbers_flag() {
+    let f = fixture_file();
+    let (with_n, _, code1) = run(&["-l", "-n", "-o", "json", f.to_str().unwrap()]);
+    let (without_n, _, code2) = run(&["-l", "-o", "json", f.to_str().unwrap()]);
+    assert_eq!(code1, 0);
+    assert_eq!(code2, 0);
+    assert_eq!(with_n, without_n, "-n should not affect JSON output");
+}
+
+// ------------------------------------------------------------------
 // -s / --section
 // ------------------------------------------------------------------
 

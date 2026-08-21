@@ -52,7 +52,10 @@ Pinpoint the sections relevant to your goal.
 treemd -l --filter "install" FILE.md        # Fuzzy heading search (case-insensitive)
 treemd -l -L 2 --filter "API" FILE.md      # Narrow by heading level + keyword
 treemd --at-line 150 FILE.md               # "Which heading covers line 150?"
+treemd -l -n FILE.md                       # Each heading with its [start-end] line range
 ```
+
+> **Tip for agents**: `-n` (combine with `-l` or `--tree`) appends a `[start-end]` line range to every heading in plain output — e.g. `## Installation [12-34]`. `start` is the heading's own line; `end` is the last line before the next heading at the same or a shallower level (or the document's last line). This lets you read only the lines for the section you need (e.g. via `Read` with an offset/limit) instead of loading the whole file — much cheaper than parsing `-o json`'s `position.line` for the same information.
 
 ### Step 3: Extract
 

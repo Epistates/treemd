@@ -432,11 +432,11 @@ fn handle_cli_mode(args: &Cli, doc: &Document) {
     if args.count {
         print_heading_counts(doc);
     } else if args.tree {
-        print_tree(doc, &args.output, &headings);
+        print_tree(doc, &args.output, &headings, args.line_numbers);
     } else if let Some(ref section_name) = args.section {
         extract_section(doc, section_name);
     } else if args.list {
-        print_headings(&headings, &args.output, doc);
+        print_headings(&headings, &args.output, doc, args.line_numbers);
     }
 }
 
@@ -478,12 +478,23 @@ fn print_heading_at_line(doc: &Document, target_line: usize) {
     }
 }
 
-fn print_headings(headings: &[&parser::Heading], format: &OutputFormat, doc: &Document) {
+fn print_headings(
+    headings: &[&parser::Heading],
+    format: &OutputFormat,
+    doc: &Document,
+    line_numbers: bool,
+) {
     match format {
         OutputFormat::Plain => {
+            let ranges = line_numbers.then(|| doc.heading_line_ranges());
             for heading in headings {
                 let prefix = "#".repeat(heading.level);
-                println!("{} {}", prefix, heading.text);
+                match ranges.as_ref().and_then(|r| r.get(&heading.offset)) {
+                    Some(&(start, end)) => {
+                        println!("{} {} [{}-{}]", prefix, heading.text, start, end)
+                    }
+                    None => println!("{} {}", prefix, heading.text),
+                }
             }
         }
         OutputFormat::Json => {
@@ -500,7 +511,12 @@ fn print_headings(headings: &[&parser::Heading], format: &OutputFormat, doc: &Do
     }
 }
 
-fn print_tree(doc: &Document, format: &OutputFormat, headings: &[&parser::Heading]) {
+fn print_tree(
+    doc: &Document,
+    format: &OutputFormat,
+    headings: &[&parser::Heading],
+    line_numbers: bool,
+) {
     // Build the tree from the (possibly filtered) heading subset so that
     // --tree --filter / --tree --level honor the docstring. When no filter
     // is in play, `headings` is the full list and we get the same tree as
@@ -518,9 +534,14 @@ fn print_tree(doc: &Document, format: &OutputFormat, headings: &[&parser::Headin
 
     match format {
         OutputFormat::Tree | OutputFormat::Plain => {
+            let ranges = line_numbers.then(|| doc.heading_line_ranges());
             for (i, node) in tree.iter().enumerate() {
                 let is_last = i == tree.len() - 1;
-                print!("{}", node.render_box_tree_styled("", is_last, compact));
+                let rendered = match ranges.as_ref() {
+                    Some(ranges) => node.render_box_tree_with_lines("", is_last, compact, ranges),
+                    None => node.render_box_tree_styled("", is_last, compact),
+                };
+                print!("{}", rendered);
             }
         }
         OutputFormat::Json => {

@@ -3,6 +3,8 @@
 //! This module defines the core data structures for representing
 //! markdown documents and their heading hierarchy.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
 /// A markdown document with its content and structure.
@@ -216,6 +218,46 @@ impl Document {
             .map(|h| h.offset)
             .unwrap_or(self.content.len())
     }
+
+    /// Compute the 1-indexed `(start_line, end_line)` for every heading,
+    /// keyed by that heading's byte offset (unique per heading).
+    ///
+    /// `start_line` is the line the heading itself sits on. `end_line` is
+    /// the last line before the next heading at the same or a shallower
+    /// level — the same "subtree" boundary `section_end` uses for byte
+    /// offsets — or the document's last line when no such heading follows.
+    pub fn heading_line_ranges(&self) -> HashMap<usize, (usize, usize)> {
+        let n = self.headings.len();
+
+        // Single sequential pass: count newlines between consecutive heading
+        // offsets rather than re-scanning from the start of the document for
+        // each heading.
+        let mut start_lines = Vec::with_capacity(n);
+        let mut prev_line = 1usize;
+        let mut prev_offset = 0usize;
+        for heading in &self.headings {
+            let line = prev_line
+                + self.content[prev_offset..heading.offset]
+                    .matches('\n')
+                    .count();
+            start_lines.push(line);
+            prev_line = line;
+            prev_offset = heading.offset;
+        }
+
+        let total_lines = self.content.lines().count();
+
+        let mut ranges = HashMap::with_capacity(n);
+        for (idx, heading) in self.headings.iter().enumerate() {
+            let end_line = self.headings[idx + 1..]
+                .iter()
+                .position(|next| next.level <= heading.level)
+                .map(|rel| start_lines[idx + 1 + rel] - 1)
+                .unwrap_or(total_lines);
+            ranges.insert(heading.offset, (start_lines[idx], end_line));
+        }
+        ranges
+    }
 }
 
 impl HeadingNode {
@@ -227,6 +269,28 @@ impl HeadingNode {
 
     /// Render as tree with box-drawing characters, with optional compact style
     pub fn render_box_tree_styled(&self, prefix: &str, is_last: bool, compact: bool) -> String {
+        self.render_box_tree_inner(prefix, is_last, compact, None)
+    }
+
+    /// Render as tree with box-drawing characters, appending each heading's
+    /// `[start-end]` line range (see `Document::heading_line_ranges`).
+    pub fn render_box_tree_with_lines(
+        &self,
+        prefix: &str,
+        is_last: bool,
+        compact: bool,
+        ranges: &HashMap<usize, (usize, usize)>,
+    ) -> String {
+        self.render_box_tree_inner(prefix, is_last, compact, Some(ranges))
+    }
+
+    fn render_box_tree_inner(
+        &self,
+        prefix: &str,
+        is_last: bool,
+        compact: bool,
+        ranges: Option<&HashMap<usize, (usize, usize)>>,
+    ) -> String {
         let mut result = String::new();
 
         let (connector, space, continuation) = if compact {
@@ -246,16 +310,25 @@ impl HeadingNode {
         };
 
         let marker = "#".repeat(self.heading.level);
+        let line_suffix = ranges
+            .and_then(|r| r.get(&self.heading.offset))
+            .map(|&(start, end)| format!(" [{}-{}]", start, end))
+            .unwrap_or_default();
         result.push_str(&format!(
-            "{}{}{}{} {}\n",
-            prefix, connector, space, marker, self.heading.text
+            "{}{}{}{} {}{}\n",
+            prefix, connector, space, marker, self.heading.text, line_suffix
         ));
 
         let child_prefix = format!("{}{}", prefix, continuation);
 
         for (i, child) in self.children.iter().enumerate() {
             let is_last_child = i == self.children.len() - 1;
-            result.push_str(&child.render_box_tree_styled(&child_prefix, is_last_child, compact));
+            result.push_str(&child.render_box_tree_inner(
+                &child_prefix,
+                is_last_child,
+                compact,
+                ranges,
+            ));
         }
 
         result
@@ -642,5 +715,52 @@ mod tests {
         let solo_idx = d.headings.iter().position(|h| h.text == "Solo").unwrap();
         let body = d.extract_section_at_index(solo_idx).unwrap();
         assert_eq!(body, "");
+    }
+
+    // ---------- heading_line_ranges ----------
+
+    #[test]
+    fn heading_line_ranges_flat_siblings_partition_the_document() {
+        let d = crate::parser::parse_markdown("# A\nline2\n\n# B\nline5\n\n# C\nline8\n");
+        let ranges = d.heading_line_ranges();
+        let a = d.headings.iter().find(|h| h.text == "A").unwrap();
+        let b = d.headings.iter().find(|h| h.text == "B").unwrap();
+        let c = d.headings.iter().find(|h| h.text == "C").unwrap();
+        assert_eq!(ranges[&a.offset], (1, 3));
+        assert_eq!(ranges[&b.offset], (4, 6));
+        assert_eq!(ranges[&c.offset], (7, 8));
+    }
+
+    #[test]
+    fn heading_line_ranges_parent_range_spans_its_children() {
+        // # A (line 1) nests ## B (line 2) and ## C (line 4); # D (line 6)
+        // follows at the same level as A, so A's range stops right before it.
+        let d = crate::parser::parse_markdown("# A\n## B\nb-body\n## C\nc-body\n# D\nd-body\n");
+        let ranges = d.heading_line_ranges();
+        let a = d.headings.iter().find(|h| h.text == "A").unwrap();
+        let b = d.headings.iter().find(|h| h.text == "B").unwrap();
+        let c = d.headings.iter().find(|h| h.text == "C").unwrap();
+        let dd = d.headings.iter().find(|h| h.text == "D").unwrap();
+        assert_eq!(ranges[&a.offset], (1, 5), "A spans through both children");
+        assert_eq!(ranges[&b.offset], (2, 3));
+        assert_eq!(ranges[&c.offset], (4, 5));
+        assert_eq!(ranges[&dd.offset], (6, 7));
+    }
+
+    #[test]
+    fn heading_line_ranges_last_heading_ends_at_last_document_line() {
+        let d = crate::parser::parse_markdown("# A\nbody1\n# B\nbody2\nbody3\n");
+        let ranges = d.heading_line_ranges();
+        let b = d.headings.iter().find(|h| h.text == "B").unwrap();
+        assert_eq!(ranges[&b.offset], (3, 5));
+    }
+
+    #[test]
+    fn heading_line_ranges_no_trailing_newline_still_counts_last_line() {
+        // No trailing "\n" after "end" — it must still count as its own line.
+        let d = crate::parser::parse_markdown("# A\nbody\n\n## B\nend");
+        let ranges = d.heading_line_ranges();
+        let b = d.headings.iter().find(|h| h.text == "B").unwrap();
+        assert_eq!(ranges[&b.offset], (4, 5));
     }
 }
