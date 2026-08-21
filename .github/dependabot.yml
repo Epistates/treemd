@@ -6,6 +6,15 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    groups:
+      # Patch bumps are the only ones Cargo treats as compatible for both 1.0+
+      # and pre-1.0 crates, so they can land as one PR. Minor bumps stay on
+      # their own: for a pre-1.0 dependency a minor bump is a breaking change
+      # (resvg 0.47 -> 0.48 swapped its whole text-shaping backend), and it
+      # needs an isolated CI run to be worth anything.
+      cargo-patch:
+        update-types:
+          - "patch"
 
   - package-ecosystem: github-actions
     directory: "/"
