@@ -4,6 +4,7 @@
 //! markdown documents and their heading hierarchy.
 
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// A markdown document with its content and structure.
 ///
@@ -216,6 +217,80 @@ impl Document {
             .map(|h| h.offset)
             .unwrap_or(self.content.len())
     }
+
+    /// Total number of source lines. A trailing newline does not open a new line.
+    fn total_lines(&self) -> usize {
+        if self.content.is_empty() {
+            return 0;
+        }
+        let newlines = self.content.matches('\n').count();
+        if self.content.ends_with('\n') {
+            newlines
+        } else {
+            newlines + 1
+        }
+    }
+
+    /// 1-indexed source line of each heading, parallel to `self.headings`.
+    ///
+    /// Counts newlines between consecutive heading offsets in a single pass so
+    /// the whole call is O(content_len) rather than O(headings * content_len),
+    /// matching how `--at-line` walks the document.
+    fn heading_lines(&self) -> Vec<usize> {
+        let mut lines = Vec::with_capacity(self.headings.len());
+        let mut line = 1usize;
+        let mut cursor = 0usize;
+
+        for heading in &self.headings {
+            // Headings arrive in ascending offset order. Clamping keeps this
+            // total for hand-built documents (e.g. the filtered tree, which
+            // pairs real headings with empty content).
+            let target = heading.offset.min(self.content.len());
+            if target >= cursor {
+                line += self.content[cursor..target].matches('\n').count();
+                cursor = target;
+            }
+            lines.push(line);
+        }
+
+        lines
+    }
+
+    /// 1-indexed inclusive `(start, end)` line range of every heading's section,
+    /// parallel to `self.headings`.
+    ///
+    /// `start` is the line the heading itself sits on. `end` is the line before
+    /// the next heading at the same or a higher level, so a parent's range spans
+    /// its subsections; the last such heading runs to the end of the document.
+    /// Back-to-back headings collapse to a single line (`end == start`).
+    pub fn heading_line_ranges(&self) -> Vec<(usize, usize)> {
+        let starts = self.heading_lines();
+        let total = self.total_lines();
+        let mut ranges = vec![(0, 0); self.headings.len()];
+
+        // Walk backwards tracking, per level, the start line of the nearest
+        // following heading that closes a section at that level.
+        const MAX_LEVEL: usize = 6;
+        let mut next_closing = [usize::MAX; MAX_LEVEL + 1];
+
+        for idx in (0..self.headings.len()).rev() {
+            let level = self.headings[idx].level.clamp(1, MAX_LEVEL);
+            let start = starts[idx];
+            let end = if next_closing[level] == usize::MAX {
+                total
+            } else {
+                next_closing[level].saturating_sub(1)
+            };
+            ranges[idx] = (start, end.max(start));
+
+            // This heading closes any section at its level or deeper.
+            for slot in next_closing.iter_mut().take(MAX_LEVEL + 1).skip(level) {
+                *slot = start;
+            }
+        }
+
+        ranges
+    }
 }
 
 impl HeadingNode {
@@ -227,6 +302,23 @@ impl HeadingNode {
 
     /// Render as tree with box-drawing characters, with optional compact style
     pub fn render_box_tree_styled(&self, prefix: &str, is_last: bool, compact: bool) -> String {
+        self.render_box_tree_annotated(prefix, is_last, compact, None)
+    }
+
+    /// Render as tree with box-drawing characters, optionally appending each
+    /// heading's `[start-end]` source line range.
+    ///
+    /// `ranges` maps a heading's byte offset to its line range (see
+    /// [`Document::heading_line_ranges`]). Offsets are stable across the
+    /// filtered-tree rebuild, so the map is keyed on them rather than on
+    /// position within a possibly-filtered heading list.
+    pub fn render_box_tree_annotated(
+        &self,
+        prefix: &str,
+        is_last: bool,
+        compact: bool,
+        ranges: Option<&HashMap<usize, (usize, usize)>>,
+    ) -> String {
         let mut result = String::new();
 
         let (connector, space, continuation) = if compact {
@@ -246,16 +338,25 @@ impl HeadingNode {
         };
 
         let marker = "#".repeat(self.heading.level);
+        let suffix = ranges
+            .and_then(|r| r.get(&self.heading.offset))
+            .map(|(start, end)| format!(" [{}-{}]", start, end))
+            .unwrap_or_default();
         result.push_str(&format!(
-            "{}{}{}{} {}\n",
-            prefix, connector, space, marker, self.heading.text
+            "{}{}{}{} {}{}\n",
+            prefix, connector, space, marker, self.heading.text, suffix
         ));
 
         let child_prefix = format!("{}{}", prefix, continuation);
 
         for (i, child) in self.children.iter().enumerate() {
             let is_last_child = i == self.children.len() - 1;
-            result.push_str(&child.render_box_tree_styled(&child_prefix, is_last_child, compact));
+            result.push_str(&child.render_box_tree_annotated(
+                &child_prefix,
+                is_last_child,
+                compact,
+                ranges,
+            ));
         }
 
         result
@@ -642,5 +743,76 @@ mod tests {
         let solo_idx = d.headings.iter().position(|h| h.text == "Solo").unwrap();
         let body = d.extract_section_at_index(solo_idx).unwrap();
         assert_eq!(body, "");
+    }
+
+    // ---------- heading_line_ranges ----------
+
+    #[test]
+    fn line_ranges_empty_document() {
+        let d = doc("", vec![]);
+        assert!(d.heading_line_ranges().is_empty());
+    }
+
+    #[test]
+    fn line_ranges_parent_spans_its_subsections() {
+        // A parent's range covers its children; each h2 stops at the next h2.
+        let d =
+            crate::parser::parse_markdown("# A\nintro\n## B\nb body\n## C\nc body\n# D\nd body\n");
+        assert_eq!(
+            d.heading_line_ranges(),
+            vec![(1, 6), (3, 4), (5, 6), (7, 8)]
+        );
+    }
+
+    #[test]
+    fn line_ranges_deeper_heading_stops_at_shallower_one() {
+        // The h3 must end where the following h2 begins, not run to EOF.
+        let d = crate::parser::parse_markdown("# A\n## B\n### C\ntext\n## D\n");
+        assert_eq!(
+            d.heading_line_ranges(),
+            vec![(1, 5), (2, 4), (3, 4), (5, 5)]
+        );
+    }
+
+    #[test]
+    fn line_ranges_back_to_back_headings_collapse_to_one_line() {
+        let d = crate::parser::parse_markdown("# A\n# B\n");
+        assert_eq!(d.heading_line_ranges(), vec![(1, 1), (2, 2)]);
+    }
+
+    #[test]
+    fn line_ranges_last_section_runs_to_eof_without_trailing_newline() {
+        // A missing final newline must not lose the last line.
+        let d = crate::parser::parse_markdown("# A\nbody");
+        assert_eq!(d.heading_line_ranges(), vec![(1, 2)]);
+    }
+
+    #[test]
+    fn line_ranges_ignore_headings_inside_code_blocks() {
+        // The fenced "# fake" must neither become a heading nor shift the
+        // line numbers of the real one that follows.
+        let d = crate::parser::parse_markdown("# A\n```\n# fake\n```\n## B\nbody\n");
+        assert_eq!(d.heading_line_ranges(), vec![(1, 6), (5, 6)]);
+    }
+
+    #[test]
+    fn line_ranges_count_crlf_lines_once() {
+        let d = crate::parser::parse_markdown("# A\r\n## B\r\ntext\r\n");
+        assert_eq!(d.heading_line_ranges(), vec![(1, 3), (2, 3)]);
+    }
+
+    #[test]
+    fn line_ranges_span_setext_underlines() {
+        // The h1's range must cover the setext underline rows too.
+        let d = crate::parser::parse_markdown("Title\n=====\nbody\n\nSub\n-----\nsub body\n");
+        assert_eq!(d.heading_line_ranges(), vec![(1, 7), (5, 7)]);
+    }
+
+    #[test]
+    fn line_ranges_tolerate_offsets_past_content() {
+        // The filtered `--tree` path pairs real headings with empty content;
+        // this must clamp rather than panic on an out-of-bounds slice.
+        let d = doc("", vec![h(1, "A", 40), h(2, "B", 80)]);
+        assert_eq!(d.heading_line_ranges(), vec![(1, 1), (1, 1)]);
     }
 }

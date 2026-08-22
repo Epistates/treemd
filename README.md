@@ -287,6 +287,26 @@ treemd -l --filter "usage" README.md    # Filter by text
 treemd -l -L 2 README.md                # Only ## headings
 ```
 
+#### Show line ranges
+
+```bash
+treemd -l -n README.md                  # Append [start-end] to each heading
+treemd --tree -n README.md              # Same, on the tree view
+```
+
+Each range runs from the heading's own line to the line before the next heading
+at the same or a higher level, so a parent's range covers its subsections:
+
+```
+# Title [1-24]
+## Installation [5-13]
+## Usage [14-21]
+### Advanced [18-21]
+```
+
+Handy for reading just the lines you need out of a large file — including for
+tools and agents that would otherwise pull in the whole document.
+
 #### Count and JSON output
 
 ```bash

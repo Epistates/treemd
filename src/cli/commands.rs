@@ -85,6 +85,19 @@ pub struct Cli {
     #[arg(long = "tree")]
     pub tree: bool,
 
+    /// Append each heading's source line range as [start-end]
+    ///
+    /// Works with --list and --tree in plain output. A heading's range runs from
+    /// its own line to the line before the next heading at the same or a higher
+    /// level, so a parent's range covers its subsections.
+    ///
+    /// Lets a reader jump straight to a section instead of scanning the file.
+    /// Has no effect on `-o json`, which reports positions in its own schema.
+    ///
+    /// Example: treemd -l -n README.md
+    #[arg(short = 'n', long = "line-numbers")]
+    pub line_numbers: bool,
+
     /// Filter headings by text pattern (case-insensitive)
     ///
     /// Only shows headings containing the specified text.

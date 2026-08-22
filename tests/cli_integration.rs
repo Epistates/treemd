@@ -227,6 +227,96 @@ fn tree_with_level_narrows_tree() {
 }
 
 // ------------------------------------------------------------------
+// -n / --line-numbers
+// ------------------------------------------------------------------
+
+#[test]
+fn line_numbers_append_ranges_to_list() {
+    // Ranges are derived from FIXTURE's layout: the h1 spans the whole doc,
+    // each h2 stops before the next h2, and the h3 stops at "## Conclusion".
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", "-n", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "# Title [1-24]",
+            "## Installation [5-13]",
+            "## Usage [14-21]",
+            "### Advanced [18-21]",
+            "## Conclusion [22-24]",
+        ],
+        "unexpected ranges: {stdout}"
+    );
+}
+
+#[test]
+fn line_numbers_are_absent_without_the_flag() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains('['), "ranges leaked without -n: {stdout}");
+}
+
+#[test]
+fn line_numbers_annotate_tree_output() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["--tree", "-n", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("# Title [1-24]"), "got: {stdout}");
+    assert!(stdout.contains("### Advanced [18-21]"), "got: {stdout}");
+    assert!(stdout.contains("├") || stdout.contains("└"), "no branches");
+}
+
+#[test]
+fn line_numbers_keep_document_ranges_when_filtered() {
+    // Narrowing the view must not renumber sections: "## Usage" still ends
+    // where "## Conclusion" starts, even though the h3 is filtered out.
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", "-n", "-L", "2", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "## Installation [5-13]",
+            "## Usage [14-21]",
+            "## Conclusion [22-24]",
+        ],
+        "filtered ranges should match the unfiltered document: {stdout}"
+    );
+}
+
+#[test]
+fn line_numbers_ranges_are_contiguous_and_ordered() {
+    // Every range must be well-formed (start <= end) and start on the line
+    // the heading actually occupies.
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", "-n", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let source = std::fs::read_to_string(&f).expect("read fixture");
+    let source_lines: Vec<_> = source.lines().collect();
+
+    for line in stdout.lines() {
+        let (heading, range) = line.rsplit_once(" [").expect("range suffix");
+        let range = range.strip_suffix(']').expect("closing bracket");
+        let (start, end) = range.split_once('-').expect("start-end");
+        let start: usize = start.parse().expect("numeric start");
+        let end: usize = end.parse().expect("numeric end");
+
+        assert!(start <= end, "inverted range in {line}");
+        assert!(end <= source_lines.len(), "range past EOF in {line}");
+        assert_eq!(
+            source_lines[start - 1].trim(),
+            heading,
+            "range start does not point at its own heading"
+        );
+    }
+}
+
+// ------------------------------------------------------------------
 // -s / --section
 // ------------------------------------------------------------------
 

@@ -42,7 +42,24 @@ Understand the document skeleton before diving in.
 treemd --tree FILE.md              # Visual tree with box-drawing characters
 treemd --count FILE.md             # Heading count by level (h1–h6 breakdown + total)
 treemd -l FILE.md | head -20       # Quick scan of all headings
+treemd -l -n FILE.md               # Headings with [start-end] line ranges
 ```
+
+`-n` (`--line-numbers`) appends each section's source line range, so you can read
+just the lines you need instead of the whole file:
+
+```
+# Title [1-24]
+## Installation [5-13]
+## Usage [14-21]
+### Advanced [18-21]
+```
+
+A range runs from the heading's own line to the line before the next heading at
+the same or a higher level, so a parent's range covers its subsections
+(`## Usage [14-21]` contains `### Advanced [18-21]`). Filtering with `-L`/`--filter`
+narrows which headings print but never renumbers them. Works with `--tree` too;
+it has no effect on `-o json`, which reports positions in its own schema.
 
 ### Step 2: Locate
 

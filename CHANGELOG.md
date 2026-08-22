@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`-n`/`--line-numbers` appends each heading's source line range** - `treemd -l -n` emits `## Usage [14-21]`, and `--tree -n` annotates the tree the same way. A range runs from the heading's own line to the line before the next heading at the same or a higher level, so a parent's range covers its subsections. Reading a single section no longer means pulling in the whole file, or post-processing `-o json` to work out where a section ends
+
 ## [0.7.0] - 2026-07-30
 
 ### Added
