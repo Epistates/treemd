@@ -1499,10 +1499,8 @@ fn render_markdown_enhanced(
             ContentBlock::Code {
                 language, content, ..
             } => {
-                let lang_str = language.as_deref().unwrap_or("");
-
                 #[cfg(all(feature = "mermaid", unix))]
-                let is_mermaid = lang_str == "mermaid";
+                let is_mermaid = language.as_deref() == Some("mermaid");
                 #[cfg(not(all(feature = "mermaid", unix)))]
                 let is_mermaid = false;
 
@@ -1543,41 +1541,13 @@ fn render_markdown_enhanced(
                         lines.push(Line::from(vec![]));
                     }
                 } else {
-                    // Standard code block: opening fence + highlighted code + closing fence
-                    let mut fence_spans = vec![];
-                    if is_block_selected {
-                        fence_spans.push(Span::styled(
-                            "→ ",
-                            Style::default()
-                                .fg(theme.selection_indicator_fg)
-                                .bg(theme.selection_indicator_bg)
-                                .add_modifier(Modifier::BOLD),
-                        ));
-                    }
-                    fence_spans.push(Span::styled(
-                        format!("```{}", lang_str),
-                        theme.code_fence_style(),
+                    lines.extend(render_code_block(
+                        language.as_deref(),
+                        content,
+                        highlighter,
+                        theme,
+                        is_block_selected,
                     ));
-
-                    #[cfg(not(all(feature = "mermaid", unix)))]
-                    if lang_str == "mermaid" {
-                        fence_spans.push(Span::styled(
-                            " (enable 'mermaid' feature to render)",
-                            Style::default().fg(Color::DarkGray),
-                        ));
-                    }
-
-                    lines.push(Line::from(fence_spans));
-
-                    // Highlighted code
-                    let highlighted = highlighter.highlight_code(content, lang_str);
-                    lines.extend(highlighted);
-
-                    // Closing fence
-                    lines.push(Line::from(vec![Span::styled(
-                        "```".to_string(),
-                        theme.code_fence_style(),
-                    )]));
                 }
             }
             ContentBlock::List { ordered, items } => {
@@ -2327,6 +2297,57 @@ fn render_callout_lines(content: &str, theme: &Theme) -> Option<Vec<Line<'static
     Some(lines)
 }
 
+/// Render a fenced code block: opening fence, highlighted body, closing fence.
+///
+/// Shared by the top-level renderer and the nested-block renderer so a code
+/// block inside a callout or `<details>` is styled the same as one at the top
+/// level. `selected` draws the block-selection indicator on the opening fence;
+/// the nested renderer has no notion of selection and passes `false`.
+fn render_code_block(
+    language: Option<&str>,
+    content: &str,
+    highlighter: &SyntaxHighlighter,
+    theme: &Theme,
+    selected: bool,
+) -> Vec<Line<'static>> {
+    let lang_str = language.unwrap_or("");
+    let mut lines = Vec::new();
+
+    let mut fence_spans = vec![];
+    if selected {
+        fence_spans.push(Span::styled(
+            "→ ",
+            Style::default()
+                .fg(theme.selection_indicator_fg)
+                .bg(theme.selection_indicator_bg)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    fence_spans.push(Span::styled(
+        format!("```{}", lang_str),
+        theme.code_fence_style(),
+    ));
+
+    #[cfg(not(all(feature = "mermaid", unix)))]
+    if lang_str == "mermaid" {
+        fence_spans.push(Span::styled(
+            " (enable 'mermaid' feature to render)",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    lines.push(Line::from(fence_spans));
+
+    lines.extend(highlighter.highlight_code(content, lang_str));
+
+    lines.push(Line::from(vec![Span::styled(
+        "```".to_string(),
+        theme.code_fence_style(),
+    )]));
+
+    lines
+}
+
 fn render_block_to_lines(
     block: &ContentBlock,
     highlighter: &SyntaxHighlighter,
@@ -2371,23 +2392,13 @@ fn render_block_to_lines(
         ContentBlock::Code {
             language, content, ..
         } => {
-            let lang_str = language.as_deref().unwrap_or("");
-
-            // Opening fence
-            lines.push(Line::from(vec![Span::styled(
-                format!("```{}", lang_str),
-                theme.code_fence_style(),
-            )]));
-
-            // Highlighted code
-            let highlighted = highlighter.highlight_code(content, lang_str);
-            lines.extend(highlighted);
-
-            // Closing fence
-            lines.push(Line::from(vec![Span::styled(
-                "```".to_string(),
-                theme.code_fence_style(),
-            )]));
+            lines.extend(render_code_block(
+                language.as_deref(),
+                content,
+                highlighter,
+                theme,
+                false,
+            ));
         }
         ContentBlock::Details {
             summary,
