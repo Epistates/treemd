@@ -12,6 +12,19 @@ use syntect::util::LinesWithEndings;
 
 const DEFAULT_CODE_THEME: &str = "base16-ocean.dark";
 
+/// What to paint behind a code block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CodeBlockBackground {
+    /// The code theme's own background, so the block agrees with its token
+    /// colors. This is what an unset `code_block_bg` resolves to.
+    #[default]
+    FromTheme,
+    /// An explicit color from config.
+    Color(Color),
+    /// Paint nothing, leaving code on the terminal background.
+    Off,
+}
+
 /// Soft cap on cached entries before the cache resets. Each entry is a small
 /// `Vec<Line>` so 256 covers virtually any document while bounding memory.
 const CACHE_LIMIT: usize = 256;
@@ -19,13 +32,17 @@ const CACHE_LIMIT: usize = 256;
 pub struct SyntaxHighlighter {
     syntax_set: SyntaxSet,
     theme: Theme,
+    /// Background for the code block area, or `None` to leave it unpainted.
+    /// Config override if one was given, otherwise the code theme's own
+    /// background so it agrees with the token colors.
+    code_block_bg: Option<Color>,
     /// Cached highlight results keyed by `hash((content, language))`.
     /// `RefCell` because highlight_code takes `&self` and is called from render.
     cache: RefCell<HashMap<u64, Vec<Line<'static>>>>,
 }
 
 impl SyntaxHighlighter {
-    pub fn new(theme: &str, theme_dir: Option<PathBuf>) -> Self {
+    pub fn new(theme: &str, theme_dir: Option<PathBuf>, background: CodeBlockBackground) -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();
         let mut theme_set = ThemeSet::load_defaults();
         if let Some(dir) = theme_dir
@@ -60,11 +77,25 @@ impl SyntaxHighlighter {
             .cloned()
             .expect("syntect default themes must contain base16-ocean.dark");
 
+        let code_block_bg = match background {
+            CodeBlockBackground::Off => None,
+            CodeBlockBackground::Color(c) => Some(c),
+            CodeBlockBackground::FromTheme => {
+                theme.settings.background.map(|c| Color::Rgb(c.r, c.g, c.b))
+            }
+        };
+
         Self {
             syntax_set,
             theme,
+            code_block_bg,
             cache: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Background to paint behind a code block, if any.
+    pub fn code_block_bg(&self) -> Option<Color> {
+        self.code_block_bg
     }
 
     /// Highlight `code` as `language`. Result is memoized — repeat calls with

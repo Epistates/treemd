@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`-n` / `--line-numbers`** - `--list` and `--tree` can now append each heading's `[start-end]` line range in plain output, so a section can be fetched by line range instead of loaded in full — useful for keeping LLM context small
+- **Code block fence and background options** - `[content] code_fences` takes `full` (unchanged), `label` (a dim language name above the block, no closing row), or `none`. Fence rows are dropped rather than hidden, so they cost no vertical space. `[theme] code_block_bg` overrides the block background, or `"none"` disables it
+
+### Changed
+
+- **Code blocks are painted with the code theme's background** - Only syntect token foregrounds were used before, so a code theme's background was discarded and blocks had no way to stand out from surrounding prose. The background now covers the full block width, padding included, and can be overridden or turned off with `[theme] code_block_bg`
 
 ## [0.7.0] - 2026-07-30
 

@@ -5,6 +5,7 @@ pub mod util;
 
 use layout::{DynamicLayout, Section};
 
+use crate::config::CodeFences;
 use crate::tui::app::{App, AppMode, Focus};
 use crate::tui::theme::Theme;
 use popups::{
@@ -448,6 +449,7 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
             Some(&interactive_state), // Pass cloned copy to release borrow
             Some(content_width),
             mermaid_rows_ref,
+            app.code_fences,
         )
     };
 
@@ -1396,6 +1398,7 @@ fn render_raw_markdown(content: &str, theme: &Theme) -> Text<'static> {
     Text::from(lines)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_markdown_enhanced(
     content: &str,
     highlighter: &SyntaxHighlighter,
@@ -1404,6 +1407,7 @@ fn render_markdown_enhanced(
     interactive_state: Option<&crate::tui::interactive::InteractiveState>,
     available_width: Option<u16>,
     _mermaid_placeholder_rows: &std::collections::HashMap<u64, usize>,
+    fences: CodeFences,
 ) -> Text<'static> {
     let mut lines = Vec::new();
 
@@ -1547,6 +1551,8 @@ fn render_markdown_enhanced(
                         highlighter,
                         theme,
                         is_block_selected,
+                        fences,
+                        available_width,
                     ));
                 }
             }
@@ -1758,8 +1764,13 @@ fn render_markdown_enhanced(
 
                         // Reduce width by indent (5 spaces)
                         let nested_width = available_width.map(|w| w.saturating_sub(5));
-                        let nested_lines =
-                            render_block_to_lines(nested_block, highlighter, theme, nested_width);
+                        let nested_lines = render_block_to_lines(
+                            nested_block,
+                            highlighter,
+                            theme,
+                            nested_width,
+                            fences,
+                        );
                         for (line_idx, nested_line) in nested_lines.into_iter().enumerate() {
                             let mut indented_spans = vec![];
 
@@ -1796,8 +1807,13 @@ fn render_markdown_enhanced(
                     for nested_block in nested {
                         // Reduce width by blockquote prefix (2 chars)
                         let nested_width = available_width.map(|w| w.saturating_sub(2));
-                        let nested_lines =
-                            render_block_to_lines(nested_block, highlighter, theme, nested_width);
+                        let nested_lines = render_block_to_lines(
+                            nested_block,
+                            highlighter,
+                            theme,
+                            nested_width,
+                            fences,
+                        );
                         for nested_line in nested_lines {
                             let mut spans = vec![Span::styled(
                                 "│ ",
@@ -2028,6 +2044,7 @@ fn render_markdown_enhanced(
                                 highlighter,
                                 theme,
                                 block_width,
+                                fences,
                             );
                             for (line_idx, nested_line) in nested_lines.into_iter().enumerate() {
                                 let mut spans = vec![];
@@ -2297,53 +2314,123 @@ fn render_callout_lines(content: &str, theme: &Theme) -> Option<Vec<Line<'static
     Some(lines)
 }
 
-/// Render a fenced code block: opening fence, highlighted body, closing fence.
+/// Paint `bg` across every line, padding each out to `width` so the block
+/// reads as one rectangle rather than a ragged right edge.
+///
+/// Spans that already carry a background are left alone: that is how the
+/// selection indicator keeps its own highlight.
+fn fill_block_background(lines: &mut [Line<'static>], bg: Color, width: usize) {
+    use unicode_width::UnicodeWidthStr;
+
+    for line in lines.iter_mut() {
+        let mut used = 0usize;
+        for span in &mut line.spans {
+            if span.style.bg.is_none() {
+                span.style = span.style.bg(bg);
+            }
+            used += UnicodeWidthStr::width(span.content.as_ref());
+        }
+        if used < width {
+            line.spans.push(Span::styled(
+                " ".repeat(width - used),
+                Style::default().bg(bg),
+            ));
+        }
+    }
+}
+
+/// Render a fenced code block: optional opening fence, highlighted body,
+/// optional closing fence.
 ///
 /// Shared by the top-level renderer and the nested-block renderer so a code
 /// block inside a callout or `<details>` is styled the same as one at the top
-/// level. `selected` draws the block-selection indicator on the opening fence;
-/// the nested renderer has no notion of selection and passes `false`.
+/// level. `selected` draws the block-selection indicator on the first row; the
+/// nested renderer has no notion of selection and passes `false`.
 fn render_code_block(
     language: Option<&str>,
     content: &str,
     highlighter: &SyntaxHighlighter,
     theme: &Theme,
     selected: bool,
+    fences: CodeFences,
+    available_width: Option<u16>,
 ) -> Vec<Line<'static>> {
     let lang_str = language.unwrap_or("");
     let mut lines = Vec::new();
 
-    let mut fence_spans = vec![];
-    if selected {
-        fence_spans.push(Span::styled(
-            "→ ",
-            Style::default()
-                .fg(theme.selection_indicator_fg)
-                .bg(theme.selection_indicator_bg)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    fence_spans.push(Span::styled(
-        format!("```{}", lang_str),
-        theme.code_fence_style(),
-    ));
+    // Opening row. `Full` reproduces the source fence; `Label` keeps only a dim
+    // language name; `None` drops it. The label sits on its own row either way,
+    // so a mouse selection of the code does not drag the language in with it.
+    match fences {
+        CodeFences::Full => {
+            // `mut` is only needed when the mermaid hint below is compiled in.
+            #[allow(unused_mut)]
+            let mut fence_spans = vec![Span::styled(
+                format!("```{}", lang_str),
+                theme.code_fence_style(),
+            )];
 
-    #[cfg(not(all(feature = "mermaid", unix)))]
-    if lang_str == "mermaid" {
-        fence_spans.push(Span::styled(
-            " (enable 'mermaid' feature to render)",
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
+            #[cfg(not(all(feature = "mermaid", unix)))]
+            if lang_str == "mermaid" {
+                fence_spans.push(Span::styled(
+                    " (enable 'mermaid' feature to render)",
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
 
-    lines.push(Line::from(fence_spans));
+            lines.push(Line::from(fence_spans));
+        }
+        CodeFences::Label if !lang_str.is_empty() => {
+            // `mut` is only needed when the mermaid hint below is compiled in.
+            #[allow(unused_mut)]
+            let mut label_spans = vec![Span::styled(
+                lang_str.to_string(),
+                theme.code_fence_style().add_modifier(Modifier::DIM),
+            )];
+
+            #[cfg(not(all(feature = "mermaid", unix)))]
+            if lang_str == "mermaid" {
+                label_spans.push(Span::styled(
+                    " (enable 'mermaid' feature to render)",
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            lines.push(Line::from(label_spans));
+        }
+        CodeFences::Label | CodeFences::None => {}
+    }
 
     lines.extend(highlighter.highlight_code(content, lang_str));
 
-    lines.push(Line::from(vec![Span::styled(
-        "```".to_string(),
-        theme.code_fence_style(),
-    )]));
+    // Closing row only exists for `Full`. `Label` deliberately leaves the block
+    // open at the bottom so short blocks are not boxed in on every side.
+    if matches!(fences, CodeFences::Full) {
+        lines.push(Line::from(vec![Span::styled(
+            "```".to_string(),
+            theme.code_fence_style(),
+        )]));
+    }
+
+    if let Some(bg) = highlighter.code_block_bg() {
+        let width = available_width.map(usize::from).unwrap_or(0);
+        fill_block_background(&mut lines, bg, width);
+    }
+
+    // Added after the fill so the indicator keeps its own colors and the
+    // padding math above is not thrown off by its width.
+    if selected && let Some(first) = lines.first_mut() {
+        first.spans.insert(
+            0,
+            Span::styled(
+                "→ ",
+                Style::default()
+                    .fg(theme.selection_indicator_fg)
+                    .bg(theme.selection_indicator_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        );
+    }
 
     lines
 }
@@ -2353,6 +2440,7 @@ fn render_block_to_lines(
     highlighter: &SyntaxHighlighter,
     theme: &Theme,
     available_width: Option<u16>,
+    fences: CodeFences,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -2398,6 +2486,8 @@ fn render_block_to_lines(
                 highlighter,
                 theme,
                 false,
+                fences,
+                available_width,
             ));
         }
         ContentBlock::Details {
@@ -2421,7 +2511,7 @@ fn render_block_to_lines(
                 // Reduce width by indent (2 spaces)
                 let nested_width = available_width.map(|w| w.saturating_sub(2));
                 let nested_lines =
-                    render_block_to_lines(nested_block, highlighter, theme, nested_width);
+                    render_block_to_lines(nested_block, highlighter, theme, nested_width, fences);
                 for nested_line in nested_lines {
                     let mut spans = vec![Span::raw("  ")];
                     spans.extend(nested_line.spans);
@@ -2472,7 +2562,7 @@ fn render_block_to_lines(
                     // Reduce width by indent (2 spaces)
                     let nested_width = available_width.map(|w| w.saturating_sub(2));
                     let nested_lines =
-                        render_block_to_lines(nested, highlighter, theme, nested_width);
+                        render_block_to_lines(nested, highlighter, theme, nested_width, fences);
                     for nested_line in nested_lines {
                         let mut spans = vec![Span::raw("  ")];
                         spans.extend(nested_line.spans);
@@ -2500,7 +2590,8 @@ fn render_block_to_lines(
             for nested in blocks {
                 // Reduce width by blockquote prefix (2 chars)
                 let nested_width = available_width.map(|w| w.saturating_sub(2));
-                let nested_lines = render_block_to_lines(nested, highlighter, theme, nested_width);
+                let nested_lines =
+                    render_block_to_lines(nested, highlighter, theme, nested_width, fences);
                 for nested_line in nested_lines {
                     let mut spans = vec![Span::styled(
                         "│ ",
@@ -2720,6 +2811,136 @@ pub(crate) fn format_inline_markdown<'a>(text: &str, theme: &Theme) -> Vec<Span<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------- code block fences and background ----------
+
+    use crate::tui::syntax::CodeBlockBackground;
+
+    fn code_lines(fences: CodeFences, bg: CodeBlockBackground, lang: Option<&str>) -> Vec<String> {
+        let hl = SyntaxHighlighter::new("base16-ocean.dark", None, bg);
+        let theme = Theme::ocean_dark();
+        render_code_block(lang, "let x = 1;\n", &hl, &theme, false, fences, Some(30))
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn code_fences_full_keeps_both_rows() {
+        let lines = code_lines(CodeFences::Full, CodeBlockBackground::Off, Some("rust"));
+        assert_eq!(lines, vec!["```rust", "let x = 1;", "```"]);
+    }
+
+    #[test]
+    fn code_fences_label_replaces_opening_row_and_drops_closing() {
+        // The language stays visible on its own row, but the block is not
+        // closed off underneath.
+        let lines = code_lines(CodeFences::Label, CodeBlockBackground::Off, Some("rust"));
+        assert_eq!(lines, vec!["rust", "let x = 1;"]);
+    }
+
+    #[test]
+    fn code_fences_label_omits_the_row_entirely_without_a_language() {
+        // No language means no label worth showing, so no blank row either.
+        let lines = code_lines(CodeFences::Label, CodeBlockBackground::Off, None);
+        assert_eq!(lines, vec!["let x = 1;"]);
+    }
+
+    #[test]
+    fn code_fences_none_drops_both_rows() {
+        let lines = code_lines(CodeFences::None, CodeBlockBackground::Off, Some("rust"));
+        assert_eq!(lines, vec!["let x = 1;"]);
+    }
+
+    #[test]
+    fn code_block_background_pads_every_row_to_a_rectangle() {
+        let hl = SyntaxHighlighter::new("base16-ocean.dark", None, CodeBlockBackground::FromTheme);
+        let theme = Theme::ocean_dark();
+        let lines = render_code_block(
+            Some("rust"),
+            "let x = 1;\nlet yy = 22;\n",
+            &hl,
+            &theme,
+            false,
+            CodeFences::Full,
+            Some(30),
+        );
+
+        for line in &lines {
+            let width: usize = line
+                .spans
+                .iter()
+                .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            assert_eq!(width, 30, "row not padded to the block width: {line:?}");
+            for span in &line.spans {
+                assert!(span.style.bg.is_some(), "unpainted span: {span:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn code_block_background_off_leaves_rows_unpainted_and_unpadded() {
+        let lines = {
+            let hl = SyntaxHighlighter::new("base16-ocean.dark", None, CodeBlockBackground::Off);
+            let theme = Theme::ocean_dark();
+            render_code_block(
+                Some("rust"),
+                "let x = 1;\n",
+                &hl,
+                &theme,
+                false,
+                CodeFences::Full,
+                Some(30),
+            )
+        };
+        for line in &lines {
+            for span in &line.spans {
+                assert!(span.style.bg.is_none(), "unexpected background: {span:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn code_block_background_explicit_color_overrides_the_theme() {
+        let want = Color::Rgb(40, 40, 50);
+        let hl =
+            SyntaxHighlighter::new("base16-ocean.dark", None, CodeBlockBackground::Color(want));
+        assert_eq!(hl.code_block_bg(), Some(want));
+    }
+
+    #[test]
+    fn code_block_background_defaults_to_the_code_theme() {
+        // base16-ocean.dark defines a background; it should be used rather than
+        // left unpainted.
+        let hl = SyntaxHighlighter::new("base16-ocean.dark", None, CodeBlockBackground::FromTheme);
+        assert!(hl.code_block_bg().is_some());
+    }
+
+    #[test]
+    fn selection_indicator_keeps_its_own_colors_over_the_block_background() {
+        let hl = SyntaxHighlighter::new("base16-ocean.dark", None, CodeBlockBackground::FromTheme);
+        let theme = Theme::ocean_dark();
+        let lines = render_code_block(
+            Some("rust"),
+            "let x = 1;\n",
+            &hl,
+            &theme,
+            true,
+            CodeFences::Full,
+            Some(30),
+        );
+        let first = &lines[0].spans[0];
+        assert_eq!(first.content.as_ref(), "→ ");
+        assert_eq!(first.style.bg, Some(theme.selection_indicator_bg));
+    }
 
     #[test]
     fn callout_marker_basic_kinds() {

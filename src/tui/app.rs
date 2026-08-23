@@ -6,7 +6,7 @@ use crate::tui::image_cache::{AsyncProtocol, GifAdvance, ImageWorker, StreamingG
 use crate::tui::interactive::{ElementType, InteractiveState};
 use crate::tui::iterm_animation;
 use crate::tui::kitty_animation::{self, KittyAnimation};
-use crate::tui::syntax::SyntaxHighlighter;
+use crate::tui::syntax::{CodeBlockBackground, SyntaxHighlighter};
 use crate::tui::terminal_compat::ColorMode;
 use crate::tui::theme::{Theme, ThemeName};
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -530,6 +530,7 @@ pub struct App {
     pub highlighter: SyntaxHighlighter,
     pub show_outline: bool,
     pub show_heading_markers: bool, // Show # prefixes in outline sidebar
+    pub code_fences: crate::config::CodeFences, // How to delimit fenced code blocks
     /// Whether terminal mouse capture is active. When on, the scroll wheel drives
     /// navigation but the terminal's native click-drag text selection is disabled.
     /// Toggling it off hands the mouse back to the terminal so text can be selected
@@ -740,6 +741,22 @@ impl App {
         let code_theme_dir = config.code_theme_dir_path();
         // Load sublime color scheme name (for code highlighting)
         let code_theme = config.ui.code_theme.as_str();
+        // Code block background: unset falls back to the code theme's own, and
+        // the literal "none" turns it off for anyone who prefers code to sit on
+        // the terminal background.
+        let code_block_bg = match config.theme.code_block_bg.as_ref() {
+            None => CodeBlockBackground::FromTheme,
+            Some(crate::config::ColorValue::Named(name)) if name.eq_ignore_ascii_case("none") => {
+                CodeBlockBackground::Off
+            }
+            Some(value) => match value.to_color() {
+                Some(c) if matches!(color_mode, ColorMode::Indexed256) => {
+                    CodeBlockBackground::Color(crate::tui::theme::rgb_to_256(c))
+                }
+                Some(c) => CodeBlockBackground::Color(c),
+                None => CodeBlockBackground::FromTheme,
+            },
+        };
 
         // Load outline width from config
         let outline_width = config.ui.outline_width;
@@ -774,9 +791,10 @@ impl App {
             show_search: false,
             outline_search_active: false,
             search_query: String::new(),
-            highlighter: SyntaxHighlighter::new(code_theme, code_theme_dir),
+            highlighter: SyntaxHighlighter::new(code_theme, code_theme_dir, code_block_bg),
             show_outline: true,
             show_heading_markers: config.ui.outline_heading_markers,
+            code_fences: config.content.code_fences,
             mouse_capture: true,
             outline_width,
             config_has_custom_outline_width,

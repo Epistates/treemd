@@ -428,7 +428,35 @@ color_mode = "auto"    # "auto", "rgb", or "256"
 [content]
 hide_frontmatter = true  # Hide YAML frontmatter (---\n...\n---) in content view
 hide_latex = true        # Hide LaTeX math expressions ($...$, $$...$$, \begin{...})
+code_fences = "full"     # "full", "label", or "none" (see below)
 ```
+
+### Code Block Appearance
+
+`code_fences` controls how a fenced code block is delimited in the content pane.
+The rows are removed rather than hidden, so they take no vertical space.
+
+| Value | Result |
+|-------|--------|
+| `full` | Both fence rows, as written in the source: ` ```rust ` and ` ``` ` |
+| `label` | A dim language name above the block, and no closing row |
+| `none` | No fence rows at all |
+
+With `label`, a block with no language gets no label row either. The name sits
+on its own row rather than on the first line of code, so selecting the block
+with the mouse does not drag it in.
+
+The code block background comes from the code theme by default, so it agrees
+with the syntax colors. Override or disable it:
+
+```toml
+[theme]
+code_block_bg = { rgb = [40, 40, 50] }  # explicit color
+# code_block_bg = "none"                # leave code on the terminal background
+```
+
+The background covers the full width of the block, including padding, so short
+lines do not leave a ragged edge.
 
 ### Custom Keybindings
 

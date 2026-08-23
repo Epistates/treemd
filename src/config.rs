@@ -101,6 +101,31 @@ pub struct ContentConfig {
     /// Enable this if standard filtering misses some LaTeX commands
     #[serde(default = "default_latex_aggressive")]
     pub latex_aggressive: bool,
+
+    /// How to mark the edges of a fenced code block (default: full)
+    #[serde(default)]
+    pub code_fences: CodeFences,
+}
+
+/// How fenced code blocks are delimited in the rendered content pane.
+///
+/// The fence rows are decoration, not content, so they can be dropped
+/// entirely. They are removed rather than hidden, so they take no vertical
+/// space either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodeFences {
+    /// Both fence rows, as written in the source: ```lang and ```
+    #[default]
+    Full,
+    /// A dim language label above the block, and no closing row.
+    ///
+    /// Keeps the language visible without boxing the block in. The label sits
+    /// on its own row rather than on the first line of code, so selecting the
+    /// block with the mouse does not pick it up.
+    Label,
+    /// No fence rows at all.
+    None,
 }
 
 impl Default for ContentConfig {
@@ -109,6 +134,7 @@ impl Default for ContentConfig {
             hide_frontmatter: default_hide_frontmatter(),
             hide_latex: default_hide_latex(),
             latex_aggressive: default_latex_aggressive(),
+            code_fences: CodeFences::default(),
         }
     }
 }
@@ -170,6 +196,14 @@ pub struct CustomThemeConfig {
     pub blockquote_fg: Option<ColorValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_fence: Option<ColorValue>,
+    /// Background for the whole code block area.
+    ///
+    /// Unlike the other keys here this one is not a field on `Theme`: it
+    /// belongs to the *code* theme, so when unset it falls back to the syntect
+    /// theme's own background and stays consistent with the token colors.
+    /// Resolved in `SyntaxHighlighter`, not `Theme::with_custom_colors`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_block_bg: Option<ColorValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title_bar_fg: Option<ColorValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -569,6 +603,44 @@ mod tests {
         assert_eq!(c.ui.outline_width, 30); // default
         assert_eq!(c.terminal.color_mode, "auto"); // default
         assert!(c.content.hide_frontmatter); // default
+    }
+
+    #[test]
+    fn config_code_fences_defaults_to_full_and_parses_each_mode() {
+        let c: Config = toml::from_str("[ui]\ntheme = \"Nord\"\n").expect("parse");
+        assert_eq!(c.content.code_fences, CodeFences::Full);
+
+        for (value, want) in [
+            ("full", CodeFences::Full),
+            ("label", CodeFences::Label),
+            ("none", CodeFences::None),
+        ] {
+            let s = format!("[content]\ncode_fences = \"{value}\"\n");
+            let c: Config = toml::from_str(&s).unwrap_or_else(|e| panic!("{value}: {e}"));
+            assert_eq!(c.content.code_fences, want, "for {value}");
+        }
+    }
+
+    #[test]
+    fn config_code_block_bg_accepts_a_color_or_none() {
+        // Unset means "fall back to the code theme's background".
+        let c: Config = toml::from_str("[ui]\ntheme = \"Nord\"\n").expect("parse");
+        assert!(c.theme.code_block_bg.is_none());
+
+        let s = "[theme]\ncode_block_bg = { rgb = [40, 40, 50] }\n";
+        let c: Config = toml::from_str(s).expect("rgb");
+        assert!(matches!(
+            c.theme.code_block_bg,
+            Some(ColorValue::Rgb { rgb: [40, 40, 50] })
+        ));
+
+        // "none" is how the background gets turned off entirely.
+        let s = "[theme]\ncode_block_bg = \"none\"\n";
+        let c: Config = toml::from_str(s).expect("none");
+        assert!(matches!(
+            c.theme.code_block_bg,
+            Some(ColorValue::Named(ref n)) if n == "none"
+        ));
     }
 
     #[test]

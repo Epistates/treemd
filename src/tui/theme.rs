@@ -1049,7 +1049,7 @@ impl Theme {
 }
 
 /// Convert RGB color to nearest 256-color palette entry
-fn rgb_to_256(color: Color) -> Color {
+pub(crate) fn rgb_to_256(color: Color) -> Color {
     match color {
         Color::Rgb(r, g, b) => {
             // Check if it's grayscale
