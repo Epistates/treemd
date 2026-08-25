@@ -2412,13 +2412,11 @@ fn render_code_block(
         )]));
     }
 
-    if let Some(bg) = highlighter.code_block_bg() {
-        let width = available_width.map(usize::from).unwrap_or(0);
-        fill_block_background(&mut lines, bg, width);
-    }
-
-    // Added after the fill so the indicator keeps its own colors and the
-    // padding math above is not thrown off by its width.
+    // Added before the fill so its width counts toward the first row's total.
+    // Appending it afterwards pushed that row past the block width, and with
+    // wrapping on that overflow became a stray sliver row under the fence.
+    // `fill_block_background` leaves spans that already carry a background
+    // alone, so the indicator keeps its own colors either way.
     if selected && let Some(first) = lines.first_mut() {
         first.spans.insert(
             0,
@@ -2430,6 +2428,11 @@ fn render_code_block(
                     .add_modifier(Modifier::BOLD),
             ),
         );
+    }
+
+    if let Some(bg) = highlighter.code_block_bg() {
+        let width = available_width.map(usize::from).unwrap_or(0);
+        fill_block_background(&mut lines, bg, width);
     }
 
     lines
@@ -2940,6 +2943,41 @@ mod tests {
         let first = &lines[0].spans[0];
         assert_eq!(first.content.as_ref(), "→ ");
         assert_eq!(first.style.bg, Some(theme.selection_indicator_bg));
+    }
+
+    #[test]
+    fn selected_code_block_rows_stay_within_the_block_width() {
+        // The indicator has to fit inside the block width, not extend past it.
+        // With wrapping on, a row 2 cells too wide sheds its trailing padding
+        // onto a stray sliver row underneath.
+        let hl = SyntaxHighlighter::new("base16-ocean.dark", None, CodeBlockBackground::FromTheme);
+        let theme = Theme::ocean_dark();
+        let width: u16 = 30;
+
+        for selected in [false, true] {
+            let lines = render_code_block(
+                Some("rust"),
+                "let x = 1;\n",
+                &hl,
+                &theme,
+                selected,
+                CodeFences::Full,
+                Some(width),
+            );
+            let logical = lines.len();
+            for line in &lines {
+                let row: usize = line
+                    .spans
+                    .iter()
+                    .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
+                assert_eq!(row, usize::from(width), "selected={selected}: {line:?}");
+            }
+            let rendered = Paragraph::new(Text::from(lines))
+                .wrap(Wrap { trim: false })
+                .line_count(width);
+            assert_eq!(rendered, logical, "selected={selected}: block wrapped");
+        }
     }
 
     #[test]
