@@ -14,9 +14,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A pushed tag is immutable (see the "Version tags are immutable" ruleset), so
+  # a bad one cannot be re-cut. Catch the mismatches here, before any artifact
+  # exists, rather than after downstream packagers have hashed the tarball.
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag, Cargo.toml, and CHANGELOG must agree
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+
+          manifest=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "treemd") | .version')
+          if [ "$version" != "$manifest" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $manifest"
+            exit 1
+          fi
+
+          if ! grep -q "^## \[$version\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$version]' section"
+            exit 1
+          fi
+
+          echo "$GITHUB_REF_NAME matches Cargo.toml and CHANGELOG.md"
+        shell: bash
+
   build:
     name: Build for ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:

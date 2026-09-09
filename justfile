@@ -117,3 +117,53 @@ release-info: release
     @echo "\nStripped binary size:"
     @strip target/release/treemd
     @ls -lh target/release/treemd | awk '{print $5, $9}'
+
+# Check that a release is safe to tag. A pushed tag is immutable: the repo has a
+# ruleset on refs/tags/v* that blocks deletion and updates with no bypass, so
+# everything below has to be right before the tag goes out, not after.
+release-preflight VERSION:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    version="{{VERSION}}"
+    version="${version#v}"
+    fail=0
+
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "working tree is dirty"
+        fail=1
+    fi
+
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    if [ "$branch" != "main" ]; then
+        echo "on branch '$branch', expected main"
+        fail=1
+    fi
+
+    manifest=$(cargo metadata --no-deps --format-version 1 \
+        | jq -r '.packages[] | select(.name == "treemd") | .version')
+    if [ "$version" != "$manifest" ]; then
+        echo "Cargo.toml is $manifest, expected $version"
+        fail=1
+    fi
+
+    if ! grep -q "^## \[$version\]" CHANGELOG.md; then
+        echo "CHANGELOG.md has no '## [$version]' section"
+        fail=1
+    fi
+
+    if git ls-remote --exit-code --tags origin "v$version" >/dev/null 2>&1; then
+        echo "v$version is already pushed, and tags are immutable. Cut the next patch instead."
+        fail=1
+    fi
+
+    if [ "$fail" -ne 0 ]; then
+        echo
+        echo "preflight failed, do not tag"
+        exit 1
+    fi
+    echo "ready to tag v$version"
+
+# Cut and push a release tag, but only if the preflight passes.
+release-tag VERSION: (release-preflight VERSION)
+    git tag -a "v{{VERSION}}" -m "Release v{{VERSION}}"
+    git push origin "v{{VERSION}}"
