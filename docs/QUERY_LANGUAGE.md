@@ -89,15 +89,19 @@ To search bodies, use `.code | select(contains("TODO"))`.
 | `.frontmatter` | YAML front matter |
 
 `.img` finds images written standalone, inline in a sentence, in a heading,
-wrapped in a link, and in a list item whether the list is tight or loose. One
-case is still missed because of how the underlying parser reports it:
+wrapped in a link, and in a list item whether the list is tight or loose. Two
+cases are still wrong because of how the underlying parser reports them, both
+tracked at [turbovault#68](https://github.com/Epistates/turbovault/issues/68):
 
-- **Images inside a blockquote**: `> ![a](a.png)` is not reported. A blockquote
-  is rebuilt from its raw text and re-parsed, and that pass flattens inline
-  elements to plain text, so the image survives only as its alt and the source
-  is gone before treemd sees the block. Links inside a blockquote lose their
-  destination the same way. Tracked at
-  [turbovault#68](https://github.com/Epistates/turbovault/issues/68).
+- **Images inside a blockquote** are not reported at all. `> ![a](a.png)`
+  returns nothing. A blockquote is rebuilt from its raw text and re-parsed, and
+  that pass flattens inline elements to plain text, so the source is gone
+  before treemd sees the block. Links inside a blockquote lose their
+  destination the same way, and a fenced block inside one reports
+  `start_line` and `end_line` as `0`.
+- **An image in a heading loses its alt text**, and that text is appended to
+  the heading instead. `# Title ![a](a.png)` gives `.img` an `alt` of `""` and
+  reports `.h1` as `Title a`. The `src` is correct.
 
 ### Document
 

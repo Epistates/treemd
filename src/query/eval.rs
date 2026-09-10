@@ -845,10 +845,14 @@ struct ExtractedBlocks {
 
 /// Collects images carried as inline elements rather than standalone blocks.
 ///
-/// Nearly every image is one of these: a standalone `![alt](src)` line is a
-/// paragraph in CommonMark, so without this the most common form would never
-/// reach `.img` or `stats`. Headings and list items carry theirs the same way,
-/// which is why all three call this rather than relying on `Block::Image`.
+/// A standalone `![alt](src)` line is a paragraph in CommonMark, so without
+/// this the most common form of image would never reach `.img` or `stats`.
+/// List items carry theirs the same way.
+///
+/// Headings do not, despite the arm below that calls this for them: the parser
+/// still hoists a heading's image out to a top-level `Block::Image`, so that
+/// arm is what actually reports it. Both paths are needed, and neither is
+/// redundant. See [`Images`] for why the list arm must not do both.
 fn collect_inline_images(inline: &[InlineElement], out: &mut ExtractedBlocks) {
     for element in inline {
         if let InlineElement::Image {
@@ -874,10 +878,21 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
 
     let mut out = ExtractedBlocks::default();
 
+    /// Whether a `walk` pass should collect images.
+    ///
+    /// A list item's `inline` already carries every image in the item, at any
+    /// depth, so the pass over that item's nested blocks has to leave images
+    /// alone. Collecting from both counts each one twice.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Images {
+        Collect,
+        Skip,
+    }
+
     // Recursively extract blocks from nested structures (e.g., list items,
     // blockquotes, details). Top-level paragraphs/blockquotes are collected by
     // the outer loop; nested ones are collected here too.
-    fn walk(blocks: &[Block], out: &mut ExtractedBlocks) {
+    fn walk(blocks: &[Block], out: &mut ExtractedBlocks, images: Images) {
         for block in blocks {
             match block {
                 Block::Code {
@@ -893,7 +908,7 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                         end_line: *end_line,
                     });
                 }
-                Block::Image { alt, src, title } => {
+                Block::Image { alt, src, title } if images == Images::Collect => {
                     out.images.push(ImageValue {
                         alt: alt.clone(),
                         src: src.clone(),
@@ -915,18 +930,24 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                     });
                 }
                 Block::Paragraph { content, inline } => {
-                    collect_inline_images(inline, out);
+                    if images == Images::Collect {
+                        collect_inline_images(inline, out);
+                    }
                     out.paragraphs.push(ParagraphValue {
                         content: content.clone(),
                     });
                 }
                 Block::Heading { inline, .. } => {
-                    collect_inline_images(inline, out);
+                    if images == Images::Collect {
+                        collect_inline_images(inline, out);
+                    }
                 }
                 Block::List { ordered, items } => {
                     for item in items {
-                        collect_inline_images(&item.inline, out);
-                        walk(&item.blocks, out);
+                        if images == Images::Collect {
+                            collect_inline_images(&item.inline, out);
+                        }
+                        walk(&item.blocks, out, Images::Skip);
                     }
                     out.lists.push(ListValue {
                         ordered: *ordered,
@@ -943,17 +964,17 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                     out.blockquotes.push(BlockquoteValue {
                         content: content.clone(),
                     });
-                    walk(blocks, out);
+                    walk(blocks, out, images);
                 }
                 Block::Details { blocks, .. } => {
-                    walk(blocks, out);
+                    walk(blocks, out, images);
                 }
                 _ => {}
             }
         }
     }
 
-    walk(&blocks, &mut out);
+    walk(&blocks, &mut out, Images::Collect);
 
     out.links = links
         .into_iter()
@@ -1501,6 +1522,40 @@ fn main() {}
         // Guards the block and inline paths from both claiming one image.
         assert_eq!(image_srcs("- item ![a](a.png)").len(), 1);
         assert_eq!(image_srcs("![a](a.png)").len(), 1);
+    }
+
+    /// A list item's `inline` carries every image in the item, including the
+    /// ones inside its nested blocks, so walking those blocks as well reports
+    /// each of them twice. Only multi-block items expose this: in a one-block
+    /// item there is nothing for the walk to find, which is why the single
+    /// paragraph cases above stayed green while `.img` was returning doubles.
+    #[test]
+    fn test_images_in_a_multi_block_list_item_are_reported_once() {
+        assert_eq!(image_srcs("- item\n\n  ![a](a.png)\n"), ["a.png"]);
+        assert_eq!(image_srcs("- [ ] task\n\n  ![t](t.png)\n"), ["t.png"]);
+        assert_eq!(
+            image_srcs("- item ![z](z.png)\n\n  more ![y](y.png)\n"),
+            ["z.png", "y.png"],
+            "an item's own image and its nested one, each once and in order"
+        );
+        assert_eq!(
+            image_srcs("- a ![1](1.png)\n\n  b ![2](2.png)\n\n  c ![3](3.png)\n"),
+            ["1.png", "2.png", "3.png"]
+        );
+        assert_eq!(
+            image_srcs("- item\n\n  ```rust\n  code\n  ```\n\n  ![c](c.png)\n"),
+            ["c.png"],
+            "a fenced block between the text and the image changes nothing"
+        );
+    }
+
+    /// Suppressing images while walking a list item's nested blocks must not
+    /// suppress anything else those blocks carry.
+    #[test]
+    fn test_nested_blocks_in_a_list_item_still_yield_non_image_content() {
+        let md = "- item\n\n  ```rust\n  code\n  ```\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n";
+        assert_eq!(eval(md, ".code").len(), 1);
+        assert_eq!(eval(md, ".table").len(), 1);
     }
 
     /// The image forms that turbovault-parser 2.0.0 fixed. Each returned

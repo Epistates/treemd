@@ -1298,24 +1298,19 @@ mod interactive_tests {
         );
         let mermaid_rows = std::collections::HashMap::new();
 
-        let Some(block @ Block::Blockquote { content, .. }) = blocks.first() else {
+        let Some(block) = blocks.first() else {
             panic!("expected a blockquote, got {:?}", blocks);
         };
-
         let Block::Blockquote { blocks: nested, .. } = block else {
-            unreachable!()
+            panic!("expected a blockquote, got {:?}", block);
         };
-        assert_ne!(
-            count_block_lines(nested, &mermaid_rows),
-            content.lines().count(),
-            "this case stops guarding anything once the two agree by accident"
-        );
 
-        assert_eq!(
-            count_single_block_lines(block, &mermaid_rows),
-            content.lines().count(),
-            "counted height must match the rows the callout renderer emits"
-        );
+        // The callout draws six rows: the `[!NOTE] Hi` header, `Text.`, the
+        // blank separator, and the three rows of the fence. Counting the
+        // nested blocks instead gives four, one for the paragraph and three
+        // for the code block, which is the undercount this guards.
+        assert_eq!(count_single_block_lines(block, &mermaid_rows), 6);
+        assert_eq!(count_block_lines(nested, &mermaid_rows), 4);
     }
 
     /// A blockquote that is not a callout still renders its nested blocks, so

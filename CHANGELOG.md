@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Image titles are their own field.** `![a](x.png "Title")` put `x.png "Title"` into `.src` and left `.title` empty, rather than splitting the two. A destination containing spaces keeps both
 - **List item images are reported the same tight or loose.** A list item's images now come from its inline run, so whether a blank line sits between items no longer changes what `.img` returns, and the item keeps its own text
 - **A callout holding a fenced block scrolls to the right offset.** A callout is drawn from the blockquote's raw content, one row per line, but its height was measured from its nested blocks, which counts a fenced block as three rows rather than the five it draws. Reachable only once the parser stopped hoisting that block out of the quote, so it arrived with the upgrade
+- **An image in a multi-block list item is reported once, not twice.** A list item's inline run already carries every image in the item, including those inside its nested blocks, so collecting from both reported each one twice. `- item` followed by an indented `![a](a.png)` returned two entries from `.img` and counted two in `stats`
 
 ### Changed
 
@@ -24,7 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known issues
 
-- **Images and links inside a blockquote lose their destination.** `> ![a](a.png)` is not reported by `.img`. A blockquote is rebuilt from its raw text and re-parsed, and that pass flattens inline elements to plain text. 1.6.0 masked this by also hoisting a copy of the image out of the quote, which 2.0.0 correctly stopped doing. Tracked at [turbovault#68](https://github.com/Epistates/turbovault/issues/68)
+All tracked at [turbovault#68](https://github.com/Epistates/turbovault/issues/68), and all in the parser rather than here:
+
+- **Images and links inside a blockquote lose their destination.** `> ![a](a.png)` is not reported by `.img`. A blockquote is rebuilt from its raw text and re-parsed, and that pass flattens inline elements to plain text. 1.6.0 masked this by also hoisting a copy of the image out of the quote, which 2.0.0 correctly stopped doing
+- **A fenced block inside a blockquote reports `start_line` and `end_line` as `0`**, because the quote fragment is re-parsed from line zero. Any `.code | select(.start_line > N)` filter treats it as sitting before the document starts
+- **An image in a heading loses its alt text**, and that text is appended to the heading instead: `# Title ![a](a.png)` reports `.h1` as `Title a` and gives the image an empty `alt`. The `src` is correct. This one predates 2.0.0
 
 ## [0.7.0] - 2026-08-26
 
