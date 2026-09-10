@@ -2318,9 +2318,23 @@ fn render_callout_lines(content: &str, theme: &Theme) -> Option<Vec<Line<'static
         ),
     ])];
 
+    // A fenced block reaches us as raw text, so its rows must not go through
+    // the inline formatter: that reads the three backticks as inline-code
+    // delimiters, swallowing the fence and leaving a bare styled word where
+    // the opening row was. Inside a fence the text is code, so it is emitted
+    // verbatim.
+    let mut in_fence = false;
     for line in content_lines {
         let mut spans = vec![bar()];
-        spans.extend(format_inline_markdown(line, theme));
+        let is_fence = line.trim_start().starts_with("```");
+        if is_fence || in_fence {
+            spans.push(Span::styled(line.to_string(), theme.inline_code_style()));
+        } else {
+            spans.extend(format_inline_markdown(line, theme));
+        }
+        if is_fence {
+            in_fence = !in_fence;
+        }
         lines.push(Line::from(spans));
     }
 
@@ -3215,6 +3229,47 @@ mod tests {
     fn rendered_callout_line_count_declines_a_plain_quote() {
         assert_eq!(rendered_callout_line_count("just a quote"), None);
         assert_eq!(rendered_callout_line_count(""), None);
+    }
+
+    /// The inline formatter reads three backticks as an inline-code
+    /// delimiter, so running a fence row through it swallows the fence and
+    /// leaves a bare styled `rust` where ```` ```rust ```` was written.
+    #[test]
+    fn a_fence_inside_a_callout_survives_the_inline_formatter() {
+        let theme = Theme::ocean_dark();
+        let lines = render_callout_lines("[!NOTE] Hi\nText.\n\n```rust\nfn main() {}\n```", &theme)
+            .unwrap();
+        let row =
+            |i: usize| -> String { lines[i].spans.iter().map(|s| s.content.as_ref()).collect() };
+
+        assert_eq!(lines.len(), 6);
+        assert!(
+            row(3).contains("```rust"),
+            "opening fence lost: {:?}",
+            row(3)
+        );
+        assert!(row(4).contains("fn main() {}"));
+        assert!(row(5).contains("```"), "closing fence lost: {:?}", row(5));
+    }
+
+    /// Text after a closing fence is prose again, not code.
+    #[test]
+    fn a_callout_leaves_the_fence_when_it_closes() {
+        let theme = Theme::ocean_dark();
+        let lines =
+            render_callout_lines("[!NOTE] Hi\n```\ncode\n```\nafter `x` here", &theme).unwrap();
+        assert_eq!(lines.len(), 5, "header, two fences, code, trailing prose");
+        let after = &lines[4];
+        assert!(
+            after.spans.iter().any(|s| s.content.contains("after ")),
+            "trailing prose was treated as code: {:?}",
+            after
+        );
+        assert!(
+            after.spans.iter().all(|s| !s.content.contains('`')),
+            "inline code was not formatted after the fence closed: {:?}",
+            after
+        );
     }
 
     /// A fenced block inside a callout used to be emitted as a top-level
