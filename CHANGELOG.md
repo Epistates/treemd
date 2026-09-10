@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-10
+
 ### Fixed
 
 - **Multi-line callouts no longer collapse into their title.** `> [!NOTE] Heads up` followed by more quoted lines rendered as `▌ ℹ Heads upSome text.More text.`, because the parser joined a blockquote's body lines with no separator and the callout renderer takes the first line as its marker. Every callout longer than one line was affected
