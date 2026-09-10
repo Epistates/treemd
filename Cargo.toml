@@ -44,7 +44,7 @@ ureq = "3"
 unicode-width = "0.2"
 
 # Turbovault integration - OFM parsing with code-block awareness
-turbovault-parser = "1.6.0"
+turbovault-parser = "2.0.0"
 
 # Serialization for JSON output
 serde = { version = "1.0", features = ["derive"] }

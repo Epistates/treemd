@@ -845,10 +845,10 @@ struct ExtractedBlocks {
 
 /// Collects images carried as inline elements rather than standalone blocks.
 ///
-/// The parser only emits a top-level `Block::Image` when an image is not
-/// wrapped in a paragraph — which in practice means tight list items. A
-/// standalone `![alt](src)` line is a paragraph in CommonMark, so without this
-/// the most common form of image would never reach `.img` or `stats`.
+/// Nearly every image is one of these: a standalone `![alt](src)` line is a
+/// paragraph in CommonMark, so without this the most common form would never
+/// reach `.img` or `stats`. Headings and list items carry theirs the same way,
+/// which is why all three call this rather than relying on `Block::Image`.
 fn collect_inline_images(inline: &[InlineElement], out: &mut ExtractedBlocks) {
     for element in inline {
         if let InlineElement::Image {
@@ -925,6 +925,7 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                 }
                 Block::List { ordered, items } => {
                     for item in items {
+                        collect_inline_images(&item.inline, out);
                         walk(&item.blocks, out);
                     }
                     out.lists.push(ListValue {
@@ -1475,15 +1476,23 @@ fn main() {}
         assert_eq!(image_srcs("![a](a.png)"), ["a.png"]);
         assert_eq!(image_srcs("# T\n\n![a](a.png)"), ["a.png"]);
         assert_eq!(image_srcs("Text with ![a](a.png) inside."), ["a.png"]);
-        assert_eq!(image_srcs("> ![a](a.png)"), ["a.png"]);
         assert_eq!(image_srcs("# Title ![a](a.png)"), ["a.png"]);
-        // Tight list items are the one case the parser reports as a block.
         assert_eq!(image_srcs("- item ![a](a.png)"), ["a.png"]);
+    }
+
+    /// A blockquote is rebuilt from its raw text and re-parsed, and that pass
+    /// flattens every inline element to plain text, so an image inside one
+    /// survives as its alt text with the source discarded. Not recoverable
+    /// here: the destination is gone before we receive the block.
+    /// Tracked upstream at Epistates/turbovault#68.
+    #[test]
+    fn test_images_inside_a_blockquote_are_a_known_upstream_gap() {
+        assert_eq!(image_srcs("> ![a](a.png)"), Vec::<String>::new());
     }
 
     #[test]
     fn test_multiple_images_are_collected_in_document_order() {
-        let md = "![a](a.png)\n\n![b](b.png)\n\n> ![c](c.png)";
+        let md = "![a](a.png)\n\n![b](b.png)\n\n- item ![c](c.png)";
         assert_eq!(image_srcs(md), ["a.png", "b.png", "c.png"]);
     }
 
@@ -1492,6 +1501,44 @@ fn main() {}
         // Guards the block and inline paths from both claiming one image.
         assert_eq!(image_srcs("- item ![a](a.png)").len(), 1);
         assert_eq!(image_srcs("![a](a.png)").len(), 1);
+    }
+
+    /// The image forms that turbovault-parser 2.0.0 fixed. Each returned
+    /// nothing usable on 1.6.0: the linked image was dropped outright, the
+    /// title was folded into the source, and a list item reported differently
+    /// depending only on whether a blank line sat between the items.
+    #[test]
+    fn test_image_forms_fixed_in_parser_2_0() {
+        let details = |md: &str| -> Vec<(String, String, Option<String>)> {
+            eval(md, ".img")
+                .into_iter()
+                .filter_map(|v| match v {
+                    Value::Image(i) => Some((i.alt, i.src, i.title)),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        assert_eq!(
+            details("[![badge](b.png)](https://ci.example)"),
+            [("badge".into(), "b.png".into(), None)],
+            "an image wrapped in a link is still an image"
+        );
+        assert_eq!(
+            details(r#"![a](x.png "Title")"#),
+            [("a".into(), "x.png".into(), Some("Title".into()))],
+            "the title is its own field, not part of the source"
+        );
+        assert_eq!(
+            details(r#"![a](my image.png "Title")"#),
+            [("a".into(), "my image.png".into(), Some("Title".into()))],
+            "a spaced destination keeps both its source and its title"
+        );
+        assert_eq!(
+            image_srcs("- item ![a](a.png)\n\n- second ![b](b.png)"),
+            ["a.png", "b.png"],
+            "a loose list reports the same images as a tight one"
+        );
     }
 
     #[test]

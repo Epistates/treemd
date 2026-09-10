@@ -2782,8 +2782,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
 dependencies = [
  "bytes",
+ "libc",
+ "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "tokio-macros",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2935,9 +2939,9 @@ dependencies = [
 
 [[package]]
 name = "turbovault-core"
-version = "1.6.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8c68b413757ee3845f5b5182c8643e16430de683af4588d005ed2f9b21f84be"
+checksum = "ed17e0bae0b8f54779233525f04372a6e1a738253f83263d4f7cbe67225619ff"
 dependencies = [
  "chrono",
  "log",
@@ -2955,9 +2959,9 @@ dependencies = [
 
 [[package]]
 name = "turbovault-parser"
-version = "1.6.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c153db2ca08515d7bfb1b2c31479710f41d39f0c0e1ddfe75d2abc32cd9c37fa"
+checksum = "dbe3322bbbc01c31935ba554b20a0830606517c1e1fa0ca5e2746762b69b7f41"
 dependencies = [
  "log",
  "pulldown-cmark",

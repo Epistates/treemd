@@ -3144,4 +3144,57 @@ mod tests {
         let theme = Theme::ocean_dark();
         assert!(render_callout_lines("just a quote", &theme).is_none());
     }
+
+    /// Feeds real parser output rather than a hand-written string. The
+    /// hand-written tests above passed throughout the period when every
+    /// multi-line callout rendered its whole body inside the title, because
+    /// the parser was joining the lines before we ever saw them.
+    #[test]
+    fn a_parsed_multi_line_callout_keeps_its_body_out_of_the_title() {
+        use crate::parser::content::parse_content;
+        use crate::parser::output::Block;
+
+        let blocks = parse_content("> [!NOTE] Heads up\n> Some text.\n> More text.\n", 1);
+        let Some(Block::Blockquote { content, .. }) = blocks.first() else {
+            panic!("expected a blockquote, got {:?}", blocks);
+        };
+
+        let theme = Theme::ocean_dark();
+        let lines = render_callout_lines(content, &theme).unwrap();
+        let row =
+            |i: usize| -> String { lines[i].spans.iter().map(|s| s.content.as_ref()).collect() };
+
+        assert_eq!(lines.len(), 3, "header plus one row per body line");
+        assert!(row(0).contains("Heads up"));
+        assert!(
+            !row(0).contains("Some text."),
+            "body leaked into the title: {:?}",
+            row(0)
+        );
+        assert!(row(1).contains("Some text."));
+        assert!(row(2).contains("More text."));
+    }
+
+    /// A fenced block inside a callout used to be emitted as a top-level
+    /// sibling ahead of the quote, so it rendered above the callout header.
+    #[test]
+    fn a_fenced_block_inside_a_callout_stays_inside_it() {
+        use crate::parser::content::parse_content;
+        use crate::parser::output::Block;
+
+        let blocks = parse_content(
+            "> [!NOTE] Hi\n> Text.\n>\n> ```rust\n> fn main() {}\n> ```\n",
+            1,
+        );
+
+        assert_eq!(blocks.len(), 1, "code escaped the quote: {:?}", blocks);
+        let Some(Block::Blockquote { blocks: inner, .. }) = blocks.first() else {
+            panic!("expected a blockquote, got {:?}", blocks);
+        };
+        assert!(
+            inner.iter().any(|b| matches!(b, Block::Code { .. })),
+            "code block is not inside the quote: {:?}",
+            inner
+        );
+    }
 }

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Multi-line callouts no longer collapse into their title.** `> [!NOTE] Heads up` followed by more quoted lines rendered as `▌ ℹ Heads upSome text.More text.`, because the parser joined a blockquote's body lines with no separator and the callout renderer takes the first line as its marker. Every callout longer than one line was affected
+- **Code blocks inside a callout render inside it.** A fenced block in a blockquote was emitted as a top-level sibling ahead of the quote, so it appeared above the `▌ ℹ` header instead of within the callout
+- **Images wrapped in a link reach `.img` and `stats`.** `[![badge](b.png)](https://ci.example)` was dropped outright, so a README badge row reported zero images
+- **Image titles are their own field.** `![a](x.png "Title")` put `x.png "Title"` into `.src` and left `.title` empty, rather than splitting the two. A destination containing spaces keeps both
+- **List item images are reported the same tight or loose.** A list item's images now come from its inline run, so whether a blank line sits between items no longer changes what `.img` returns, and the item keeps its own text
+
+### Changed
+
+- **turbovault-parser 1.6.0 to 2.0.0**, which is where all five fixes above come from. See its [2.0.0 notes](https://github.com/Epistates/turbovault/blob/main/CHANGELOG.md) for the full list
+
+### Known issues
+
+- **Images and links inside a blockquote lose their destination.** `> ![a](a.png)` is not reported by `.img`. A blockquote is rebuilt from its raw text and re-parsed, and that pass flattens inline elements to plain text. 1.6.0 masked this by also hoisting a copy of the image out of the quote, which 2.0.0 correctly stopped doing. Tracked at [turbovault#68](https://github.com/Epistates/turbovault/issues/68)
+
 ## [0.7.0] - 2026-08-26
 
 ### Added
