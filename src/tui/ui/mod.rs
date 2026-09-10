@@ -2289,6 +2289,19 @@ fn callout_decoration(kind: &str, theme: &Theme) -> (&'static str, Color) {
     }
 }
 
+/// How many rows `render_callout_lines` draws for `content`, or `None` when
+/// `content` is not a callout.
+///
+/// A callout is rendered from the blockquote's raw `content`, one row per
+/// line, and its nested blocks are never rendered separately. Anything that
+/// needs to predict the height of a blockquote has to ask here rather than
+/// counting nested blocks, or it will disagree with what is drawn and the
+/// viewport will scroll to the wrong offset.
+pub(crate) fn rendered_callout_line_count(content: &str) -> Option<usize> {
+    parse_callout_marker(content.lines().next()?)?;
+    Some(content.lines().count())
+}
+
 /// Render a blockquote as a styled callout if its first line carries a
 /// callout marker. Returns None when the blockquote is not a callout.
 fn render_callout_lines(content: &str, theme: &Theme) -> Option<Vec<Line<'static>>> {
@@ -2305,9 +2318,23 @@ fn render_callout_lines(content: &str, theme: &Theme) -> Option<Vec<Line<'static
         ),
     ])];
 
+    // A fenced block reaches us as raw text, so its rows must not go through
+    // the inline formatter: that reads the three backticks as inline-code
+    // delimiters, swallowing the fence and leaving a bare styled word where
+    // the opening row was. Inside a fence the text is code, so it is emitted
+    // verbatim.
+    let mut in_fence = false;
     for line in content_lines {
         let mut spans = vec![bar()];
-        spans.extend(format_inline_markdown(line, theme));
+        let is_fence = line.trim_start().starts_with("```");
+        if is_fence || in_fence {
+            spans.push(Span::styled(line.to_string(), theme.inline_code_style()));
+        } else {
+            spans.extend(format_inline_markdown(line, theme));
+        }
+        if is_fence {
+            in_fence = !in_fence;
+        }
         lines.push(Line::from(spans));
     }
 
@@ -3143,5 +3170,128 @@ mod tests {
     fn non_callout_blockquote_is_untouched() {
         let theme = Theme::ocean_dark();
         assert!(render_callout_lines("just a quote", &theme).is_none());
+    }
+
+    /// Feeds real parser output rather than a hand-written string. The
+    /// hand-written tests above passed throughout the period when every
+    /// multi-line callout rendered its whole body inside the title, because
+    /// the parser was joining the lines before we ever saw them.
+    #[test]
+    fn a_parsed_multi_line_callout_keeps_its_body_out_of_the_title() {
+        use crate::parser::content::parse_content;
+        use crate::parser::output::Block;
+
+        let blocks = parse_content("> [!NOTE] Heads up\n> Some text.\n> More text.\n", 1);
+        let Some(Block::Blockquote { content, .. }) = blocks.first() else {
+            panic!("expected a blockquote, got {:?}", blocks);
+        };
+
+        let theme = Theme::ocean_dark();
+        let lines = render_callout_lines(content, &theme).unwrap();
+        let row =
+            |i: usize| -> String { lines[i].spans.iter().map(|s| s.content.as_ref()).collect() };
+
+        assert_eq!(lines.len(), 3, "header plus one row per body line");
+        assert!(row(0).contains("Heads up"));
+        assert!(
+            !row(0).contains("Some text."),
+            "body leaked into the title: {:?}",
+            row(0)
+        );
+        assert!(row(1).contains("Some text."));
+        assert!(row(2).contains("More text."));
+    }
+
+    /// `rendered_callout_line_count` is what the interactive line counter
+    /// trusts to predict a callout's height. If it ever drifts from what the
+    /// renderer emits, the viewport scrolls to the wrong offset, so pin the
+    /// two together rather than trusting them to stay in step.
+    #[test]
+    fn rendered_callout_line_count_matches_the_rows_drawn() {
+        let theme = Theme::ocean_dark();
+        for content in [
+            "[!NOTE] Hi",
+            "[!NOTE] Hi\nText.",
+            "[!NOTE] Hi\nText.\n\n```rust\nfn main() {}\n```",
+            "[!warning]- Folded\nbody\nmore body",
+        ] {
+            let drawn = render_callout_lines(content, &theme).unwrap().len();
+            assert_eq!(
+                rendered_callout_line_count(content),
+                Some(drawn),
+                "predicted height disagrees with the render of {:?}",
+                content
+            );
+        }
+    }
+
+    #[test]
+    fn rendered_callout_line_count_declines_a_plain_quote() {
+        assert_eq!(rendered_callout_line_count("just a quote"), None);
+        assert_eq!(rendered_callout_line_count(""), None);
+    }
+
+    /// The inline formatter reads three backticks as an inline-code
+    /// delimiter, so running a fence row through it swallows the fence and
+    /// leaves a bare styled `rust` where ```` ```rust ```` was written.
+    #[test]
+    fn a_fence_inside_a_callout_survives_the_inline_formatter() {
+        let theme = Theme::ocean_dark();
+        let lines = render_callout_lines("[!NOTE] Hi\nText.\n\n```rust\nfn main() {}\n```", &theme)
+            .unwrap();
+        let row =
+            |i: usize| -> String { lines[i].spans.iter().map(|s| s.content.as_ref()).collect() };
+
+        assert_eq!(lines.len(), 6);
+        assert!(
+            row(3).contains("```rust"),
+            "opening fence lost: {:?}",
+            row(3)
+        );
+        assert!(row(4).contains("fn main() {}"));
+        assert!(row(5).contains("```"), "closing fence lost: {:?}", row(5));
+    }
+
+    /// Text after a closing fence is prose again, not code.
+    #[test]
+    fn a_callout_leaves_the_fence_when_it_closes() {
+        let theme = Theme::ocean_dark();
+        let lines =
+            render_callout_lines("[!NOTE] Hi\n```\ncode\n```\nafter `x` here", &theme).unwrap();
+        assert_eq!(lines.len(), 5, "header, two fences, code, trailing prose");
+        let after = &lines[4];
+        assert!(
+            after.spans.iter().any(|s| s.content.contains("after ")),
+            "trailing prose was treated as code: {:?}",
+            after
+        );
+        assert!(
+            after.spans.iter().all(|s| !s.content.contains('`')),
+            "inline code was not formatted after the fence closed: {:?}",
+            after
+        );
+    }
+
+    /// A fenced block inside a callout used to be emitted as a top-level
+    /// sibling ahead of the quote, so it rendered above the callout header.
+    #[test]
+    fn a_fenced_block_inside_a_callout_stays_inside_it() {
+        use crate::parser::content::parse_content;
+        use crate::parser::output::Block;
+
+        let blocks = parse_content(
+            "> [!NOTE] Hi\n> Text.\n>\n> ```rust\n> fn main() {}\n> ```\n",
+            1,
+        );
+
+        assert_eq!(blocks.len(), 1, "code escaped the quote: {:?}", blocks);
+        let Some(Block::Blockquote { blocks: inner, .. }) = blocks.first() else {
+            panic!("expected a blockquote, got {:?}", blocks);
+        };
+        assert!(
+            inner.iter().any(|b| matches!(b, Block::Code { .. })),
+            "code block is not inside the quote: {:?}",
+            inner
+        );
     }
 }

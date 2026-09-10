@@ -1265,7 +1265,13 @@ fn count_single_block_lines(
             2 + content.lines().count()
         }
         Block::List { items, .. } => items.len(),
-        Block::Blockquote { blocks, .. } => count_block_lines(blocks, mermaid_rows),
+        // A callout draws one row per line of `content` and ignores its nested
+        // blocks, so counting those instead would undercount every callout
+        // holding a fenced block.
+        Block::Blockquote { content, blocks } => {
+            crate::tui::ui::rendered_callout_line_count(content)
+                .unwrap_or_else(|| count_block_lines(blocks, mermaid_rows))
+        }
         Block::Table { rows, .. } => 4 + rows.len(),
         Block::Image { .. } => BLOCK_IMAGE_TOTAL_LINES,
         Block::HorizontalRule => 1,
@@ -1277,6 +1283,52 @@ fn count_single_block_lines(
 mod interactive_tests {
     use super::*;
     use crate::parser::content::parse_content;
+
+    /// A callout is drawn from the blockquote's raw `content`, one row per
+    /// line, so its height has to be counted the same way. Counting its nested
+    /// blocks instead undercounts every callout holding a fenced block, which
+    /// scrolls the viewport to the wrong offset. turbovault-parser 2.0.0 made
+    /// this reachable by keeping a fenced block inside the quote that 1.6.0
+    /// had been hoisting out to the top level.
+    #[test]
+    fn a_callout_is_counted_by_what_the_renderer_draws() {
+        let blocks = parse_content(
+            "> [!NOTE] Hi\n> Text.\n>\n> ```rust\n> fn main() {}\n> ```\n",
+            0,
+        );
+        let mermaid_rows = std::collections::HashMap::new();
+
+        let Some(block) = blocks.first() else {
+            panic!("expected a blockquote, got {:?}", blocks);
+        };
+        let Block::Blockquote { blocks: nested, .. } = block else {
+            panic!("expected a blockquote, got {:?}", block);
+        };
+
+        // The callout draws six rows: the `[!NOTE] Hi` header, `Text.`, the
+        // blank separator, and the three rows of the fence. Counting the
+        // nested blocks instead gives four, one for the paragraph and three
+        // for the code block, which is the undercount this guards.
+        assert_eq!(count_single_block_lines(block, &mermaid_rows), 6);
+        assert_eq!(count_block_lines(nested, &mermaid_rows), 4);
+    }
+
+    /// A blockquote that is not a callout still renders its nested blocks, so
+    /// it must still be counted from those.
+    #[test]
+    fn a_plain_blockquote_is_still_counted_from_its_nested_blocks() {
+        let blocks = parse_content("> just a quote\n", 0);
+        let mermaid_rows = std::collections::HashMap::new();
+
+        let Some(block @ Block::Blockquote { blocks: nested, .. }) = blocks.first() else {
+            panic!("expected a blockquote, got {:?}", blocks);
+        };
+
+        assert_eq!(
+            count_single_block_lines(block, &mermaid_rows),
+            count_block_lines(nested, &mermaid_rows)
+        );
+    }
 
     #[test]
     fn test_nested_code_blocks_in_list_items() {

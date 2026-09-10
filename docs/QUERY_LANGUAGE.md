@@ -88,16 +88,20 @@ To search bodies, use `.code | select(contains("TODO"))`.
 | `.para` | All paragraphs |
 | `.frontmatter` | YAML front matter |
 
-`.img` finds images written standalone, inline in a sentence, in a heading, in
-a blockquote, and in a tight list item. Three cases are still missed because of
-how the underlying parser reports them:
+`.img` finds images written standalone, inline in a sentence, in a heading,
+wrapped in a link, and in a list item whether the list is tight or loose. Two
+cases are still wrong because of how the underlying parser reports them, both
+tracked at [turbovault#68](https://github.com/Epistates/turbovault/issues/68):
 
-- **Images wrapped in a link**: `[![badge](b.png)](https://ci.example)` is not
-  reported, so README badge rows come back empty and `stats` undercounts.
-- **Loose list items** (items separated by blank lines) do not expose their
-  content as blocks, so images inside them are missed.
-- **Image titles**: `![a](x.png "Title")` puts `x.png "Title"` in `.src` and
-  leaves `.title` empty, rather than splitting the two.
+- **Images inside a blockquote** are not reported at all. `> ![a](a.png)`
+  returns nothing. A blockquote is rebuilt from its raw text and re-parsed, and
+  that pass flattens inline elements to plain text, so the source is gone
+  before treemd sees the block. Links inside a blockquote lose their
+  destination the same way, and a fenced block inside one reports
+  `start_line` and `end_line` as `0`.
+- **An image in a heading loses its alt text**, and that text is appended to
+  the heading instead. `# Title ![a](a.png)` gives `.img` an `alt` of `""` and
+  reports `.h1` as `Title a`. The `src` is correct.
 
 ### Document
 
@@ -253,9 +257,9 @@ fails with `Expected ')', found ','`. Pipe each branch separately instead:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `.src` | string | Image source URL (includes the title when one is present) |
+| `.src` | string | Image source URL |
 | `.alt` | string | Alt text |
-| `.title` | string? | Title attribute, currently always empty |
+| `.title` | string? | Title attribute, `null` when the image has none |
 
 Access these as properties (`.img[0].alt`). Only `src`/`url`/`href` exist as
 pipe functions; `.img | alt` reports `Unknown function`.
