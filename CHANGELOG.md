@@ -14,10 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Images wrapped in a link reach `.img` and `stats`.** `[![badge](b.png)](https://ci.example)` was dropped outright, so a README badge row reported zero images
 - **Image titles are their own field.** `![a](x.png "Title")` put `x.png "Title"` into `.src` and left `.title` empty, rather than splitting the two. A destination containing spaces keeps both
 - **List item images are reported the same tight or loose.** A list item's images now come from its inline run, so whether a blank line sits between items no longer changes what `.img` returns, and the item keeps its own text
+- **A callout holding a fenced block scrolls to the right offset.** A callout is drawn from the blockquote's raw content, one row per line, but its height was measured from its nested blocks, which counts a fenced block as three rows rather than the five it draws. Reachable only once the parser stopped hoisting that block out of the quote, so it arrived with the upgrade
 
 ### Changed
 
 - **turbovault-parser 1.6.0 to 2.0.0**, which is where all five fixes above come from. See its [2.0.0 notes](https://github.com/Epistates/turbovault/blob/main/CHANGELOG.md) for the full list
+- **An image in a list item now renders in place as text rather than as a picture.** Until now the parser hoisted it out to the top level, where it drew as a full image detached from the list it belonged to. It stays in the item now, and the list renderer has no inline image support, so it draws as its markdown. `.img` and `stats` report it correctly either way
+- **A fenced block inside a callout renders as literal text rather than highlighted code**, and is no longer selectable in interactive mode. It used to escape the quote and render as a real code block above the callout header. Inside the quote it is drawn from the callout's raw content
 
 ### Known issues
 

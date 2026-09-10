@@ -2289,6 +2289,19 @@ fn callout_decoration(kind: &str, theme: &Theme) -> (&'static str, Color) {
     }
 }
 
+/// How many rows `render_callout_lines` draws for `content`, or `None` when
+/// `content` is not a callout.
+///
+/// A callout is rendered from the blockquote's raw `content`, one row per
+/// line, and its nested blocks are never rendered separately. Anything that
+/// needs to predict the height of a blockquote has to ask here rather than
+/// counting nested blocks, or it will disagree with what is drawn and the
+/// viewport will scroll to the wrong offset.
+pub(crate) fn rendered_callout_line_count(content: &str) -> Option<usize> {
+    parse_callout_marker(content.lines().next()?)?;
+    Some(content.lines().count())
+}
+
 /// Render a blockquote as a styled callout if its first line carries a
 /// callout marker. Returns None when the blockquote is not a callout.
 fn render_callout_lines(content: &str, theme: &Theme) -> Option<Vec<Line<'static>>> {
@@ -3173,6 +3186,35 @@ mod tests {
         );
         assert!(row(1).contains("Some text."));
         assert!(row(2).contains("More text."));
+    }
+
+    /// `rendered_callout_line_count` is what the interactive line counter
+    /// trusts to predict a callout's height. If it ever drifts from what the
+    /// renderer emits, the viewport scrolls to the wrong offset, so pin the
+    /// two together rather than trusting them to stay in step.
+    #[test]
+    fn rendered_callout_line_count_matches_the_rows_drawn() {
+        let theme = Theme::ocean_dark();
+        for content in [
+            "[!NOTE] Hi",
+            "[!NOTE] Hi\nText.",
+            "[!NOTE] Hi\nText.\n\n```rust\nfn main() {}\n```",
+            "[!warning]- Folded\nbody\nmore body",
+        ] {
+            let drawn = render_callout_lines(content, &theme).unwrap().len();
+            assert_eq!(
+                rendered_callout_line_count(content),
+                Some(drawn),
+                "predicted height disagrees with the render of {:?}",
+                content
+            );
+        }
+    }
+
+    #[test]
+    fn rendered_callout_line_count_declines_a_plain_quote() {
+        assert_eq!(rendered_callout_line_count("just a quote"), None);
+        assert_eq!(rendered_callout_line_count(""), None);
     }
 
     /// A fenced block inside a callout used to be emitted as a top-level
