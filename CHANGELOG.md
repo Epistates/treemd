@@ -27,7 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known issues
 
-All tracked at [turbovault#68](https://github.com/Epistates/turbovault/issues/68), and all in the parser rather than here:
+All in the parser rather than here:
+
+- **A fenced block that follows a list inside a blockquote is dropped**, and its text is merged into the quote's content with no separator. Worse than a gap, because the text resurfaces as another block's content: on ratatui's changelog, `.code` loses five real blocks and gains three whose content is prose. A paragraph between the list and the fence avoids it, and the fence is fine in any other position. This is a regression against 0.7.0, found comparing the two builds across 82 documents, and it is the only content-level difference in the upgrade that is not a fix. Tracked at [turbovault#71](https://github.com/Epistates/turbovault/issues/71)
+
+The rest are tracked at [turbovault#68](https://github.com/Epistates/turbovault/issues/68):
 
 - **Images and links inside a blockquote lose their destination.** `> ![a](a.png)` is not reported by `.img`. A blockquote is rebuilt from its raw text and re-parsed, and that pass flattens inline elements to plain text. 1.6.0 masked this by also hoisting a copy of the image out of the quote, which 2.0.0 correctly stopped doing
 - **A fenced block inside a blockquote reports `start_line` and `end_line` as `0`**, because the quote fragment is re-parsed from line zero. Any `.code | select(.start_line > N)` filter treats it as sitting before the document starts

@@ -1511,6 +1511,29 @@ fn main() {}
         assert_eq!(image_srcs("> ![a](a.png)"), Vec::<String>::new());
     }
 
+    /// A fenced block that follows a list inside a blockquote is dropped, and
+    /// its text is merged into the quote's content with no separator. A
+    /// paragraph between the list and the fence avoids it, and the fence is
+    /// fine on its own, so only this ordering is affected.
+    ///
+    /// Regression in turbovault-parser 2.0.0, tracked at
+    /// Epistates/turbovault#71. Pinned rather than left silent because the
+    /// content resurfaces as prose: when this starts failing, the parser has
+    /// been fixed and the notes in `docs/QUERY_LANGUAGE.md` should come out.
+    #[test]
+    fn test_a_fence_after_a_list_in_a_blockquote_is_a_known_upstream_regression() {
+        let lost = "> - bullet\n>\n> ```rust\n> A();\n> ```\n";
+        assert_eq!(eval(lost, ".code").len(), 0, "upstream fixed, update docs");
+
+        // The same fence is reported once anything other than a list precedes
+        // it, which is what makes this an ordering bug rather than a blockquote
+        // one.
+        let kept = "> text\n>\n> ```rust\n> A();\n> ```\n";
+        assert_eq!(eval(kept, ".code").len(), 1);
+        let rescued = "> - bullet\n>\n> text\n>\n> ```rust\n> A();\n> ```\n";
+        assert_eq!(eval(rescued, ".code").len(), 1);
+    }
+
     #[test]
     fn test_multiple_images_are_collected_in_document_order() {
         let md = "![a](a.png)\n\n![b](b.png)\n\n- item ![c](c.png)";

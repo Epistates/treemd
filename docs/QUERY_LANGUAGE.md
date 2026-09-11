@@ -67,6 +67,19 @@ treemd -q '.h1[Installation] | content' doc.md  # Section content
 A bracket filter on `.code` matches the **language**, never the block body.
 To search bodies, use `.code | select(contains("TODO"))`.
 
+Two cases are wrong today, both in the underlying parser:
+
+- **A fenced block that follows a list inside a blockquote is not reported**,
+  and its text is merged into the blockquote's content instead. Putting a
+  paragraph between the list and the fence avoids it, and the fence is reported
+  normally in any other position. Tracked at
+  [turbovault#71](https://github.com/Epistates/turbovault/issues/71).
+- **A fenced block inside a blockquote reports `start_line` and `end_line` as
+  `0`**, because the quote is re-parsed as its own fragment. Any
+  `select(.start_line > N)` filter treats it as sitting before the document
+  starts. Tracked at
+  [turbovault#68](https://github.com/Epistates/turbovault/issues/68).
+
 ### Links
 
 | Selector | Description | Example |
