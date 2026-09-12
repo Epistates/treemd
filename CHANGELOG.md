@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-12
+
+No behaviour changes. Documents a regression found after 0.8.0 shipped, and adds the test that would have caught it.
+
+### Documentation
+
+- **A fenced block that follows a list inside a blockquote is dropped**, and its text is merged into the quote's content. Found by building 0.7.0 and 0.8.0 and comparing their output across 82 documents, which is the only content-level regression in that upgrade. The failure is worse than a gap, because the text resurfaces as another block's content: on ratatui's changelog, `.code` loses five real blocks and gains three holding prose. A paragraph between the list and the fence avoids it. Tracked at [turbovault#71](https://github.com/Epistates/turbovault/issues/71) and recorded in the query guide
+
+### Internal
+
+- **A contract test pins what treemd extracts from every construct that has broken here**, as one snapshot rather than a set of properties. Three bugs shipped from this repo while the suite was green, each time because the assertions were narrower than the failure. The snapshot fails on any change to what the parser reports, including changes nobody thought to assert, and prints the changed lines. An upstream fix fails it too, which is the intended signal to update the docs that describe the old behaviour
+
 ## [0.8.0] - 2026-09-10
 
 ### Fixed
