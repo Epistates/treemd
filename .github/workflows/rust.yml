@@ -79,6 +79,17 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@v7
+
+      # audit-check installs cargo-audit itself, unpinned and without
+      # --locked, so a broken publish anywhere in cargo-audit's dependency
+      # tree fails this job with nothing to say about our code. jiff 0.2.36
+      # did exactly that: it shipped `include_str!` paths reaching outside
+      # the crate, so it would not compile at all. Installing first with
+      # --locked resolves through cargo-audit's own lockfile, and the action
+      # then finds it present and skips its own install.
+      - name: Install cargo-audit from its lockfile
+        run: cargo install cargo-audit --locked
+
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
