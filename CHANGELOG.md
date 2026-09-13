@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-13
+
+### Fixed
+
+- **A list nested inside a blockquote or a `<details>` no longer mispositions what follows it.** Its height was measured as one row per item, ignoring both the extra lines a nested item adds to an item's content and the nested blocks the renderer draws underneath it. `1. step` holding a fenced block draws four rows and was counted as one, so selecting anything below the list scrolled to the wrong offset, and the error accumulated down the document. A top-level list was already measured correctly by `index_elements`, which is why this only showed up nested ([#88](https://github.com/Epistates/treemd/issues/88))
+
+### Internal
+
+- **The line counter is now checked against the renderer for every construct.** Element line ranges come from the counter and the viewport scrolls to them, so the two disagreeing is what mispositioning is. Two bugs of that shape have shipped, a callout holding a fenced block and now a list holding one, both invisible because nothing compared the numbers. The test measures the same document both ways across twenty constructs and prints any that differ
+
 ## [0.8.1] - 2026-09-12
 
 No behaviour changes. Documents a regression found after 0.8.0 shipped, and adds the test that would have caught it.

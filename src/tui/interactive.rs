@@ -1222,7 +1222,7 @@ impl Default for InteractiveState {
 }
 
 /// Count lines for nested blocks
-fn count_block_lines(
+pub(crate) fn count_block_lines(
     blocks: &[Block],
     mermaid_rows: &std::collections::HashMap<u64, usize>,
 ) -> usize {
@@ -1232,8 +1232,13 @@ fn count_block_lines(
         .sum()
 }
 
-/// Count lines for a single block
-fn count_single_block_lines(
+/// How many rows `render_block_to_lines` will draw for `block`.
+///
+/// This has to agree with the renderer for every block type. Element line
+/// ranges are built from it, so wherever it disagrees the viewport scrolls to
+/// the wrong offset, and the error accumulates down the document. `ui` has a
+/// test that holds the two together, which is why this is reachable from there.
+pub(crate) fn count_single_block_lines(
     block: &Block,
     mermaid_rows: &std::collections::HashMap<u64, usize>,
 ) -> usize {
@@ -1264,7 +1269,17 @@ fn count_single_block_lines(
             let _ = language;
             2 + content.lines().count()
         }
-        Block::List { items, .. } => items.len(),
+        // An item is not one row. Its content carries a line per nested item,
+        // and the renderer draws its nested blocks underneath it, so a step
+        // holding a fenced block is four rows rather than one. Mirrors what
+        // `index_elements` already does for a top-level list; this arm is what
+        // a list nested in a blockquote or a `<details>` is measured by.
+        Block::List { items, .. } => items
+            .iter()
+            .map(|item| {
+                item.content.lines().count().max(1) + count_block_lines(&item.blocks, mermaid_rows)
+            })
+            .sum(),
         // A callout draws one row per line of `content` and ignores its nested
         // blocks, so counting those instead would undercount every callout
         // holding a fenced block.
@@ -1311,6 +1326,31 @@ mod interactive_tests {
         // for the code block, which is the undercount this guards.
         assert_eq!(count_single_block_lines(block, &mermaid_rows), 6);
         assert_eq!(count_block_lines(nested, &mermaid_rows), 4);
+    }
+
+    /// A list item is not one row. `1. step` holding a fenced block draws four,
+    /// and measuring it as one displaces everything below the list.
+    ///
+    /// `index_elements` gets a top-level list right on its own, so this only
+    /// bit a list nested in a blockquote or a `<details>`, which is where
+    /// `count_single_block_lines` is the one doing the measuring.
+    #[test]
+    fn a_list_item_is_counted_by_its_content_and_its_nested_blocks() {
+        let mermaid_rows = std::collections::HashMap::new();
+        let count = |md: &str| -> usize {
+            let blocks = parse_content(md, 0);
+            count_block_lines(&blocks, &mermaid_rows)
+        };
+
+        // One row for `step`, then 2 + 1 for the fence and its single line.
+        assert_eq!(count("1. step\n\n   ```bash\n   cmd\n   ```\n"), 4);
+        // A nested item is a second line of the outer item's content.
+        assert_eq!(count("- outer\n  - inner\n"), 2);
+        // Plain items are still one row each.
+        assert_eq!(count("- a\n- b\n"), 2);
+        // Nested inside a quote is the path that was actually reachable. Three
+        // rows: the item, its nested paragraph, and the quote's own.
+        assert_eq!(count("> - step\n>\n>   text\n"), 3);
     }
 
     /// A blockquote that is not a callout still renders its nested blocks, so

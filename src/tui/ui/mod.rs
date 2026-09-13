@@ -3294,4 +3294,93 @@ mod tests {
             inner
         );
     }
+
+    // ---------- the line counter against the renderer ----------
+
+    /// Every construct, measured both ways.
+    ///
+    /// `index_elements` builds each element's line range from
+    /// `count_block_lines`, and the viewport scrolls to those ranges. So the
+    /// count has to equal the number of rows `render_markdown_enhanced`
+    /// actually emits for the same document. Where it does not, selecting an
+    /// element scrolls to the wrong place, and because the counter runs over
+    /// the blocks in order, an error in one block displaces everything below
+    /// it rather than just itself.
+    ///
+    /// Two bugs of exactly this kind have shipped: a callout holding a fenced
+    /// block, and a list holding one. Both were invisible because nothing
+    /// compared the two numbers.
+    #[test]
+    fn the_line_counter_agrees_with_the_renderer() {
+        use crate::parser::content::parse_content;
+
+        let hl = SyntaxHighlighter::new(
+            "base16-ocean.dark",
+            None,
+            CodeBlockBackground::Off,
+            ColorMode::Rgb,
+        );
+        let theme = Theme::ocean_dark();
+        let rows = std::collections::HashMap::new();
+
+        let cases = [
+            "a paragraph\n",
+            "# heading\n",
+            "---\n",
+            "```rust\nfn x() {}\n```\n",
+            "| a | b |\n|---|---|\n| 1 | 2 |\n",
+            "- a\n- b\n",
+            "- outer\n  - inner\n",
+            "1. one\n2. two\n",
+            "- [ ] todo\n- [x] done\n",
+            "> a plain quote\n",
+            "> line one\n> line two\n",
+            "> [!NOTE] callout\n",
+            "> [!NOTE] callout\n> body\n",
+            "> [!NOTE] callout\n> body\n>\n> ```rust\n> fn q() {}\n> ```\n",
+            "- item\n\n  ```rust\n  code\n  ```\n",
+            "1. step\n\n   ```bash\n   cmd\n   ```\n",
+            "- item\n\n  | a |\n  |---|\n  | 1 |\n",
+            "> - step\n>\n>   text\n",
+            "> - step\n>\n> ```bash\n> cmd\n> ```\n",
+            // No `<details>` here. Its height depends on whether it is
+            // expanded, and the counter takes no state, so the two can only be
+            // compared with an InteractiveState to agree on. `index_elements`
+            // guards its own nested walk with `is_expanded`, so the live path
+            // stays consistent.
+            "![standalone](i.png)\n",
+            "text with ![inline](i.png) image\n",
+            "# h\n\npara\n\n- list\n\n```rust\nfn x() {}\n```\n\n> quote\n",
+        ];
+
+        let mut wrong = Vec::new();
+        for md in cases {
+            let blocks = parse_content(md, 0);
+            // The renderer puts a blank row after every block, and
+            // `index_elements` adds the matching one per block, so the
+            // comparison has to include it.
+            let counted = crate::tui::interactive::count_block_lines(&blocks, &rows) + blocks.len();
+            let drawn = render_markdown_enhanced(
+                md,
+                &hl,
+                &theme,
+                None,
+                None,
+                Some(80),
+                &rows,
+                CodeFences::Full,
+            )
+            .lines
+            .len();
+            if counted != drawn {
+                wrong.push(format!("  counted={counted:<3} drawn={drawn:<3} {md:?}"));
+            }
+        }
+
+        assert!(
+            wrong.is_empty(),
+            "the counter and the renderer disagree, so scrolling mispositions:\n{}",
+            wrong.join("\n")
+        );
+    }
 }
