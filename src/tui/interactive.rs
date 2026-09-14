@@ -8,7 +8,7 @@
 //! - Tables (navigate cells)
 //! - Images (view info)
 
-use crate::parser::output::{Block, InlineElement};
+use crate::parser::output::{Block, InlineElement, ListItem};
 use crate::parser::{Link, LinkTarget};
 use std::collections::HashMap;
 
@@ -28,6 +28,10 @@ pub const CODE_BLOCK_OFFSET: usize = 5000;
 pub const TABLE_OFFSET: usize = 6000;
 /// Offset for images nested in list items
 pub const IMAGE_OFFSET: usize = 7000;
+/// Offset for images carried in a list item's own inline run, which is a
+/// different position from an image in one of its nested blocks and so needs
+/// its own range.
+pub const INLINE_IMAGE_OFFSET: usize = 8000;
 
 /// Placeholder lines reserved for block-level images in rendered output.
 /// 1 label line + IMAGE_PLACEHOLDER_LINES blank lines = BLOCK_IMAGE_TOTAL_LINES.
@@ -38,6 +42,19 @@ pub const BLOCK_IMAGE_TOTAL_LINES: usize = 1 + IMAGE_PLACEHOLDER_LINES; // 17
 /// 1 text line + PARAGRAPH_IMAGE_PLACEHOLDER_LINES blank lines = PARAGRAPH_WITH_IMAGE_TOTAL_LINES.
 pub const PARAGRAPH_IMAGE_PLACEHOLDER_LINES: usize = 13;
 pub const PARAGRAPH_WITH_IMAGE_TOTAL_LINES: usize = 1 + PARAGRAPH_IMAGE_PLACEHOLDER_LINES; // 14
+
+/// Does this list item carry an image anywhere in it?
+///
+/// A list item's `inline` is the complete run for the item: the parser lifts
+/// the inline elements of its nested blocks into it too, so this one check
+/// covers `- item ![a](a.png)` and an image in an indented continuation alike.
+/// The counter, the renderer and the element index all ask this, so they
+/// reserve, draw and address the same rows.
+pub(crate) fn list_item_has_image(item: &ListItem) -> bool {
+    item.inline
+        .iter()
+        .any(|e| matches!(e, InlineElement::Image { .. }))
+}
 
 /// Compute the hash key for a mermaid source string (mirrors App::mermaid_source_hash).
 #[cfg(all(feature = "mermaid", unix))]
@@ -106,6 +123,13 @@ pub struct InteractiveState {
     pub element_states: HashMap<ElementId, ElementState>,
     /// Current detail navigation mode (for tables/lists)
     pub detail_mode: Option<DetailMode>,
+    /// Rows the last `index_elements` pass walked over.
+    ///
+    /// Every element's `line_range` is an offset into this, so it has to equal
+    /// the number of rows the renderer emits for the same document. `ui` has a
+    /// test that holds the two together; without it the two drift silently and
+    /// the viewport scrolls to the wrong place.
+    pub total_lines: usize,
 }
 
 /// Unique identifier for an element
@@ -197,6 +221,7 @@ impl InteractiveState {
             current_index: None,
             element_states: HashMap::new(),
             detail_mode: None,
+            total_lines: 0,
         }
     }
 
@@ -594,6 +619,40 @@ impl InteractiveState {
                         let item_line_count = item.content.lines().count().max(1);
                         current_line += item_line_count;
 
+                        // Images in the item's own inline run. `render_inline_images`
+                        // positions from this range and skips anything shorter than
+                        // three rows, so the range has to span the placeholder the
+                        // renderer reserves or the image is silently dropped.
+                        if list_item_has_image(item) {
+                            let image_start = current_line;
+                            for (inline_idx, inline_elem) in item.inline.iter().enumerate() {
+                                let InlineElement::Image { alt, src, .. } = inline_elem else {
+                                    continue;
+                                };
+                                let id = ElementId {
+                                    block_idx,
+                                    sub_idx: Some(
+                                        item_idx * ITEM_MULTIPLIER
+                                            + inline_idx * NESTED_MULTIPLIER
+                                            + INLINE_IMAGE_OFFSET,
+                                    ),
+                                };
+                                self.elements.push(InteractiveElement {
+                                    id,
+                                    element_type: ElementType::Image {
+                                        alt: alt.clone(),
+                                        src: src.clone(),
+                                        block_idx,
+                                    },
+                                    line_range: (
+                                        image_start,
+                                        image_start + PARAGRAPH_IMAGE_PLACEHOLDER_LINES,
+                                    ),
+                                });
+                            }
+                            current_line += PARAGRAPH_IMAGE_PLACEHOLDER_LINES;
+                        }
+
                         // Process nested blocks within list items (code blocks, tables, etc.)
                         for (nested_idx, nested_block) in item.blocks.iter().enumerate() {
                             let nested_start_line = current_line;
@@ -663,22 +722,13 @@ impl InteractiveState {
 
                                     current_line += lines;
                                 }
-                                Block::Image { alt, src, .. } => {
-                                    let id = ElementId {
-                                        block_idx,
-                                        sub_idx: Some(nested_base + IMAGE_OFFSET),
-                                    };
-
-                                    self.elements.push(InteractiveElement {
-                                        id,
-                                        element_type: ElementType::Image {
-                                            alt: alt.clone(),
-                                            src: src.clone(),
-                                            block_idx,
-                                        },
-                                        line_range: (nested_start_line, nested_start_line + 1),
-                                    });
-
+                                // Not registered here. The item's own inline run
+                                // already carries every image in the item, at
+                                // any depth, and that is where the element and
+                                // its reserved rows come from. Claiming it here
+                                // as well would report the image twice, which is
+                                // the same trap the query side hit.
+                                Block::Image { .. } => {
                                     current_line += 1;
                                 }
                                 _ => {
@@ -781,6 +831,8 @@ impl InteractiveState {
             // Account for blank line added after each block in render_markdown_enhanced
             current_line += 1;
         }
+
+        self.total_lines = current_line;
 
         // Sort elements by line position for proper navigation order
         self.elements.sort_by_key(|e| e.line_range.0);
@@ -1244,16 +1296,11 @@ pub(crate) fn count_single_block_lines(
 ) -> usize {
     match block {
         Block::Heading { .. } => 1,
-        Block::Paragraph { inline, .. } => {
-            let has_image = inline
-                .iter()
-                .any(|e| matches!(e, InlineElement::Image { .. }));
-            if has_image {
-                PARAGRAPH_WITH_IMAGE_TOTAL_LINES
-            } else {
-                1
-            }
-        }
+        // A nested paragraph draws one row whether or not it carries an image:
+        // `render_block_to_lines` reserves no placeholder, because nothing
+        // indexes a nested image to draw into one. A top-level paragraph does
+        // reserve, and `index_elements` measures that one itself.
+        Block::Paragraph { .. } => 1,
         Block::Code {
             language, content, ..
         } => {
@@ -1274,6 +1321,11 @@ pub(crate) fn count_single_block_lines(
         // holding a fenced block is four rows rather than one. Mirrors what
         // `index_elements` already does for a top-level list; this arm is what
         // a list nested in a blockquote or a `<details>` is measured by.
+        // No image placeholder here, deliberately. Every caller of this
+        // function is measuring a block that `render_block_to_lines` will draw,
+        // and that path reserves nothing for images because nothing indexes
+        // them there either. Only a top-level list gets rows reserved, and
+        // `index_elements` measures that one itself.
         Block::List { items, .. } => items
             .iter()
             .map(|item| {
@@ -1354,6 +1406,49 @@ mod interactive_tests {
         // also drops the separator, which is Epistates/turbovault#77, but the
         // count and the render agree either way.
         assert_eq!(count("> - step\n>\n>   text\n"), 1);
+    }
+
+    /// An image in a list item has to reach the element index with rows
+    /// reserved for it, or `render_inline_images` has nowhere to draw it and
+    /// skips it. It used to reach the index not at all from the item's own
+    /// inline run, and with a one-row range from a nested block, so either way
+    /// the image simply never appeared.
+    #[test]
+    fn a_list_item_image_is_indexed_with_room_to_draw() {
+        let rows = std::collections::HashMap::new();
+        let images = |md: &str| -> Vec<(String, usize)> {
+            let mut state = InteractiveState::new();
+            state.index_elements(&parse_content(md, 0), &rows);
+            state
+                .elements
+                .iter()
+                .filter_map(|e| match &e.element_type {
+                    ElementType::Image { src, .. } => {
+                        Some((src.clone(), e.line_range.1 - e.line_range.0))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // `render_inline_images` skips any range shorter than three rows.
+        for (src, span) in images("- item ![a](a.png)\n") {
+            assert_eq!(src, "a.png");
+            assert!(span >= 3, "no room to draw into: {span} rows");
+        }
+        assert_eq!(images("- item ![a](a.png)\n").len(), 1);
+
+        assert_eq!(
+            images("- one ![a](a.png)\n- two ![b](b.png)\n")
+                .into_iter()
+                .map(|(src, _)| src)
+                .collect::<Vec<_>>(),
+            ["a.png", "b.png"]
+        );
+
+        // An image in an indented continuation is in the item's inline run
+        // too, so it must be claimed once, not once per path that can see it.
+        assert_eq!(images("- item\n\n  ![a](a.png)\n").len(), 1);
     }
 
     /// A blockquote that is not a callout still renders its nested blocks, so

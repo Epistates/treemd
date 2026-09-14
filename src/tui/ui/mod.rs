@@ -1737,6 +1737,17 @@ fn render_markdown_enhanced(
                         lines.push(Line::from(spans));
                     }
 
+                    // An image in a list item is drawn over these rows by
+                    // `render_inline_images`, the same way a paragraph's is.
+                    // Without them the image has nowhere to go and is simply
+                    // never painted, which is what used to happen.
+                    if crate::tui::interactive::list_item_has_image(item) {
+                        use crate::tui::interactive::PARAGRAPH_IMAGE_PLACEHOLDER_LINES;
+                        for _ in 0..PARAGRAPH_IMAGE_PLACEHOLDER_LINES {
+                            lines.push(Line::from(vec![]));
+                        }
+                    }
+
                     // Render nested blocks within this list item (e.g., code blocks)
                     use crate::tui::interactive::{
                         CODE_BLOCK_OFFSET, IMAGE_OFFSET, ITEM_MULTIPLIER, NESTED_MULTIPLIER,
@@ -3350,16 +3361,26 @@ mod tests {
             // stays consistent.
             "![standalone](i.png)\n",
             "text with ![inline](i.png) image\n",
+            "- item ![a](a.png)\n",
+            "- one ![a](a.png)\n- two ![b](b.png)\n",
+            "- plain\n- item ![a](a.png)\n",
+            "- item\n\n  ![a](a.png)\n",
+            "- item ![a](a.png)\n\n  ```rust\n  code\n  ```\n",
+            "> - quoted ![a](a.png)\n",
             "# h\n\npara\n\n- list\n\n```rust\nfn x() {}\n```\n\n> quote\n",
         ];
 
         let mut wrong = Vec::new();
         for md in cases {
-            let blocks = parse_content(md, 0);
-            // The renderer puts a blank row after every block, and
-            // `index_elements` adds the matching one per block, so the
-            // comparison has to include it.
-            let counted = crate::tui::interactive::count_block_lines(&blocks, &rows) + blocks.len();
+            // Measured through `index_elements`, because that is what builds
+            // the line ranges the viewport scrolls to. `count_block_lines` is
+            // only a part of it: a top-level list, paragraph or image is
+            // measured by the indexer's own arms, so comparing against that
+            // function instead would be checking one the live path never calls
+            // for those blocks.
+            let mut state = crate::tui::interactive::InteractiveState::new();
+            state.index_elements(&parse_content(md, 0), &rows);
+            let counted = state.total_lines;
             let drawn = render_markdown_enhanced(
                 md,
                 &hl,

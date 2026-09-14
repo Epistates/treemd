@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-14
+
+### Fixed
+
+- **Images inside a list item are drawn.** `- item ![a](a.png)` rendered the text and nothing else, and the image was not selectable. The list renderer drops images from its inline run on the grounds that they are drawn separately, which was true while the parser hoisted a list item's image out to a top-level block; since 2.0.0 it correctly keeps the image in the item, so nothing picked it up. The item now reserves the same placeholder rows a paragraph does, registers the image in the element index, and the existing image pass draws into them ([#87](https://github.com/Epistates/treemd/issues/87))
+- **A nested paragraph or list is no longer measured as if it reserved image rows.** Only a top-level block reserves them, so counting a nested one that way overstated its height by thirteen rows and pushed everything below it out of position
+
+### Internal
+
+- **The renderer is checked against the line count that production actually uses.** The check previously compared against `count_block_lines`, which the live path does not call for a top-level list, paragraph or image, so those three were being validated against a function that never measures them. `index_elements` now records the rows it walked and the test compares that
+
 ## [0.9.0] - 2026-09-14
 
 turbovault-parser 2.1.0, which closes every parser defect reported from here since 0.7.0.
