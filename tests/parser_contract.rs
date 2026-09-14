@@ -241,18 +241,15 @@ fn the_extracted_shape_of_every_construct_is_unchanged() {
     }
 }
 
-/// Generated output, not hand-written. Lines worth knowing are wrong today:
+/// Generated output, not hand-written. Verified against turbovault-parser
+/// 2.1.0, which fixed quoted images and links, quoted fences after a list,
+/// and code block line numbers. The `start`/`end` pairs are the opening and
+/// closing fence rows and were checked against the fixture by hand.
 ///
-/// - the first heading reads `Heading with an image heading-img` and the first
-///   image has an empty `alt`, because a heading's image is hoisted out and its
-///   alt is left behind in the heading text
-/// - `fn after_list_in_quote` is absent from the code section and has instead
-///   been merged into the blockquote content, which is Epistates/turbovault#71
-/// - quoted fences report `start=0 end=0`
-/// - `quoted-img` appears as blockquote text rather than as an image
-///
-/// The last three are tracked upstream. When a parser upgrade fixes one, this
-/// test fails and the fixed line is the diff.
+/// One line is still wrong: the first heading reads `Heading with an image
+/// heading-img`, because a heading image's alt is copied into the heading text
+/// as well as onto the image. Tracked at Epistates/turbovault#78. When that
+/// lands, this test fails and the fixed line is the diff.
 const EXPECTED: &str = r#"== headings ==
 h1 "Heading with an image heading-img"
 h2 "Lists"
@@ -261,7 +258,7 @@ h2 "Callouts"
 h2 "Code"
 h2 "Table"
 == images ==
-alt="" src="heading.png" title=None
+alt="heading-img" src="heading.png" title=None
 alt="inline" src="inline.png" title=None
 alt="standalone" src="standalone.png" title=None
 alt="linked" src="badge.png" title=None
@@ -273,18 +270,20 @@ alt="loose2" src="loose2.png" title=None
 alt="nested-in-item" src="nested.png" title=None
 alt="own" src="own.png" title=None
 alt="nested" src="nested2.png" title=None
+alt="quoted-img" src="quoted.png" title=None
 == code ==
-lang=Some("rust") start=1 end=1 body="fn in_list_item() {}"
-lang=Some("rust") start=0 end=0 body="fn after_prose_in_quote() {}"
-lang=Some("rust") start=0 end=0 body="fn in_callout() {}"
-lang=Some("rust") start=1 end=1 body="fn top_level() {}"
-lang=None start=1 end=1 body="no language"
+lang=Some("rust") start=37 end=39 body="fn in_list_item() {}"
+lang=Some("rust") start=55 end=57 body="fn after_list_in_quote() {}"
+lang=Some("rust") start=61 end=63 body="fn after_prose_in_quote() {}"
+lang=Some("rust") start=76 end=78 body="fn in_callout() {}"
+lang=Some("rust") start=82 end=84 body="fn top_level() {}"
+lang=None start=86 end=88 body="no language"
 == blockquotes ==
 "a plain quote"
 "first line\nsecond line\nthird line"
-"quoted-img"
-"a quoted link"
-"a list inside a quote```rust\nfn after_list_in_quote() {}\n```"
+"![quoted-img](quoted.png)"
+"a [quoted link](https://quoted.example)"
+"- a list inside a quote\n\n```rust\nfn after_list_in_quote() {}\n```"
 "some prose inside a quote\n\n```rust\nfn after_prose_in_quote() {}\n```"
 "[!NOTE] Single line callout"
 "[!WARNING] Multi line callout\nbody line one\nbody line two"
@@ -299,7 +298,7 @@ ordered=false items=7
   - "item with its own image ![own](own.png)"
   - "item holding a fence"
 ordered=false items=1
-  - ""
+  - "a list inside a quote"
 == links ==
 text="linked" url="https://ci.example"
 text="link" url="https://example.com"
@@ -307,9 +306,9 @@ text="quoted link" url="https://quoted.example"
 == tables ==
 headers=["Column A", "B"] rows=1
 == counts ==
-.para 16
-.img 12
-.code 5
+.para 15
+.img 13
+.code 6
 .quote 9
 .list 2
 .link 3

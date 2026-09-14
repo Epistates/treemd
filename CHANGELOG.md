@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-14
+
+turbovault-parser 2.1.0, which closes every parser defect reported from here since 0.7.0.
+
+### Fixed
+
+- **Images and links inside a blockquote keep their destination.** `> ![a](a.png)` was not reported by `.img` at all, and `> [t](url)` kept its text but lost its URL. A blockquote was rebuilt from raw text and re-parsed in a pass that flattened inline elements, so both were gone before treemd saw the block
+- **A fenced block following a list inside a blockquote is reported again.** It was dropped and its text merged into the quote, so on ratatui's changelog `.code` lost five real blocks and gained three whose content was prose. This was the one content regression in the 0.8.0 upgrade
+- **Code blocks report real line numbers.** `.start_line` and `.end_line` are now the opening and closing fence rows of the document, counting from 1. A block inside a blockquote reported `0` for both, and a block inside a list item reported a position relative to the item rather than the document, so `select(.start_line > N)` and any jump-to-line were wrong for both
+- **A heading image keeps its alt text.** `# Title ![a](a.png)` gave the image an empty `alt`
+- **A list item inside a blockquote keeps its own text.** It came back empty
+
+### Changed
+
+- **`.img` reports more images than before** on documents with quoted images, and **`.code` line numbers differ from 0.8.x**, where they were relative or zero. Anything pinning those values needs regenerating
+- **turbovault-parser 2.0.0 to 2.1.0**, which also drops the `windows-core` dependency chain
+- **rustls 0.23.42 to 0.23.45**, clearing [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285), where TLS 1.3 handshake messages were accepted across encryption level boundaries. Reached through `ureq`, so it affects fetching a document over HTTPS
+
+### Known issues
+
+- **A heading image's alt is also copied into the heading text**, so `# Title ![a](a.png)` reports `.h1` as `Title a` and generates the anchor `title-a`. The image itself is correct. Tracked at [turbovault#78](https://github.com/Epistates/turbovault/issues/78)
+- **A list item's indented continuation inside a blockquote is joined without a separator**, so `> - step` followed by an indented `text` reports `steptext`. The same list outside a quote is correct. Tracked at [turbovault#77](https://github.com/Epistates/turbovault/issues/77)
+
 ## [0.8.2] - 2026-09-13
 
 ### Fixed

@@ -1348,9 +1348,12 @@ mod interactive_tests {
         assert_eq!(count("- outer\n  - inner\n"), 2);
         // Plain items are still one row each.
         assert_eq!(count("- a\n- b\n"), 2);
-        // Nested inside a quote is the path that was actually reachable. Three
-        // rows: the item, its nested paragraph, and the quote's own.
-        assert_eq!(count("> - step\n>\n>   text\n"), 3);
+        // Nested inside a quote is the path that was actually reachable. One
+        // row, because turbovault-parser 2.1.0 folds an indented continuation
+        // into the item rather than leaving it a nested block. That folding
+        // also drops the separator, which is Epistates/turbovault#77, but the
+        // count and the render agree either way.
+        assert_eq!(count("> - step\n>\n>   text\n"), 1);
     }
 
     /// A blockquote that is not a callout still renders its nested blocks, so

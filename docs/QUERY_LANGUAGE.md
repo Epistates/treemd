@@ -67,18 +67,8 @@ treemd -q '.h1[Installation] | content' doc.md  # Section content
 A bracket filter on `.code` matches the **language**, never the block body.
 To search bodies, use `.code | select(contains("TODO"))`.
 
-Two cases are wrong today, both in the underlying parser:
-
-- **A fenced block that follows a list inside a blockquote is not reported**,
-  and its text is merged into the blockquote's content instead. Putting a
-  paragraph between the list and the fence avoids it, and the fence is reported
-  normally in any other position. Tracked at
-  [turbovault#71](https://github.com/Epistates/turbovault/issues/71).
-- **A fenced block inside a blockquote reports `start_line` and `end_line` as
-  `0`**, because the quote is re-parsed as its own fragment. Any
-  `select(.start_line > N)` filter treats it as sitting before the document
-  starts. Tracked at
-  [turbovault#68](https://github.com/Epistates/turbovault/issues/68).
+`.start_line` and `.end_line` are the opening and closing fence rows, counting
+from 1, including for a block nested in a list item or a blockquote.
 
 ### Links
 
@@ -102,19 +92,13 @@ Two cases are wrong today, both in the underlying parser:
 | `.frontmatter` | YAML front matter |
 
 `.img` finds images written standalone, inline in a sentence, in a heading,
-wrapped in a link, and in a list item whether the list is tight or loose. Two
-cases are still wrong because of how the underlying parser reports them, both
-tracked at [turbovault#68](https://github.com/Epistates/turbovault/issues/68):
+inside a blockquote, wrapped in a link, and in a list item whether the list is
+tight or loose. One case is still wrong in the underlying parser:
 
-- **Images inside a blockquote** are not reported at all. `> ![a](a.png)`
-  returns nothing. A blockquote is rebuilt from its raw text and re-parsed, and
-  that pass flattens inline elements to plain text, so the source is gone
-  before treemd sees the block. Links inside a blockquote lose their
-  destination the same way, and a fenced block inside one reports
-  `start_line` and `end_line` as `0`.
-- **An image in a heading loses its alt text**, and that text is appended to
-  the heading instead. `# Title ![a](a.png)` gives `.img` an `alt` of `""` and
-  reports `.h1` as `Title a`. The `src` is correct.
+- **A heading image's alt is also copied into the heading text.**
+  `# Title ![a](a.png)` reports the image correctly but gives `.h1` a text of
+  `Title a` rather than `Title`, and the generated anchor is `title-a`. Tracked
+  at [turbovault#78](https://github.com/Epistates/turbovault/issues/78).
 
 ### Document
 

@@ -1499,39 +1499,79 @@ fn main() {}
         assert_eq!(image_srcs("Text with ![a](a.png) inside."), ["a.png"]);
         assert_eq!(image_srcs("# Title ![a](a.png)"), ["a.png"]);
         assert_eq!(image_srcs("- item ![a](a.png)"), ["a.png"]);
+        assert_eq!(image_srcs("> ![a](a.png)"), ["a.png"]);
     }
 
-    /// A blockquote is rebuilt from its raw text and re-parsed, and that pass
-    /// flattens every inline element to plain text, so an image inside one
-    /// survives as its alt text with the source discarded. Not recoverable
-    /// here: the destination is gone before we receive the block.
-    /// Tracked upstream at Epistates/turbovault#68.
+    /// Both were unreachable until turbovault-parser 2.1.0. A blockquote used
+    /// to be rebuilt from its raw text and re-parsed in a pass that flattened
+    /// inline elements, so an image inside one arrived as bare alt text with
+    /// its source already gone, and a heading's image was hoisted out with its
+    /// alt left behind in the heading.
     #[test]
-    fn test_images_inside_a_blockquote_are_a_known_upstream_gap() {
-        assert_eq!(image_srcs("> ![a](a.png)"), Vec::<String>::new());
+    fn test_image_alt_survives_a_blockquote_and_a_heading() {
+        let details = |md: &str| -> Vec<(String, String)> {
+            eval(md, ".img")
+                .into_iter()
+                .filter_map(|v| match v {
+                    Value::Image(i) => Some((i.alt, i.src)),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        assert_eq!(
+            details("> ![a](a.png)"),
+            [("a".into(), "a.png".into())],
+            "a quoted image keeps its alt and its source"
+        );
+        assert_eq!(
+            details("# Title ![a](a.png)"),
+            [("a".into(), "a.png".into())],
+            "a heading's image keeps its alt"
+        );
+        // Still wrong, and the other half of the same defect: the alt reaches
+        // the image now, but it was also left behind in the heading's own
+        // text, so a heading renders as `Title a` in the outline and in
+        // `--list`. Tracked at Epistates/turbovault#78.
+        assert_eq!(
+            eval("# Title ![a](a.png)", ".h1 | text")
+                .into_iter()
+                .map(|v| v.to_text())
+                .collect::<Vec<_>>(),
+            ["Title a"],
+            "upstream fixed the heading text, drop the note in QUERY_LANGUAGE.md"
+        );
     }
 
-    /// A fenced block that follows a list inside a blockquote is dropped, and
-    /// its text is merged into the quote's content with no separator. A
-    /// paragraph between the list and the fence avoids it, and the fence is
-    /// fine on its own, so only this ordering is affected.
-    ///
-    /// Regression in turbovault-parser 2.0.0, tracked at
-    /// Epistates/turbovault#71. Pinned rather than left silent because the
-    /// content resurfaces as prose: when this starts failing, the parser has
-    /// been fixed and the notes in `docs/QUERY_LANGUAGE.md` should come out.
+    /// Links inside a blockquote kept their text but lost their destination
+    /// until 2.1.0.
     #[test]
-    fn test_a_fence_after_a_list_in_a_blockquote_is_a_known_upstream_regression() {
-        let lost = "> - bullet\n>\n> ```rust\n> A();\n> ```\n";
-        assert_eq!(eval(lost, ".code").len(), 0, "upstream fixed, update docs");
+    fn test_a_quoted_link_keeps_its_destination() {
+        let urls: Vec<String> = eval("> see [t](http://x.example)", ".link")
+            .into_iter()
+            .filter_map(|v| match v {
+                Value::Link(l) => Some(l.url),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(urls, ["http://x.example"]);
+    }
 
-        // The same fence is reported once anything other than a list precedes
-        // it, which is what makes this an ordering bug rather than a blockquote
-        // one.
-        let kept = "> text\n>\n> ```rust\n> A();\n> ```\n";
-        assert_eq!(eval(kept, ".code").len(), 1);
-        let rescued = "> - bullet\n>\n> text\n>\n> ```rust\n> A();\n> ```\n";
-        assert_eq!(eval(rescued, ".code").len(), 1);
+    /// Whatever precedes a fence inside a blockquote, the fence is still a
+    /// code block. turbovault-parser 2.0.0 dropped it when a list came
+    /// directly before, and merged its text into the quote's content, so the
+    /// code resurfaced as prose. Fixed in 2.1.0 (Epistates/turbovault#71); all
+    /// three orderings are kept here because only one of them ever broke.
+    #[test]
+    fn test_a_fence_in_a_blockquote_is_reported_whatever_precedes_it() {
+        let after_list = "> - bullet\n>\n> ```rust\n> A();\n> ```\n";
+        assert_eq!(eval(after_list, ".code").len(), 1);
+
+        let after_prose = "> text\n>\n> ```rust\n> A();\n> ```\n";
+        assert_eq!(eval(after_prose, ".code").len(), 1);
+
+        let after_both = "> - bullet\n>\n> text\n>\n> ```rust\n> A();\n> ```\n";
+        assert_eq!(eval(after_both, ".code").len(), 1);
     }
 
     #[test]

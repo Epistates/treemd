@@ -1,6 +1,6 @@
 [package]
 name = "treemd"
-version = "0.8.2"
+version = "0.9.0"
 edition = "2024"
 authors = ["epistates, inc. <nick@epistates.com>"]
 description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
@@ -44,7 +44,7 @@ ureq = "3"
 unicode-width = "0.2"
 
 # Turbovault integration - OFM parsing with code-block awareness
-turbovault-parser = "2.0.0"
+turbovault-parser = "2.1.0"
 
 # Serialization for JSON output
 serde = { version = "1.0", features = ["derive"] }
