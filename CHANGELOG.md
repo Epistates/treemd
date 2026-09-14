@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **The query guide records the one remaining `.list` and `.blockquote` gap.** A list item's indented continuation inside a blockquote is joined to the item with no separator, so `> - step` followed by an indented `text` reports `steptext`. It was noted in the 0.9.0 release entry but not in the guide anyone reads while writing a query, unlike its sibling [turbovault#78](https://github.com/Epistates/turbovault/issues/78), which was. Now pinned by a test as well, so fixing it upstream fails the build and the note comes back out. Tracked at [turbovault#77](https://github.com/Epistates/turbovault/issues/77)
+
 ## [0.9.1] - 2026-09-14
 
 ### Fixed

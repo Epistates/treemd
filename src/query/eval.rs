@@ -1543,6 +1543,39 @@ fn main() {}
         );
     }
 
+    /// A list item's indented continuation inside a blockquote is joined onto
+    /// the item with no separator, so `step` and `text` come back as
+    /// `steptext`. The same list outside a quote is right, and so is an
+    /// unindented paragraph inside one, which is what makes this the quote
+    /// re-serializer's continuation path rather than anything list-specific.
+    ///
+    /// Tracked at Epistates/turbovault#77. Pinned so that fixing it upstream
+    /// fails here and the note in `docs/QUERY_LANGUAGE.md` gets removed.
+    #[test]
+    fn test_a_quoted_list_item_continuation_is_a_known_upstream_gap() {
+        let item_text = |md: &str| -> Vec<String> {
+            eval(md, ".list")
+                .into_iter()
+                .filter_map(|v| match v {
+                    Value::List(l) => Some(l),
+                    _ => None,
+                })
+                .flat_map(|l| l.items.into_iter().map(|i| i.content))
+                .collect()
+        };
+
+        assert_eq!(
+            item_text("> - step\n>\n>   text\n"),
+            ["steptext"],
+            "upstream fixed the separator, drop the note in QUERY_LANGUAGE.md"
+        );
+
+        // The two neighbours that are correct, so a fix that only moves the
+        // problem sideways still fails.
+        assert_eq!(item_text("- step\n\n  text\n"), ["step"]);
+        assert_eq!(item_text("> - step\n>\n> text\n"), ["step"]);
+    }
+
     /// Links inside a blockquote kept their text but lost their destination
     /// until 2.1.0.
     #[test]

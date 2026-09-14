@@ -100,6 +100,15 @@ tight or loose. One case is still wrong in the underlying parser:
   `Title a` rather than `Title`, and the generated anchor is `title-a`. Tracked
   at [turbovault#78](https://github.com/Epistates/turbovault/issues/78).
 
+One case is wrong for `.list` and `.blockquote`, also in the parser:
+
+- **A list item's indented continuation inside a blockquote is joined to the
+  item with no separator.** Given `> - step` followed by a blank quoted line
+  and an indented `>   text`, the item's `.content` is `steptext` and the
+  quote's is `- steptext`. The same list outside a blockquote is correct, and
+  so is an unindented paragraph inside one. Tracked at
+  [turbovault#77](https://github.com/Epistates/turbovault/issues/77).
+
 ### Document
 
 | Selector | Description |
