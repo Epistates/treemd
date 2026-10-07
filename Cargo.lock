@@ -1815,6 +1815,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-canonicalize"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39e8ce98d2141039e100a63f7ab04ee0dec503608d72dd6dbc9d56d7532da3ec"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2512,6 +2518,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "soft-canonicalize"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80111c43bbe801bcec3679d2ccba588a4618c11de4024abbd028ff50e33436dd"
+dependencies = [
+ "proc-canonicalize",
+]
+
+[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2939,9 +2954,9 @@ dependencies = [
 
 [[package]]
 name = "turbovault-core"
-version = "2.1.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec6c6ec941e44a99567cbe9238d9d8fafd0e5b78f7a48c36f5424dca0e74b536"
+checksum = "32836a3aea9fc207a461d1c6ada9799d26b294d0d4d210883c0e3ef913a70828"
 dependencies = [
  "chrono",
  "log",
@@ -2950,6 +2965,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shellexpand",
+ "soft-canonicalize",
  "thiserror 2.0.19",
  "tokio",
  "uuid",
@@ -2959,9 +2975,9 @@ dependencies = [
 
 [[package]]
 name = "turbovault-parser"
-version = "2.1.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f40de4071831d1dbc00bd61997b4300f437676f0a9d2de13d3a62fce4f93a8f"
+checksum = "acbe179c08d6de0700b5ca9030d90379e9c8a248f0829d2536e699862bd9ed5e"
 dependencies = [
  "log",
  "pulldown-cmark",
@@ -3114,9 +3130,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.24.0"
+version = "1.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
+checksum = "97277d36b9c3ace13e58fa6e753f8b0bbbf302a18dd193240d70f9e29681059a"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -3634,9 +3650,9 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "yaml_serde"
-version = "0.10.4"
+version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08c7c1b1a6a7c8a6b2741a6c21a4f8918e51899b111cfa08d1288202656e3975"
+checksum = "33b729a08a9a6be689bbad3e2bf8015926db54b6622cc89c3a5f7dc174b9e918"
 dependencies = [
  "indexmap",
  "itoa",
