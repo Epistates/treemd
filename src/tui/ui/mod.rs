@@ -123,7 +123,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     // Render file picker modal (FileSearch is only used as a fallback for old code)
-    if matches!(app.mode, AppMode::FilePicker | AppMode::FileSearch) {
+    if app.mode == AppMode::FilePicker {
         render_file_picker(frame, app, area);
     }
 
@@ -1029,10 +1029,13 @@ fn mode_chip(app: &App) -> Option<(&'static str, Style)> {
         }
         AppMode::LinkFollow => Some((" LINKS ", chip_style(theme.heading_3))),
         AppMode::DocSearch => Some((" SEARCH ", chip_style(theme.heading_4))),
-        AppMode::Search => Some((" FILTER ", chip_style(theme.heading_4))),
         AppMode::CellEdit => Some((" EDIT ", chip_style(theme.heading_5))),
         AppMode::CommandPalette => Some((" PALETTE ", chip_style(theme.heading_1))),
-        AppMode::FilePicker | AppMode::FileSearch => Some((" FILES ", chip_style(theme.heading_3))),
+        AppMode::FilePicker => Some((" FILES ", chip_style(theme.heading_3))),
+        // Outline search is a panel over Normal mode rather than a mode of
+        // its own. The chip used to wait for an AppMode::Search that nothing
+        // ever set, so it never showed.
+        AppMode::Normal if app.show_search => Some((" FILTER ", chip_style(theme.heading_4))),
         _ => None,
     }
 }

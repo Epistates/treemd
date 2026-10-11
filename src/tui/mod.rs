@@ -239,7 +239,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         } else if let Some(ref mut watcher) = file_watcher
             && watcher.check_for_changes()
         {
-            if app.has_unsaved_changes {
+            if app.has_unsaved_changes() {
                 // Never clobber buffered edits with an external reload; the
                 // user must save or undo first, then the file can be reloaded.
                 app.status_message = Some(
@@ -402,7 +402,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                         Ok(_) => {
                                             // The user deliberately edited the file externally,
                                             // so the on-disk version wins over any buffered edits.
-                                            let had_pending = app.has_unsaved_changes;
+                                            let had_pending = app.has_unsaved_changes();
                                             match app.reload_current_file() {
                                                 Err(e) => {
                                                     app.status_message =
@@ -469,14 +469,19 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
 /// outline/content panes would require knowing the laid-out rects, which the
 /// renderer hasn't published yet.
 fn handle_mouse(app: &mut App, mouse: MouseEvent) {
-    use crate::keybindings::Action;
-
-    // Scroll wheel maps to existing actions so keybindings stay authoritative.
-    let action = match mouse.kind {
-        MouseEventKind::ScrollDown => Some(Action::Next),
-        MouseEventKind::ScrollUp => Some(Action::Previous),
-        _ => None,
+    // The wheel is the arrow keys of whatever is in front, so keybindings
+    // stay authoritative and a modal scrolls itself. Mapped to Normal mode's
+    // Next and Previous, it moved the content behind an open help screen,
+    // palette or picker.
+    if app.is_image_modal_open() {
+        return;
+    }
+    let key = match mouse.kind {
+        MouseEventKind::ScrollDown => KeyCode::Down,
+        MouseEventKind::ScrollUp => KeyCode::Up,
+        _ => return,
     };
+    let action = app.get_action_for_key(key, crossterm::event::KeyModifiers::NONE);
 
     if let Some(a) = action {
         // Bypass quit/editor/redraw return paths — scroll never produces them.
@@ -510,4 +515,52 @@ fn handle_text_input(
     };
 
     app.apply_text_input_edit(edit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+    fn wheel_down() -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// The wheel was mapped to Normal mode's Next whatever was open, so it
+    /// moved the content behind the help screen instead of scrolling help.
+    #[test]
+    fn the_wheel_scrolls_whatever_is_in_front() {
+        let md: String = (0..40).map(|i| format!("# H{i}\n\nbody\n\n")).collect();
+        let mut app = App::new(
+            crate::parser::parse_markdown(&md),
+            "t.md".into(),
+            std::path::PathBuf::from("<stdin>"),
+            crate::Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+
+        let selected = app.outline_state.selected();
+        app.toggle_help();
+        handle_mouse(&mut app, wheel_down());
+        assert_eq!(app.help_scroll, 1, "help scrolls");
+        assert_eq!(
+            app.outline_state.selected(),
+            selected,
+            "the outline stays put"
+        );
+
+        app.toggle_help();
+        handle_mouse(&mut app, wheel_down());
+        assert_ne!(
+            app.outline_state.selected(),
+            selected,
+            "without help it moves"
+        );
+    }
 }

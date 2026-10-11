@@ -46,9 +46,6 @@ pub enum AppMode {
     Normal,
     Interactive,
     LinkFollow,
-    Search,
-    ThemePicker,
-    Help,
     CellEdit,
     ConfirmFileCreate,
     DocSearch,             // In-document search mode (n/N navigation)
@@ -57,7 +54,6 @@ pub enum AppMode {
     ConfirmSaveBeforeQuit, // Prompt to save unsaved changes before quitting
     ConfirmSaveBeforeNav,  // Prompt to save unsaved changes before navigating
     FilePicker,            // File picker modal for switching files
-    FileSearch,            // File picker search/filter mode
 }
 
 /// Type of pending navigation when user has unsaved changes
@@ -643,7 +639,6 @@ pub struct App {
 
     // Pending edits buffer (for safe editing with explicit save)
     pub pending_edits: Vec<PendingEdit>, // Stack of uncommitted edits
-    pub has_unsaved_changes: bool,       // True if pending_edits is non-empty
 
     // Persistent clipboard for Linux X11 compatibility
     // On Linux, the clipboard instance must stay alive to serve paste requests
@@ -917,7 +912,6 @@ impl App {
 
             // Pending edits buffer
             pending_edits: Vec::new(),
-            has_unsaved_changes: false,
 
             // Initialize persistent clipboard (None if unavailable)
             clipboard: arboard::Clipboard::new().ok(),
@@ -1705,9 +1699,6 @@ impl App {
                     KeybindingMode::LinkFollow
                 }
             }
-            AppMode::Search => KeybindingMode::Search,
-            AppMode::ThemePicker => KeybindingMode::ThemePicker,
-            AppMode::Help => KeybindingMode::Help,
             AppMode::CellEdit => KeybindingMode::CellEdit,
             AppMode::ConfirmFileCreate
             | AppMode::ConfirmSaveWidth
@@ -1722,8 +1713,6 @@ impl App {
                     KeybindingMode::FilePicker
                 }
             }
-            // FileSearch mode is no longer used - we use FilePicker mode with file_search_active flag
-            AppMode::FileSearch => KeybindingMode::FileSearch,
         }
     }
 
@@ -1762,7 +1751,7 @@ impl App {
                     self.filter_outline();
                     self.show_search = false;
                     self.outline_search_active = false;
-                } else if self.has_unsaved_changes {
+                } else if self.has_unsaved_changes() {
                     // Prompt to save before quitting
                     self.mode = AppMode::ConfirmSaveBeforeQuit;
                 } else {
@@ -1866,7 +1855,7 @@ impl App {
                     }
                     self.update_content_metrics();
                 }
-                AppMode::FilePicker | AppMode::FileSearch => {
+                AppMode::FilePicker => {
                     if let Err(e) = self.select_file_from_picker() {
                         self.status_message = Some(format!("✗ Error: {}", e));
                     }
@@ -1995,7 +1984,7 @@ impl App {
                     return ActionResult::Continue;
                 }
                 // Check for unsaved changes
-                if self.has_unsaved_changes {
+                if self.has_unsaved_changes() {
                     self.pending_navigation = Some(PendingNavigation::Back);
                     self.mode = AppMode::ConfirmSaveBeforeNav;
                 } else if self.go_back().is_ok() {
@@ -2008,7 +1997,7 @@ impl App {
                     return ActionResult::Continue;
                 }
                 // Check for unsaved changes
-                if self.has_unsaved_changes {
+                if self.has_unsaved_changes() {
                     self.pending_navigation = Some(PendingNavigation::Forward);
                     self.mode = AppMode::ConfirmSaveBeforeNav;
                 } else if self.go_forward().is_ok() {
@@ -2161,11 +2150,6 @@ impl App {
                     self.exit_link_follow_mode();
                 }
             }
-            AppMode::Search => {
-                self.search_query.clear();
-                self.filter_outline();
-                self.show_search = false;
-            }
             AppMode::DocSearch => {
                 if self.doc_search.active {
                     self.cancel_doc_search();
@@ -2177,18 +2161,6 @@ impl App {
             AppMode::CellEdit => {
                 self.mode = AppMode::Interactive;
                 self.status_message = Some("Editing cancelled".to_string());
-            }
-            AppMode::ThemePicker => {
-                // Close theme picker (restores original theme)
-                self.toggle_theme_picker();
-            }
-            AppMode::Help => {
-                // Close help
-                self.show_help = false;
-            }
-            AppMode::FileSearch => {
-                self.file_picker.active = false;
-                self.mode = AppMode::FilePicker;
             }
             AppMode::FilePicker => {
                 if self.file_picker.active {
@@ -2269,7 +2241,6 @@ impl App {
                     self.execute_pending_navigation();
                 }
             }
-            AppMode::Search => self.show_search = false,
             AppMode::DocSearch => self.accept_doc_search(),
             AppMode::CommandPalette => {
                 // Execute command - propagate non-trivial results (Quit,
@@ -2311,10 +2282,14 @@ impl App {
         }
     }
 
-    /// Drop all buffered edits and clear the unsaved-changes flag.
+    /// Whether there are table edits not yet written to the file.
+    pub fn has_unsaved_changes(&self) -> bool {
+        !self.pending_edits.is_empty()
+    }
+
+    /// Drop all buffered edits.
     pub fn discard_pending_edits(&mut self) {
         self.pending_edits.clear();
-        self.has_unsaved_changes = false;
     }
 
     /// Handle discard and quit action (quit without saving)
@@ -2389,7 +2364,6 @@ impl App {
         }
 
         match self.mode {
-            AppMode::Search => self.search_backspace(),
             AppMode::DocSearch => self.doc_search_backspace(),
             AppMode::LinkFollow if self.link_picker.active => self.link_search_pop(),
             AppMode::FilePicker if self.file_picker.active => {
@@ -2587,9 +2561,7 @@ impl App {
         }
 
         // File search
-        if (self.mode == AppMode::FilePicker && self.file_picker.active)
-            || self.mode == AppMode::FileSearch
-        {
+        if self.mode == AppMode::FilePicker && self.file_picker.active {
             match edit {
                 Insert(c) => self.file_search_push(c),
                 Clear => {
@@ -2664,9 +2636,7 @@ impl App {
             self.update_link_filter();
             return true;
         }
-        if (self.mode == AppMode::FilePicker && self.file_picker.active)
-            || self.mode == AppMode::FileSearch
-        {
+        if self.mode == AppMode::FilePicker && self.file_picker.active {
             self.file_picker.query.push_str(&text);
             self.update_file_filter();
             return true;
@@ -4192,7 +4162,7 @@ impl App {
                 ActionResult::Continue
             }
             CommandAction::Quit => {
-                if self.has_unsaved_changes {
+                if self.has_unsaved_changes() {
                     // Show confirmation dialog instead of quitting immediately
                     self.mode = AppMode::ConfirmSaveBeforeQuit;
                     ActionResult::Continue
@@ -5083,7 +5053,7 @@ impl App {
         anchor: Option<&str>,
     ) -> Result<(), String> {
         // Check for unsaved changes before navigating to a different file
-        if self.has_unsaved_changes {
+        if self.has_unsaved_changes() {
             self.pending_navigation = Some(PendingNavigation::LoadFile(
                 relative_path.to_path_buf(),
                 anchor.map(|s| s.to_string()),
@@ -5713,7 +5683,7 @@ impl App {
 
         // Apply the toggle on the in-memory content (which includes any
         // buffered table edits) so toggling can never drop them.
-        let had_pending = self.has_unsaved_changes;
+        let had_pending = self.has_unsaved_changes();
         let line_range = self.current_section_line_range();
         let new_content = crate::tui::edits::toggle_checkbox(
             &self.document.content,
@@ -5729,7 +5699,6 @@ impl App {
         // Any buffered table edits were persisted along with the toggle
         if had_pending {
             self.pending_edits.clear();
-            self.has_unsaved_changes = false;
         }
 
         // Save scroll position and interactive element index before reload
@@ -6039,7 +6008,6 @@ impl App {
             new_value: sanitized_value,
         };
         self.pending_edits.push(pending_edit);
-        self.has_unsaved_changes = true;
 
         // Re-parse headings if needed (table edits don't affect heading structure)
         // The document tree stays the same, only content changed
@@ -6115,7 +6083,7 @@ impl App {
 
     /// Write all pending edits to the file
     pub fn save_pending_edits_to_file(&mut self) -> Result<(), String> {
-        if !self.has_unsaved_changes {
+        if !self.has_unsaved_changes() {
             self.status_message = Some("No changes to save".to_string());
             return Ok(());
         }
@@ -6126,7 +6094,6 @@ impl App {
         // Clear the pending edits buffer
         let edit_count = self.pending_edits.len();
         self.pending_edits.clear();
-        self.has_unsaved_changes = false;
 
         self.status_message = Some(format!(
             "✓ Saved {} change{} to {}",
@@ -6153,7 +6120,6 @@ impl App {
             )?;
 
             self.document.content = new_content;
-            self.has_unsaved_changes = !self.pending_edits.is_empty();
 
             if self.pending_edits.is_empty() {
                 self.status_message = Some("✓ Undone - no unsaved changes".to_string());
