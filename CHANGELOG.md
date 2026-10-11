@@ -78,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ratatui-image 11.0.8 to 11.1.0**, and every other dependency to its latest compatible release. That moves wayland-scanner off quick-xml 0.39, so [RUSTSEC-2026-0194](https://rustsec.org/advisories/RUSTSEC-2026-0194) and [RUSTSEC-2026-0195](https://rustsec.org/advisories/RUSTSEC-2026-0195) no longer apply and the audit runs with no ignores
 - **GIFs in the Kitty graphics protocol are animated by treemd rather than by the terminal.** The native path sent every frame to replace frame one rather than add a frame, and sized the image from its screen position, so it only ever showed a stretched last frame; it also needed every frame decoded in memory up front. Playback now goes through ratatui-image like every other terminal. iTerm2 still animates the original file natively
 - **A small mermaid diagram is enlarged at most 2x** instead of being stretched to fill the pane, so a two-node diagram no longer takes up dozens of rows
+- **`--query-output json` and `json-pretty` always print an array.** One result printed as a bare value and several as an array, so `.link` and `.link[0]` produced different shapes and a script had to guess which it would get. Every result set is now an array, `[]` when there are no results. Anything that read a single result as a bare object needs to take the first element. `jsonl` is unchanged, one value per line
 
 ### Internal
 
