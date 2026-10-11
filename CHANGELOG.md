@@ -62,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An index after a stream of arrays applies to each array.** `.table[0].rows[][0]` returned the first row's cells, not the first cell of every row as the docs promise, because the index picked from the stream of rows. It now indexes each row, as jq does. An index after a stream of anything else still picks from the stream, so `(.h | select(.level == 2))[0]` is the first match
 - **A query error's caret points at the right column after non-ASCII text.** It was placed by byte count, so in `.h["日本"] !` it landed several columns past the `!`
 - **Arity errors say how many arguments a function takes.** `count(1)` reported "expects 0..=0 arguments"; it now says "takes no arguments, got 1"
+- **A query error no longer ends in a blank line**
 
 ### Security
 

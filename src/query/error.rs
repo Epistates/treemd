@@ -105,6 +105,9 @@ impl QueryError {
             output.push_str(&format!("  = note: {}\n", note));
         }
 
+        // The caller adds its own line ending (`eprintln!`), so a trailing
+        // one here printed a blank line after every error.
+        output.truncate(output.trim_end_matches('\n').len());
         output
     }
 }
@@ -366,6 +369,26 @@ mod tests {
                 .find(|l| l.trim_start().starts_with('^'))
                 .unwrap_or_else(|| panic!("no caret line in {formatted}"));
             assert_eq!(caret.find('^'), Some(column), "{query:?}\n{formatted}");
+        }
+    }
+
+    /// A formatted error ended in a newline, and `eprintln!` added another,
+    /// leaving a blank line after every error.
+    #[test]
+    fn formatted_errors_do_not_end_in_a_newline() {
+        let plain = QueryError::new(
+            QueryErrorKind::DivisionByZero,
+            Span::default(),
+            String::new(),
+        );
+        let spanned = crate::query::parse(".h |").unwrap_err();
+        let with_note =
+            QueryError::new(QueryErrorKind::MissingEnd, Span::new(0, 1), "x".to_string())
+                .with_help("help")
+                .with_note("note");
+        for error in [plain, spanned, with_note] {
+            let formatted = error.format();
+            assert!(!formatted.ends_with('\n'), "{formatted:?}");
         }
     }
 
