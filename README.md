@@ -382,13 +382,17 @@ Run `treemd --query-help` for complete documentation.
 
 Download from the [releases page](https://github.com/epistates/treemd/releases):
 
-| Platform | Binary |
-|----------|--------|
-| Linux x86_64 | `treemd-x86_64-unknown-linux-gnu` |
-| Linux ARM64 | `treemd-aarch64-unknown-linux-gnu` |
-| macOS x86_64 | `treemd-x86_64-apple-darwin` |
-| macOS ARM64 (Apple Silicon) | `treemd-aarch64-apple-darwin` |
-| Windows x86_64 | `treemd-x86_64-pc-windows-msvc.exe` |
+| Platform | Archive |
+|----------|---------|
+| Linux x86_64 | `treemd-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux x86_64, static (musl, Alpine) | `treemd-x86_64-unknown-linux-musl.tar.gz` |
+| Linux ARM64 | `treemd-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux ARM64, static (musl, Alpine) | `treemd-aarch64-unknown-linux-musl.tar.gz` |
+| macOS x86_64 | `treemd-x86_64-apple-darwin.tar.gz` |
+| macOS ARM64 (Apple Silicon) | `treemd-aarch64-apple-darwin.tar.gz` |
+| Windows x86_64 | `treemd-x86_64-pc-windows-msvc.exe.zip` |
+
+Each archive holds the binary, named as above without the extension, and `LICENSE`; the `.tar.gz` archives also hold the man page, `treemd.1`. `SHA256SUMS` lists the hash of every archive, and each `treemd-<target>.sha256` is the hash of the binary inside it. The archives are reproducible: the same binaries always produce byte-identical archives.
 
 **macOS binaries** are signed with Developer ID and notarized by Apple.
 

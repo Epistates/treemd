@@ -69,37 +69,52 @@ jobs:
     needs: [ci, preflight]
     strategy:
       fail-fast: false
+      # smoke: how the built binary is run before it ships.
+      #   native   directly on the runner
+      #   alpine   in an alpine:3 container, the musl users' platform (#42)
+      #   rosetta  under Rosetta 2, an x86_64 binary on an arm64 runner
+      #   none     the runner cannot execute it (aarch64 Linux on x86_64)
       matrix:
         include:
           # Linux x86_64 (glibc)
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             use_cross: false
+            smoke: native
           # Linux x86_64 (musl - for Alpine/static linking)
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
             use_cross: true
+            smoke: alpine
           # Linux ARM64 (glibc)
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             use_cross: true
+            smoke: none
           # Linux ARM64 (musl - for Alpine/static linking)
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-latest
             use_cross: true
+            smoke: none
           # macOS x86_64
           - target: x86_64-apple-darwin
             runner: macos-latest
             use_cross: false
+            smoke: rosetta
           # macOS ARM64 (Apple Silicon)
           - target: aarch64-apple-darwin
             runner: macos-latest
             use_cross: false
+            smoke: native
           # Windows x86_64
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             use_cross: false
+            smoke: native
 
+    # No build cache here. A tag run can only restore caches saved on its
+    # own ref or the default branch, so it would almost never hit, and what
+    # it did restore would be compiled into a signed, published binary.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,47 +125,21 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: ${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-          shared-key: ${{ matrix.target }}
-
-      # Install cross for Linux ARM builds
-      # Using cargo install from git since there are no recent releases
-      # (last release v0.2.5 was in Feb 2023, but development is active)
+      # cross is installed from a pinned git rev: its last release, v0.2.5,
+      # dates from February 2023.
       - name: Install cross
         if: matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross --rev 8633ec65ab914015c2444c732568b414bd3c47cf --locked
 
-      # For Linux ARM, we need proper configuration
-      - name: Create .cargo/config.toml for Linux ARM
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        shell: bash
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          ar = "aarch64-linux-gnu-ar"
-          EOF
-
       - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+          USE_CROSS: ${{ matrix.use_cross }}
         run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --locked --target ${{ matrix.target }}
+          if [ "$USE_CROSS" = "true" ]; then
+            cross build --release --locked --target "$TARGET"
           else
-            cargo build --release --locked --target ${{ matrix.target }}
-          fi
-        shell: bash
-
-      # Create artifact name based on target
-      - name: Determine artifact name
-        id: artifact
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            echo "bin=treemd.exe" >> $GITHUB_OUTPUT
-          else
-            echo "bin=treemd" >> $GITHUB_OUTPUT
+            cargo build --release --locked --target "$TARGET"
           fi
         shell: bash
 
@@ -214,113 +203,123 @@ jobs:
           fi
         shell: bash
 
-
-      - name: Prepare artifacts (Windows)
-        if: runner.os == 'Windows'
+      # After signing, so the binary run is the one that ships.
+      - name: Smoke test
+        env:
+          TARGET: ${{ matrix.target }}
+          SMOKE: ${{ matrix.smoke }}
         run: |
-          # Create artifacts directory
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-
-          $binary = "treemd-${{ matrix.target }}.exe"
-          Copy-Item "target/${{ matrix.target }}/release/treemd.exe" $binary
-
-          # Create zip for Windows (tar.gz not common on Windows)
-          Compress-Archive -Path $binary -DestinationPath "artifacts/$binary.zip"
-
-          # Generate SHA256
-          $hash = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLower()
-          "$hash  $binary" | Out-File -FilePath "artifacts/$binary.sha256" -Encoding ascii -NoNewline
-
-          Write-Host "Binary info:"
-          Get-Item $binary | Format-List Length, LastWriteTime
-          Get-Content "artifacts/$binary.sha256"
-        shell: pwsh
-
-      - name: Prepare artifacts (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p artifacts
-          BINARY="treemd-${{ matrix.target }}"
-          cp "target/${{ matrix.target }}/release/treemd" "$BINARY"
-          chmod +x "$BINARY"
-
-          # Create tar to preserve permissions and prevent corruption
-          tar -czf "artifacts/$BINARY.tar.gz" "$BINARY"
-          sha256sum "$BINARY" > "artifacts/$BINARY.sha256"
-          ls -lh "$BINARY"
-          cat "artifacts/$BINARY.sha256"
+          bin="target/$TARGET/release/treemd"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            bin="$bin.exe"
+          fi
+          case "$SMOKE" in
+            native)
+              sh scripts/smoke-test.sh "$bin"
+              ;;
+            alpine)
+              # Read-only mount: the container only runs the binary.
+              docker run --rm -v "$PWD:/src:ro" -w /src alpine:3 \
+                sh scripts/smoke-test.sh "$bin"
+              ;;
+            rosetta)
+              if /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+                sh scripts/smoke-test.sh "$bin"
+              else
+                echo "::warning::Rosetta 2 is not installed on this runner, so $TARGET was not run"
+              fi
+              ;;
+            none)
+              echo "$TARGET cannot run on this runner, so it is not smoke-tested"
+              ;;
+            *)
+              echo "::error::unknown smoke mode '$SMOKE'"
+              exit 1
+              ;;
+          esac
         shell: bash
 
-      - name: Upload artifacts
+      # Only the binary: every archive is assembled in one place, by the
+      # package job, so they all come out of the same tools.
+      - name: Upload binary
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ matrix.target }}
-          path: artifacts/*
+          name: build-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/treemd${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 1
 
-  release:
-    name: Create Release
+  # Archives for every target, built reproducibly (see
+  # scripts/package-release.sh): timestamps come from the release commit, so
+  # anyone with the same binaries gets byte-identical archives. Runs for
+  # manual runs too, so the result can be inspected without a release.
+  package:
+    name: Package
     runs-on: ubuntu-latest
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Download all artifacts
+      - name: Download binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: release-artifacts
+          pattern: build-*
+          path: builds
 
-      - name: Prepare release assets
+      - name: Build archives and checksums
         run: |
-          mkdir -p final-release
-
-          # Copy archives directly (tar.gz and zip preserve permissions internally)
-          find release-artifacts -name "*.tar.gz" -type f -exec cp {} final-release/ \;
-          find release-artifacts -name "*.zip" -type f -exec cp {} final-release/ \;
-
-          # Copy individual SHA256 files
-          find release-artifacts -name "*.sha256" -type f -exec cp {} final-release/ \;
-
-          echo "Final release contents:"
-          ls -lah final-release/
-
-          echo "Verifying archive integrity:"
-          cd final-release
-          for archive in *.tar.gz; do
-            [ -f "$archive" ] || continue
-            echo "Testing $archive:"
-            tar -tzf "$archive" | head -5
+          # One directory per target triple, as package-release.sh expects.
+          for dir in builds/build-*; do
+            mv "$dir" "builds/${dir#builds/build-}"
           done
-          for archive in *.zip; do
-            [ -f "$archive" ] || continue
-            echo "Testing $archive:"
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export SOURCE_DATE_EPOCH
+          scripts/package-release.sh builds dist
+          for archive in dist/*.tar.gz; do
+            echo "$archive:"
+            tar -tvzf "$archive"
+          done
+          for archive in dist/*.zip; do
+            echo "$archive:"
             unzip -l "$archive"
           done
         shell: bash
 
-      - name: Generate combined checksums
-        run: |
-          cd final-release
-          # Generate SHA256SUMS for archives (not individual binaries)
-          sha256sum *.tar.gz *.zip 2>/dev/null | grep -v "No such file" > SHA256SUMS || true
-          cat SHA256SUMS
-        shell: bash
+      - name: Upload release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+          # A re-run of this job replaces the earlier attempt's assets.
+          overwrite: true
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
 
       - name: Create Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
-            final-release/*.tar.gz
-            final-release/*.zip
-            final-release/*.sha256
-            final-release/SHA256SUMS
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+            dist/SHA256SUMS
           generate_release_notes: true
           draft: false
           prerelease: false
