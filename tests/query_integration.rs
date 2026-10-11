@@ -175,6 +175,22 @@ fn equality_is_type_strict() {
     assert_eq!(run(md, ".h1[0].level == 1"), vec!["true"]);
 }
 
+/// An `if` with no `else` returned null when the condition failed. jq
+/// returns the input unchanged.
+#[test]
+fn if_without_else_passes_the_input_through() {
+    let md = "# A\n## B\n";
+    assert_eq!(
+        run(md, ".h | .text | if . == \"A\" then \"first\" end"),
+        vec!["first", "B"]
+    );
+    assert_eq!(run(md, "5 | if false then 1 end"), vec!["5"]);
+    assert_eq!(
+        run(md, "5 | if false then 1 elif false then 2 end"),
+        vec!["5"]
+    );
+}
+
 #[test]
 fn elif_chain_single_end() {
     assert_eq!(
