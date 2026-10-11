@@ -12,8 +12,14 @@
 //! - Build tree structures from flat heading lists
 //! - Filter and search headings
 //! - Extract sections by heading name
-//! - Interactive TUI with dual-pane interface
-//! - Syntax-highlighted code blocks (50+ languages)
+//! - Query documents with a jq-like language ([`query`])
+//!
+//! ## Stability
+//!
+//! [`parser`] and [`query`] are the library. The `config`, `input`,
+//! `keybindings` and `tui` modules, and the `App` and `Config` re-exports,
+//! are public so the `treemd` binary can use them; they are hidden from
+//! these docs and may change in any release.
 //!
 //! ## Example
 //!
@@ -50,11 +56,13 @@
 /// Configuration module for persisting user preferences.
 ///
 /// Provides configuration management for theme choices, UI settings, and terminal preferences.
+#[doc(hidden)]
 pub mod config;
 
 /// Input handling module for stdin and file sources.
 ///
 /// Provides robust input reading, format detection, and tree output parsing.
+#[doc(hidden)]
 pub mod input;
 
 /// Parser module for markdown documents.
@@ -66,6 +74,7 @@ pub mod parser;
 ///
 /// Provides the App and UI rendering functionality for building interactive
 /// markdown viewers.
+#[doc(hidden)]
 pub mod tui;
 
 /// Query language module for jq-like markdown querying.
@@ -88,11 +97,14 @@ pub mod query;
 ///
 /// Provides a flexible keybinding system that allows users to customize
 /// keyboard shortcuts via configuration files.
+#[doc(hidden)]
 pub mod keybindings;
 
-// Re-export commonly used types for convenience
 mod fsutil;
 
+// Re-export commonly used types for convenience
+#[doc(hidden)]
 pub use config::Config;
 pub use parser::{Document, Heading, HeadingNode, parse_file, parse_markdown};
+#[doc(hidden)]
 pub use tui::App;
