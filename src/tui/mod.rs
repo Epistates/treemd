@@ -158,9 +158,6 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         if app.advance_modal_animation() {
             needs_redraw = true;
         }
-        if app.advance_inline_animations() {
-            needs_redraw = true;
-        }
 
         if needs_redraw {
             app.prepare_iterm_animation_frame();

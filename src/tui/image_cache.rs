@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use image::Rgba;
 use image::RgbaImage;
@@ -343,22 +342,36 @@ fn decode_still(path: &Path) -> Result<image::DynamicImage, ImageError> {
         .map_err(|error| ImageError::InvalidFormat(error.to_string()))
 }
 
+/// Longest side an inline image is kept at, in pixels.
+const MAX_INLINE_SIDE: u32 = 2048;
+
+/// An image scaled down, if need be, to a size an inline image can use.
+///
+/// Inline images are drawn into a pane a few hundred cells wide, so a photo
+/// kept at its full resolution, tens of megabytes of RGBA, held far more than
+/// could ever be shown, and the cache holds up to 32 of them. The image
+/// viewer decodes its own copy at full resolution.
+pub(crate) fn fit_for_inline(image: image::DynamicImage) -> image::DynamicImage {
+    if image.width().max(image.height()) <= MAX_INLINE_SIDE {
+        image
+    } else {
+        image.resize(
+            MAX_INLINE_SIDE,
+            MAX_INLINE_SIDE,
+            image::imageops::FilterType::Triangle,
+        )
+    }
+}
+
 /// Namespace for image loading static methods.
 pub struct ImageCache;
 
-/// Result of advancing a streaming inline GIF.
-pub(crate) enum GifAdvance {
-    Waiting,
-    Frame(image::DynamicImage),
-    Finished,
-    Failed(String),
-}
-
-/// A memory-bounded GIF player, for inline images and the image viewer.
+/// A memory-bounded GIF player for the image viewer.
 ///
 /// Retaining one compositing canvas and the decoder, rather than every frame,
 /// keeps a long README recording from expanding into hundreds of full-size
 /// RGBA frames. Playback is forward only; the viewer reopens it to step back.
+/// Inline, a GIF is a still of its first frame.
 pub(crate) struct StreamingGif {
     path: PathBuf,
     decoder: gif::Decoder<BufReader<File>>,
@@ -366,12 +379,6 @@ pub(crate) struct StreamingGif {
     previous_disposal: gif::DisposalMethod,
     previous_rect: (u32, u32, u32, u32),
     restore_previous: Option<RgbaImage>,
-    repeat: gif::Repeat,
-    completed_repeats: u16,
-    frames_in_first_pass: usize,
-    current_delay: Duration,
-    last_frame_update: Instant,
-    active: bool,
 }
 
 impl StreamingGif {
@@ -380,7 +387,6 @@ impl StreamingGif {
         let decoder = Self::open_decoder(path)?;
         let width = u32::from(decoder.width());
         let height = u32::from(decoder.height());
-        let repeat = decoder.repeat();
         let mut animation = Self {
             path: path.to_path_buf(),
             decoder,
@@ -388,21 +394,13 @@ impl StreamingGif {
             previous_disposal: gif::DisposalMethod::Keep,
             previous_rect: (0, 0, 0, 0),
             restore_previous: None,
-            repeat,
-            completed_repeats: 0,
-            frames_in_first_pass: 0,
-            current_delay: Duration::from_millis(20),
-            last_frame_update: Instant::now(),
-            active: false,
         };
 
-        let Some((image, delay)) = animation.decode_next()? else {
+        let Some(image) = animation.decode_next()? else {
             return Err(ImageError::InvalidFormat(
                 "GIF contains no image frames".to_string(),
             ));
         };
-        animation.frames_in_first_pass = 1;
-        animation.current_delay = delay;
         Ok((animation, image))
     }
 
@@ -423,7 +421,7 @@ impl StreamingGif {
         Ok(())
     }
 
-    fn decode_next(&mut self) -> Result<Option<(image::DynamicImage, Duration)>, ImageError> {
+    fn decode_next(&mut self) -> Result<Option<image::DynamicImage>, ImageError> {
         match self.previous_disposal {
             gif::DisposalMethod::Background => {
                 ImageCache::clear_gif_rect(&mut self.canvas, self.previous_rect);
@@ -450,8 +448,6 @@ impl StreamingGif {
         let height = self.canvas.height();
         ImageCache::composite_gif_frame(&mut self.canvas, frame, width, height);
 
-        let delay =
-            Duration::from_millis(u64::from(frame.delay) * 10).max(Duration::from_millis(20));
         self.previous_disposal = frame.dispose;
         self.previous_rect = (
             frame.left.into(),
@@ -461,81 +457,18 @@ impl StreamingGif {
         );
         self.restore_previous = restore_for_this_frame;
 
-        Ok(Some((
-            image::DynamicImage::ImageRgba8(self.canvas.clone()),
-            delay,
-        )))
-    }
-
-    /// Start or stop playback without decoding a frame.
-    ///
-    /// GIFs are deliberately inactive when opened so the composited first frame
-    /// remains a still. A viewer can explicitly activate the frame clock.
-    pub(crate) fn set_active(&mut self, active: bool) {
-        if active && !self.active {
-            self.last_frame_update = Instant::now();
-        }
-        self.active = active;
-    }
-
-    pub(crate) fn time_until_next_frame(&self) -> Option<Duration> {
-        if !self.active {
-            return None;
-        }
-        Some(
-            self.current_delay
-                .saturating_sub(self.last_frame_update.elapsed())
-                .max(Duration::from_millis(1)),
-        )
-    }
-
-    pub(crate) fn advance(&mut self) -> GifAdvance {
-        if !self.active || self.last_frame_update.elapsed() < self.current_delay {
-            return GifAdvance::Waiting;
-        }
-
-        match self.decode_next() {
-            Ok(Some((image, delay))) => {
-                self.frames_in_first_pass = self.frames_in_first_pass.saturating_add(1);
-                self.current_delay = delay;
-                self.last_frame_update = Instant::now();
-                GifAdvance::Frame(image)
-            }
-            Ok(None) if self.frames_in_first_pass <= 1 => GifAdvance::Finished,
-            Ok(None) => {
-                let should_repeat = match self.repeat {
-                    gif::Repeat::Infinite => true,
-                    gif::Repeat::Finite(repeats) => self.completed_repeats < repeats,
-                };
-                if !should_repeat {
-                    return GifAdvance::Finished;
-                }
-
-                self.completed_repeats = self.completed_repeats.saturating_add(1);
-                match self.reset_decoder().and_then(|()| self.decode_next()) {
-                    Ok(Some((image, delay))) => {
-                        self.current_delay = delay;
-                        self.last_frame_update = Instant::now();
-                        GifAdvance::Frame(image)
-                    }
-                    Ok(None) => GifAdvance::Finished,
-                    Err(error) => GifAdvance::Failed(error.to_string()),
-                }
-            }
-            Err(error) => GifAdvance::Failed(error.to_string()),
-        }
+        Ok(Some(image::DynamicImage::ImageRgba8(self.canvas.clone())))
     }
 
     /// The next frame regardless of the frame clock, wrapping to the first
     /// after the last. For the image viewer, which keeps its own timing and
     /// its own frame index.
     pub(crate) fn next_frame_looping(&mut self) -> Result<image::DynamicImage, ImageError> {
-        if let Some((image, _)) = self.decode_next()? {
+        if let Some(image) = self.decode_next()? {
             return Ok(image);
         }
         self.reset_decoder()?;
         self.decode_next()?
-            .map(|(image, _)| image)
             .ok_or_else(|| ImageError::InvalidFormat("GIF contains no image frames".to_string()))
     }
 }
@@ -687,7 +620,18 @@ mod tests {
     }
 
     #[test]
-    fn streaming_gif_advances_and_loops_without_retaining_all_frames() {
+    fn an_inline_image_is_kept_no_larger_than_it_can_be_shown() {
+        let big = image::DynamicImage::new_rgba8(8000, 2000);
+        let fitted = fit_for_inline(big);
+        assert_eq!((fitted.width(), fitted.height()), (2048, 512));
+
+        let small = image::DynamicImage::new_rgba8(300, 200);
+        let fitted = fit_for_inline(small);
+        assert_eq!((fitted.width(), fitted.height()), (300, 200));
+    }
+
+    #[test]
+    fn streaming_gif_steps_and_loops_without_retaining_all_frames() {
         use std::borrow::Cow;
 
         let mut file = tempfile::NamedTempFile::new().expect("temporary gif");
@@ -721,27 +665,11 @@ mod tests {
         let (mut animation, first) = StreamingGif::open(file.path()).expect("streaming decoder");
         assert_eq!(first.to_rgba8().get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
 
-        animation.last_frame_update = Instant::now() - Duration::from_millis(21);
-        assert!(animation.time_until_next_frame().is_none());
-        assert!(matches!(animation.advance(), GifAdvance::Waiting));
-
-        animation.set_active(true);
-        animation.last_frame_update = Instant::now() - Duration::from_millis(21);
-        let GifAdvance::Frame(second) = animation.advance() else {
-            panic!("second frame should be due");
-        };
+        let second = animation.next_frame_looping().expect("second frame");
         assert_eq!(second.to_rgba8().get_pixel(0, 0), &Rgba([0, 255, 0, 255]));
 
-        animation.last_frame_update = Instant::now() - Duration::from_millis(21);
-        let GifAdvance::Frame(looped) = animation.advance() else {
-            panic!("infinite GIF should loop to its first frame");
-        };
+        let looped = animation.next_frame_looping().expect("looped frame");
         assert_eq!(looped.to_rgba8().get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
-
-        animation.set_active(false);
-        animation.last_frame_update = Instant::now() - Duration::from_millis(21);
-        assert!(animation.time_until_next_frame().is_none());
-        assert!(matches!(animation.advance(), GifAdvance::Waiting));
     }
 
     #[test]

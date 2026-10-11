@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::keybindings::{Action, KeybindingMode, Keybindings};
 use crate::parser::{Document, HeadingNode, Link, extract_links};
 use crate::tui::help_text;
-use crate::tui::image_cache::{AsyncProtocol, GifAdvance, ImageWorker, StreamingGif};
+use crate::tui::image_cache::{AsyncProtocol, ImageWorker, StreamingGif};
 use crate::tui::interactive::{ElementType, InteractiveState};
 use crate::tui::iterm_animation;
 use crate::tui::syntax::{CodeBlockBackground, SyntaxHighlighter};
@@ -691,7 +691,6 @@ pub struct App {
     // Streaming inline GIF state, keyed with the corresponding protocol cache.
     // Unlike the modal viewer this retains only the compositing canvas, keeping
     // long README recordings memory-bounded.
-    inline_gif_animations: HashMap<PathBuf, StreamingGif>,
 
     // Image modal viewing state (path, current frame, GIF playback).
     pub image_modal: ImageModalState,
@@ -958,7 +957,6 @@ impl App {
 
             // Cached image protocols (populated after index_elements)
             image_protocol_cache: IndexMap::new(),
-            inline_gif_animations: HashMap::new(),
 
             // Image modal viewing state (path, GIF playback, etc.)
             image_modal: ImageModalState::default(),
@@ -1116,15 +1114,13 @@ impl App {
                 self.image_protocol_cache.insert(path, protocol);
                 continue;
             }
-            // GIFs are decoded incrementally so an embedded terminal recording
-            // can play without retaining every full-size RGBA frame.
-            let (img_data, animation) = match StreamingGif::open(&path) {
-                Ok((animation, first_frame)) => (first_frame, Some(animation)),
-                Err(_) => match crate::tui::image_cache::ImageCache::extract_first_frame(&path) {
-                    Ok(data) => (data, None),
-                    Err(_) => continue,
-                },
+            // Inline, a GIF is a still of its first frame; it plays in the
+            // image viewer.
+            let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(&path)
+            else {
+                continue;
             };
+            let img_data = crate::tui::image_cache::fit_for_inline(img_data);
 
             let picker = match self.picker.as_mut() {
                 Some(p) => p,
@@ -1137,15 +1133,10 @@ impl App {
             };
             self.image_protocol_cache
                 .insert(path.clone(), worker.wrap(protocol));
-            if let Some(animation) = animation {
-                self.inline_gif_animations.insert(path, animation);
-            }
 
             // Evict the least recently used entry when over capacity.
             while self.image_protocol_cache.len() > IMAGE_CACHE_LIMIT {
-                if let Some((evicted_path, _)) = self.image_protocol_cache.shift_remove_index(0) {
-                    self.inline_gif_animations.remove(&evicted_path);
-                }
+                self.image_protocol_cache.shift_remove_index(0);
             }
         }
     }
@@ -1181,10 +1172,6 @@ impl App {
             self.iterm_animation_target = native_target;
             self.iterm_animation_staged = None;
             self.iterm_animation_sent = None;
-        }
-
-        for animation in self.inline_gif_animations.values_mut() {
-            animation.set_active(false);
         }
 
         target_changed
@@ -1259,59 +1246,6 @@ impl App {
 
     fn image_modal_frame_delay_ms(&self, index: usize) -> Option<u32> {
         self.image_modal.frame_delays_ms.get(index).copied()
-    }
-
-    /// Advance visible GIFs whose frame deadline has elapsed.
-    ///
-    /// A new frame is only decoded after the previous frame has completed
-    /// resize/encode, providing natural backpressure to the single image worker.
-    pub(crate) fn advance_inline_animations(&mut self) -> bool {
-        let paths: Vec<_> = self.inline_gif_animations.keys().cloned().collect();
-        let mut changed = false;
-        let mut finished = Vec::new();
-        let mut failures = Vec::new();
-
-        for path in paths {
-            if self
-                .image_protocol_cache
-                .get(&path)
-                .is_none_or(AsyncProtocol::has_in_flight_work)
-            {
-                continue;
-            }
-
-            let advance = self
-                .inline_gif_animations
-                .get_mut(&path)
-                .map_or(GifAdvance::Finished, StreamingGif::advance);
-            match advance {
-                GifAdvance::Waiting => {}
-                GifAdvance::Frame(image) => {
-                    let Some(picker) = self.picker.as_ref() else {
-                        continue;
-                    };
-                    let replacement = picker.new_resize_protocol(image);
-                    if let Some(protocol) = self.image_protocol_cache.get_mut(&path) {
-                        protocol.replace_protocol(replacement);
-                        changed = true;
-                    }
-                }
-                GifAdvance::Finished => finished.push(path),
-                GifAdvance::Failed(error) => failures.push((path, error)),
-            }
-        }
-
-        for path in finished {
-            self.inline_gif_animations.remove(&path);
-        }
-        for (path, error) in failures {
-            self.inline_gif_animations.remove(&path);
-            self.status_message = Some(format!("✗ GIF playback failed: {error}"));
-            self.status_message_time = None;
-            changed = true;
-        }
-
-        changed
     }
 
     /// Render a mermaid diagram and cache the result as a StatefulProtocol.
@@ -1710,35 +1644,22 @@ impl App {
     pub fn time_until_next_frame(&self) -> Option<std::time::Duration> {
         // iTerm2 handles pixels internally, but the UI still follows the GIF's
         // frame delays so its progress counter remains useful.
-        let modal_deadline = if !self.is_image_modal_open()
+        if !self.is_image_modal_open()
             || self.image_modal_frame_count() <= 1
             || self.image_modal.animation_paused
         {
-            None
-        } else {
-            self.image_modal.last_frame_update.and_then(|last_update| {
-                let frame_delay = std::time::Duration::from_millis(u64::from(
-                    self.image_modal_frame_delay_ms(self.image_modal.frame_index)?,
-                ));
-                Some(
-                    frame_delay
-                        .saturating_sub(last_update.elapsed())
-                        .max(std::time::Duration::from_millis(1)),
-                )
-            })
-        };
-
-        let inline_deadline = self
-            .inline_gif_animations
-            .values()
-            .filter_map(StreamingGif::time_until_next_frame)
-            .min();
-
-        match (modal_deadline, inline_deadline) {
-            (Some(modal), Some(inline)) => Some(modal.min(inline)),
-            (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-            (None, None) => None,
+            return None;
         }
+        self.image_modal.last_frame_update.and_then(|last_update| {
+            let frame_delay = std::time::Duration::from_millis(u64::from(
+                self.image_modal_frame_delay_ms(self.image_modal.frame_index)?,
+            ));
+            Some(
+                frame_delay
+                    .saturating_sub(last_update.elapsed())
+                    .max(std::time::Duration::from_millis(1)),
+            )
+        })
     }
 
     /// Update the content viewport height (called by UI when terminal size is known)

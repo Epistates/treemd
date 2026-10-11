@@ -124,31 +124,28 @@ fn fix_svg_font_families(svg: &str) -> String {
         result.push_str(&remaining[..start + marker.len()]);
         remaining = &remaining[start + marker.len()..];
 
-        // Process the attribute value character by character
+        // Process the attribute value character by character, only as far
+        // as its closing quote. Collecting the rest of the document into a
+        // Vec for every attribute made this quadratic in the SVG's size.
         let mut found_close = false;
-        let chars: Vec<char> = remaining.chars().collect();
-        let mut char_idx = 0;
+        let mut chars = remaining.char_indices().peekable();
 
-        while char_idx < chars.len() {
-            if chars[char_idx] == '"' {
-                let next = chars.get(char_idx + 1).copied().unwrap_or('>');
+        while let Some((at, c)) = chars.next() {
+            if c == '"' {
+                let next = chars.peek().map_or('>', |&(_, next)| next);
                 if next == '>' || next == ' ' || next == '/' {
                     // Real closing quote
                     result.push('"');
                     // Advance remaining past this quote
-                    let byte_offset: usize =
-                        chars[..char_idx + 1].iter().map(|c| c.len_utf8()).sum();
-                    remaining = &remaining[byte_offset..];
+                    remaining = &remaining[at + 1..];
                     found_close = true;
                     break;
-                } else {
-                    // Inner quote — replace with single quote
-                    result.push('\'');
                 }
+                // Inner quote, replaced with a single quote
+                result.push('\'');
             } else {
-                result.push(chars[char_idx]);
+                result.push(c);
             }
-            char_idx += 1;
         }
 
         if !found_close {
