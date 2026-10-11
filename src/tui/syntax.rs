@@ -32,6 +32,9 @@ pub enum CodeBlockBackground {
 /// `Vec<Line>` so 256 covers virtually any document while bounding memory.
 const CACHE_LIMIT: usize = 256;
 
+/// Longest code line, in bytes, that is syntax highlighted.
+const MAX_HIGHLIGHTED_LINE: usize = 4096;
+
 pub struct SyntaxHighlighter {
     syntax_set: SyntaxSet,
     theme: Theme,
@@ -145,6 +148,15 @@ impl SyntaxHighlighter {
         let mut lines = Vec::new();
 
         for line in LinesWithEndings::from(&code_owned) {
+            // A very long line, minified code or a pasted blob, is drawn
+            // plain: highlighting runs regexes over the whole line, and their
+            // cost on a single line of hundreds of kilobytes stalled the
+            // frame. The lines after it may be colored a little off, since
+            // the highlighter carries its state from line to line.
+            if line.len() > MAX_HIGHLIGHTED_LINE {
+                lines.push(Line::from(line.trim_end_matches(['\n', '\r']).to_string()));
+                continue;
+            }
             let ranges = highlighter
                 .highlight_line(line, &self.syntax_set)
                 .unwrap_or_default();
@@ -205,4 +217,31 @@ fn cache_key(code: &str, language: &str) -> u64 {
     code.hash(&mut hasher);
     language.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn highlighter() -> SyntaxHighlighter {
+        SyntaxHighlighter::new(
+            "base16-ocean.dark",
+            None,
+            CodeBlockBackground::Off,
+            ColorMode::Rgb,
+        )
+    }
+
+    #[test]
+    fn a_very_long_line_is_drawn_plain_and_whole() {
+        let long = "x".repeat(MAX_HIGHLIGHTED_LINE * 4);
+        let code = format!("let a = 1;\n{long}\nlet b = 2;");
+        let lines = highlighter().highlight_code(&code, "rust");
+
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1].spans.len(), 1);
+        assert_eq!(lines[1].spans[0].content, long);
+        // The ordinary lines around it are still highlighted.
+        assert!(lines[0].spans.len() > 1);
+    }
 }
