@@ -3748,6 +3748,34 @@ mod screen_tests {
         );
     }
 
+    /// Help scrolled by unwrapped lines and paged by the content pane's
+    /// height, so it could stop before its last rows or run past them.
+    #[test]
+    fn help_scrolls_exactly_to_its_last_row() {
+        let mut app = app_with("# T\n");
+        app.toggle_help();
+        draw(&mut app, 80, 24);
+        for _ in 0..1000 {
+            app.scroll_help_down();
+        }
+        let max = app.help_max_scroll;
+        assert!(max > 0 && max < u16::MAX, "{max}");
+        assert_eq!(app.help_scroll, max);
+        // At the end, the last row is drawn and nothing after it is blank.
+        let screen = draw(&mut app, 80, 24);
+        let popup_bottom = screen
+            .iter()
+            .rposition(|row| row.contains('└') || row.contains('╰'))
+            .unwrap();
+        assert!(
+            !screen[popup_bottom - 1]
+                .trim_matches(|c| c == ' ' || c == '│' || c == '┃')
+                .is_empty(),
+            "the popup ends in blank rows:\n{}",
+            screen.join("\n")
+        );
+    }
+
     /// Search matched a plain-text conversion of the source and scrolled to
     /// that line's number, so a match late in a wrapped paragraph stayed off
     /// screen.

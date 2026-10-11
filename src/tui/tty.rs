@@ -258,6 +258,9 @@ pub fn restore() {
     let _ = stdout().execute(DisableBracketedPaste);
     let _ = stdout().execute(DisableMouseCapture);
     let _ = stdout().execute(LeaveAlternateScreen);
+    // The TUI hides the cursor while drawing. Ratatui shows it again when its
+    // terminal is dropped, which a panic or a signal exit does not reach.
+    let _ = stdout().execute(crossterm::cursor::Show);
     let _ = disable_raw_mode();
 }
 

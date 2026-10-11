@@ -226,6 +226,11 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         if app.has_pending_image_work() {
             poll_timeout = poll_timeout.min(IMAGE_WORK_POLL_INTERVAL);
         }
+        // Wake when a timed status message is due to go, so it goes then
+        // rather than at the next keypress.
+        if let Some(remaining) = app.status_message_expires_in() {
+            poll_timeout = poll_timeout.min(remaining.max(Duration::from_millis(1)));
+        }
         let event_ready = tty::poll_event(poll_timeout)?;
 
         // Check the file watcher every iteration, regardless of whether there
@@ -295,6 +300,9 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
             }
             // GIF animation needs redraw on timeout
             if app.is_image_modal_open() && app.image_modal_frame_count() > 1 {
+                needs_redraw = true;
+            }
+            if app.status_message_expires_in() == Some(Duration::ZERO) {
                 needs_redraw = true;
             }
             continue;
