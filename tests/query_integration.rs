@@ -225,6 +225,22 @@ fn group_by_level() {
     }
 }
 
+/// `sort` compared text, so numbers sorted as strings, and `unique` merged
+/// distinct values that printed alike.
+#[test]
+fn sort_and_unique_compare_values_by_type() {
+    let md = "# Same\n## Same\n";
+    assert_eq!(run(md, "[10, 9, 1] | sort | .[]"), vec!["1", "9", "10"]);
+    assert_eq!(
+        run(md, "[\"b\", 2, null, \"a\", 1, true] | sort | .[]"),
+        vec!["", "true", "1", "2", "a", "b"]
+    );
+    assert_eq!(run(md, ".h | .level | sort"), vec!["1", "2"]);
+    assert_eq!(run(md, "[.h] | unique | count"), vec!["2"]);
+    assert_eq!(run(md, "[1, \"1\", 1] | unique | count"), vec!["2"]);
+    assert_eq!(run(md, ".h | text | unique"), vec!["Same"]);
+}
+
 /// A string key names a property, as the `--query-help` example
 /// `group_by("level")` assumes. It was evaluated as an expression, the same
 /// string for every element, so everything landed in one group and

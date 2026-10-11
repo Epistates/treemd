@@ -724,7 +724,7 @@ impl Engine {
             let key = self.eval_key(&el, key_expr)?;
             keyed.push((key, el));
         }
-        keyed.sort_by(|a, b| sort_key_cmp(&a.0, &b.0));
+        keyed.sort_by(|a, b| a.0.sort_cmp(&b.0));
         Ok(vec![Value::Array(
             keyed.into_iter().map(|(_, v)| v).collect(),
         )])
@@ -1254,19 +1254,6 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Number(a), Value::Number(b)) => (a - b).abs() < f64::EPSILON,
         (Value::String(a), Value::String(b)) => a == b,
         _ => a.to_text() == b.to_text(),
-    }
-}
-
-/// Total ordering used by `sort_by`. Numbers sort numerically, strings
-/// lexically; mixed/other types fall back to their text representation so the
-/// sort is always total and deterministic.
-fn sort_key_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
-    match (a, b) {
-        (Value::Number(x), Value::Number(y)) => {
-            x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
-        }
-        (Value::String(x), Value::String(y)) => x.cmp(y),
-        _ => a.to_text().cmp(&b.to_text()),
     }
 }
 

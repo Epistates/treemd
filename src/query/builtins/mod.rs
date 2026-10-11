@@ -180,7 +180,7 @@ fn fn_sort(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
     match input {
         Value::Array(a) => {
             let mut sorted = a.clone();
-            sorted.sort_by_key(|a| a.to_text());
+            sorted.sort_by(Value::sort_cmp);
             Ok(vec![Value::Array(sorted)])
         }
         _ => Ok(vec![input.clone()]),
@@ -191,10 +191,13 @@ fn fn_unique(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryErro
     let input = args.first().unwrap_or(&Value::Null);
     match input {
         Value::Array(a) => {
+            // Keep the first of each distinct value, in order. Comparing
+            // text merged distinct headings that shared a title, and `1`
+            // with `"1"`.
             let mut seen = std::collections::HashSet::new();
             let unique: Vec<Value> = a
                 .iter()
-                .filter(|v| seen.insert(v.to_text()))
+                .filter(|v| seen.insert(v.identity_key()))
                 .cloned()
                 .collect();
             Ok(vec![Value::Array(unique)])
