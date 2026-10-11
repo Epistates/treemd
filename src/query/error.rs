@@ -312,7 +312,7 @@ impl fmt::Display for QueryErrorKind {
             } => {
                 write!(
                     f,
-                    "Function '{}' expects {} arguments, got {}",
+                    "Function '{}' takes {}, got {}",
                     function, expected, found
                 )
             }

@@ -628,7 +628,7 @@ impl Engine {
                 return Err(QueryError::new(
                     QueryErrorKind::InvalidArity {
                         function: name.to_string(),
-                        expected: format!("{:?}", func.arity),
+                        expected: describe_arity(&func.arity),
                         found: provided,
                     },
                     span,
@@ -1175,6 +1175,17 @@ fn literal_to_value(lit: &Literal) -> Value {
 
 /// Decode the parser's encoded `_index` argument expression back into an
 /// [`IndexOp`]. See [`Engine::eval_index`] for the encoding.
+/// An argument count range in words, for arity errors: "no arguments",
+/// "1 argument", "1 to 2 arguments". It printed as a Rust range, `0..=0`.
+fn describe_arity(arity: &std::ops::RangeInclusive<usize>) -> String {
+    let plural = |n: usize| if n == 1 { "argument" } else { "arguments" };
+    match (*arity.start(), *arity.end()) {
+        (0, 0) => "no arguments".to_string(),
+        (a, b) if a == b => format!("{a} {}", plural(a)),
+        (a, b) => format!("{a} to {b} {}", plural(b)),
+    }
+}
+
 /// The function names the parser uses for its own pipe and postfix index
 /// forms. They are not registry functions.
 fn is_internal_form(name: &str) -> bool {
