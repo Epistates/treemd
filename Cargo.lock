@@ -2879,6 +2879,7 @@ name = "treemd"
 version = "0.9.1"
 dependencies = [
  "arboard",
+ "base64",
  "clap",
  "clap_complete",
  "clap_mangen",

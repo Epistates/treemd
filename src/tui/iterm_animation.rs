@@ -58,29 +58,12 @@ pub(crate) fn transmit_gif<W: Write>(writer: &mut W, path: &Path, area: Rect) ->
 }
 
 fn write_base64<W: Write>(writer: &mut W, data: &[u8]) -> io::Result<()> {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut encoded = Vec::with_capacity(data.len().div_ceil(3) * 4);
-
-    for chunk in data.chunks(3) {
-        let first = chunk[0];
-        let second = chunk.get(1).copied().unwrap_or(0);
-        let third = chunk.get(2).copied().unwrap_or(0);
-
-        encoded.push(ALPHABET[(first >> 2) as usize]);
-        encoded.push(ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize]);
-        encoded.push(if chunk.len() > 1 {
-            ALPHABET[(((second & 0x0f) << 2) | (third >> 6)) as usize]
-        } else {
-            b'='
-        });
-        encoded.push(if chunk.len() > 2 {
-            ALPHABET[(third & 0x3f) as usize]
-        } else {
-            b'='
-        });
-    }
-
-    writer.write_all(&encoded)
+    use base64::Engine;
+    writer.write_all(
+        base64::engine::general_purpose::STANDARD
+            .encode(data)
+            .as_bytes(),
+    )
 }
 
 #[cfg(test)]
