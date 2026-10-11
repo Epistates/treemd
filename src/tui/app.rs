@@ -5094,6 +5094,13 @@ impl App {
 
         let outside = || "Path escapes the document's directory tree".to_string();
 
+        // A fetched document's relative links point into its site, not this
+        // machine; resolved here they opened, or offered to create, files
+        // in the working directory on the word of a page from the network.
+        if self.is_remote_document() {
+            return Err("Links to files in a fetched document are not followed".to_string());
+        }
+
         // A stdin or fetched document has no directory of its own; its links
         // resolve against the working directory.
         let base = self
@@ -6144,11 +6151,22 @@ impl App {
         }
     }
 
+    /// Whether the document came from a URL or `github:` rather than this
+    /// machine; its placeholder path is the address it was fetched from.
+    fn is_remote_document(&self) -> bool {
+        let path = self.current_file_path.to_string_lossy();
+        ["http://", "https://", "github:"]
+            .iter()
+            .any(|scheme| path.starts_with(scheme))
+    }
+
     /// Resolve an image path relative to the current markdown file.
     ///
     /// Supports both relative and absolute paths:
     /// - Relative paths are resolved against the current file's directory
     /// - Absolute paths are returned as-is
+    ///
+    /// A document fetched from the web loads no local images.
     ///
     /// # Examples
     ///
@@ -6157,6 +6175,14 @@ impl App {
     /// - `../assets/logo.png` → `/assets/logo.png`
     /// - `/etc/hosts` → `/etc/hosts`
     pub fn resolve_image_path(&self, src: &str) -> Result<std::path::PathBuf, String> {
+        // A document fetched from the web names its images relative to where
+        // it came from, not to this machine. Resolved locally, a remote page
+        // could display any image file on disk by its absolute path.
+        if self.is_remote_document() {
+            return Err(
+                "Images in a fetched document are not loaded from this machine".to_string(),
+            );
+        }
         let path = std::path::Path::new(src);
 
         if path.is_absolute() {
@@ -6714,6 +6740,24 @@ mod link_boundary_tests {
                 .is_none_or(|p| p != Path::new("/etc/hosts"))
         );
         assert!(app.pending_editor_file.is_none());
+    }
+
+    /// A fetched document's links and images name places on its site. Read
+    /// against this machine, a page could open local files or show local
+    /// images by path.
+    #[test]
+    fn a_fetched_document_reaches_nothing_on_this_machine() {
+        let app = App::new(
+            crate::parser::parse_markdown("# doc\n"),
+            "README.md".into(),
+            PathBuf::from("https://example.com/README.md"),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+        assert!(app.confine_link_path(Path::new("notes.md")).is_err());
+        assert!(app.resolve_image_path("/etc/passwd").is_err());
+        assert!(app.resolve_image_path("diagram.png").is_err());
     }
 
     #[test]
