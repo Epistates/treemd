@@ -179,6 +179,26 @@ fn gt_between_non_selectors_is_comparison() {
     assert_eq!(run(md, ".h | select(2 > .level) | .text"), vec!["A"]);
 }
 
+/// `.children` and `.parent` were documented and reported "Property not
+/// found".
+#[test]
+fn heading_children_and_parent() {
+    let md = "# A\n## B\n### C\n## D\n#### E\n# F\n";
+    assert_eq!(run(md, ".h1[0].children[] | .text"), vec!["B", "D"]);
+    assert_eq!(run(md, ".h2[D].children[] | .text"), vec!["E"]);
+    assert_eq!(run(md, ".h3[0].children | count"), vec!["0"]);
+    assert_eq!(run(md, ".h3.parent.text"), vec!["B"]);
+    assert_eq!(run(md, ".h4.parent.text"), vec!["D"]);
+    assert_eq!(run(md, ".h1[1].parent"), vec![""]);
+    assert_eq!(
+        run(
+            md,
+            "[.h1[0].children[] | {t: .text, n: (.children | count)}] | .[] | .n"
+        ),
+        vec!["1", "1"]
+    );
+}
+
 #[test]
 fn hierarchy_direct_child_headings() {
     let md = "# A\n## B\n### C\n## D\n";
