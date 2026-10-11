@@ -1026,12 +1026,16 @@ impl App {
         // placeholder renderer. ratatui-image's own compatibility matrix
         // specifies the iTerm2 protocol for iTerm, so prefer it over the
         // otherwise-authoritative probe result.
-        if Self::is_iterm2_terminal() {
+        //
+        // Not inside a multiplexer, though: LC_TERMINAL survives ssh and
+        // lingers in a tmux environment attached later from a different
+        // terminal, and there the probe is what knows. Where the probe got
+        // no answer, ratatui-image already falls back from the environment,
+        // and keeps halfblocks when it cannot learn the font size, which is
+        // what a protocol needs to place an image in its cells; guessing a
+        // protocol here on top of that drew images outside them.
+        if Self::is_iterm2_terminal() && !Self::in_multiplexer(Some(&picker)) {
             picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2);
-        } else if Self::should_use_env_protocol_fallback(&picker)
-            && let Some(protocol) = Self::detect_image_protocol_fallback()
-        {
-            picker.set_protocol_type(protocol);
         }
 
         Some(picker)
@@ -1043,6 +1047,20 @@ impl App {
         Self::is_iterm2_environment(term_program.as_deref(), lc_terminal.as_deref())
     }
 
+    /// Whether treemd is running inside tmux, zellij or screen, where escape
+    /// sequences are passed through, rewritten or dropped depending on how
+    /// the multiplexer is configured.
+    fn in_multiplexer(picker: Option<&ratatui_image::picker::Picker>) -> bool {
+        Self::is_multiplexer_environment(
+            picker.is_some_and(ratatui_image::picker::Picker::tmux_detected),
+            |name| std::env::var_os(name).is_some_and(|value| !value.is_empty()),
+        )
+    }
+
+    fn is_multiplexer_environment(tmux_detected: bool, is_set: impl Fn(&str) -> bool) -> bool {
+        tmux_detected || ["TMUX", "ZELLIJ", "STY"].into_iter().any(is_set)
+    }
+
     fn is_iterm2_environment(term_program: Option<&str>, lc_terminal: Option<&str>) -> bool {
         term_program == Some("iTerm.app") || lc_terminal == Some("iTerm2")
     }
@@ -1051,58 +1069,7 @@ impl App {
         self.images_enabled
             && !self.iterm_animation_failed
             && Self::is_iterm2_terminal()
-            && std::env::var_os("TMUX").is_none()
-    }
-
-    fn should_use_env_protocol_fallback(picker: &ratatui_image::picker::Picker) -> bool {
-        use ratatui_image::picker::ProtocolType;
-
-        picker.protocol_type() == ProtocolType::Halfblocks && picker.capabilities().is_empty()
-    }
-
-    /// Detect an image protocol fallback from environment variables.
-    ///
-    /// Returns None if no specific fallback is detected or if the terminal is
-    /// known to report buggy graphics support.
-    fn detect_image_protocol_fallback() -> Option<ratatui_image::picker::ProtocolType> {
-        use ratatui_image::picker::ProtocolType;
-
-        if std::env::var("KONSOLE_VERSION").is_ok_and(|value| !value.is_empty()) {
-            return None;
-        }
-
-        if std::env::var("TERM_PROGRAM").is_ok_and(|term_program| {
-            term_program.contains("iTerm")
-                || term_program.contains("WezTerm")
-                || term_program.contains("mintty")
-                || term_program.contains("vscode")
-                || term_program.contains("Tabby")
-                || term_program.contains("Hyper")
-                || term_program.contains("rio")
-                || term_program.contains("Bobcat")
-                || term_program.contains("WarpTerminal")
-        }) || std::env::var("WEZTERM_EXECUTABLE").is_ok_and(|value| !value.is_empty())
-        {
-            return Some(ProtocolType::Iterm2);
-        }
-
-        // Kitty graphics protocol
-        if std::env::var("KITTY_WINDOW_ID").is_ok_and(|value| !value.is_empty()) {
-            return Some(ProtocolType::Kitty);
-        }
-
-        // Ghostty uses Kitty protocol
-        if let Ok(term) = std::env::var("TERM") {
-            if term.contains("ghostty") {
-                return Some(ProtocolType::Kitty);
-            }
-            // Sixel support
-            if term.contains("sixel") || term.contains("foot") {
-                return Some(ProtocolType::Sixel);
-            }
-        }
-
-        None
+            && !Self::in_multiplexer(self.picker.as_ref())
     }
 
     /// Populate the image protocol cache from indexed interactive elements.
@@ -6484,21 +6451,20 @@ mod palette_tests {
 #[cfg(test)]
 mod image_picker_tests {
     use super::*;
-    use ratatui_image::picker::{Picker, ProtocolType};
 
+    /// tmux, zellij and screen each make the iTerm2 override and native
+    /// iTerm playback unsafe.
     #[test]
-    fn env_protocol_fallback_is_allowed_for_empty_halfblock_picker() {
-        let picker = Picker::halfblocks();
-
-        assert!(App::should_use_env_protocol_fallback(&picker));
-    }
-
-    #[test]
-    fn env_protocol_fallback_does_not_override_image_protocol() {
-        let mut picker = Picker::halfblocks();
-        picker.set_protocol_type(ProtocolType::Kitty);
-
-        assert!(!App::should_use_env_protocol_fallback(&picker));
+    fn multiplexers_are_recognized() {
+        let only = |set: &'static str| move |name: &str| name == set;
+        assert!(App::is_multiplexer_environment(true, |_| false));
+        assert!(App::is_multiplexer_environment(false, only("TMUX")));
+        assert!(App::is_multiplexer_environment(false, only("ZELLIJ")));
+        assert!(App::is_multiplexer_environment(false, only("STY")));
+        assert!(!App::is_multiplexer_environment(
+            false,
+            only("KITTY_WINDOW_ID")
+        ));
     }
 
     #[test]
