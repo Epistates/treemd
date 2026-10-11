@@ -406,11 +406,10 @@ gh attestation verify treemd-x86_64-unknown-linux-gnu.tar.gz --repo Epistates/tr
 ### Building from Source
 
 ```bash
-cargo install cross              # For ARM cross-compilation
-./scripts/build-all.sh           # Build all platforms
+cargo build --release --locked   # target/release/treemd
 ```
 
-Artifacts are output to `target/release-artifacts/`.
+The release binaries for every platform are built by [`.github/workflows/release.yml`](.github/workflows/release.yml), which is the reference for each target's build.
 
 ## Configuration
 
