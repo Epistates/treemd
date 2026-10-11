@@ -2,9 +2,6 @@
 //!
 //! This module provides all the standard functions available in queries.
 
-mod collection;
-mod string;
-
 use super::ast::Span;
 use super::error::{QueryError, QueryErrorKind};
 use super::eval::EvalContext;
