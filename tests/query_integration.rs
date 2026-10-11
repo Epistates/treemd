@@ -175,6 +175,18 @@ fn array_slice() {
 // Conditionals (item 4b)
 // ---------------------------------------------------------------------------
 
+/// `not` as a pipe stage was a parse error, since the keyword always
+/// expected an operand, so the registered `not` function was unreachable.
+#[test]
+fn not_works_as_a_pipe_stage_and_as_a_prefix() {
+    let md = "# A\n## B\n";
+    assert_eq!(run(md, "true | not"), vec!["false"]);
+    assert_eq!(run(md, "not true"), vec!["false"]);
+    assert_eq!(run(md, ".h | select(.level == 1 | not) | .text"), vec!["B"]);
+    assert_eq!(run(md, ".h | select(not (.level == 1)) | .text"), vec!["B"]);
+    assert_eq!(run(md, "[false | not, true]"), vec!["true\ntrue"]);
+}
+
 /// Mixed types compared by text, so `1 == "1"` was true.
 #[test]
 fn equality_is_type_strict() {
