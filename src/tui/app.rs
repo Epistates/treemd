@@ -658,6 +658,12 @@ pub struct App {
     pub(crate) mermaid_protocol_cache: HashMap<u64, AsyncProtocol>,
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_render_errors: HashMap<u64, String>,
+    /// Lays diagrams out off the UI thread; started by the first diagram.
+    #[cfg(all(feature = "mermaid", unix))]
+    mermaid_worker: Option<crate::tui::mermaid::MermaidWorker>,
+    /// Diagrams queued on the worker for the current width, by source hash.
+    #[cfg(all(feature = "mermaid", unix))]
+    pub(crate) mermaid_pending: HashSet<u64>,
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_last_render_width: u32,
     /// Pixel dimensions (width, height) of each rendered mermaid image, keyed by source hash.
@@ -900,6 +906,10 @@ impl App {
             mermaid_protocol_cache: HashMap::new(),
             #[cfg(all(feature = "mermaid", unix))]
             mermaid_render_errors: HashMap::new(),
+            #[cfg(all(feature = "mermaid", unix))]
+            mermaid_worker: None,
+            #[cfg(all(feature = "mermaid", unix))]
+            mermaid_pending: HashSet::new(),
             #[cfg(all(feature = "mermaid", unix))]
             mermaid_last_render_width: 0,
             #[cfg(all(feature = "mermaid", unix))]
@@ -1291,6 +1301,9 @@ impl App {
         if target_px != self.mermaid_last_render_width {
             self.mermaid_protocol_cache.clear();
             self.mermaid_render_errors.clear();
+            // Anything still queued was for the old width, and its result is
+            // dropped when it arrives.
+            self.mermaid_pending.clear();
             self.mermaid_image_dims.clear();
             self.mermaid_placeholder_rows.clear();
             self.mermaid_needs_reindex = false;
@@ -1301,40 +1314,65 @@ impl App {
         if self.mermaid_protocol_cache.contains_key(&hash) {
             return true;
         }
-        if self.mermaid_render_errors.contains_key(&hash) {
+        if self.mermaid_render_errors.contains_key(&hash)
+            || self.mermaid_pending.contains(&hash)
+            || self.picker.is_none()
+            || self.image_worker.is_none()
+        {
             return false;
         }
-        match crate::tui::mermaid::render_mermaid_to_image(source, target_px) {
-            Ok(img) => {
-                let dims = (img.width(), img.height());
-                if let Some(picker) = self.picker.as_mut() {
-                    let font_h = {
-                        let font_size = picker.font_size();
-                        if font_size.height < 1 {
-                            16u32
-                        } else {
-                            font_size.height as u32
-                        }
-                    };
-                    let rows = dims.1.div_ceil(font_h) as usize;
-                    let protocol = picker.new_resize_protocol(img);
-                    let Some(worker) = &self.image_worker else {
-                        return false;
-                    };
-                    self.mermaid_protocol_cache
-                        .insert(hash, worker.wrap(protocol));
-                    self.mermaid_image_dims.insert(hash, dims);
-                    self.mermaid_placeholder_rows.insert(hash, rows.max(1));
-                    self.mermaid_needs_reindex = true;
-                    return true;
+
+        // Laid out on the worker; the frame shows a placeholder until
+        // process_mermaid_results picks the image up.
+        self.mermaid_worker
+            .get_or_insert_with(crate::tui::mermaid::MermaidWorker::new)
+            .request(hash, source, target_px);
+        self.mermaid_pending.insert(hash);
+        false
+    }
+
+    /// Take in diagrams the worker has finished. Returns whether any arrived,
+    /// so the frame is redrawn with them.
+    #[cfg(all(feature = "mermaid", unix))]
+    fn process_mermaid_results(&mut self) -> bool {
+        let Some(results) = self.mermaid_worker.as_ref().map(|w| w.drain()) else {
+            return false;
+        };
+        let arrived = !results.is_empty();
+
+        for result in results {
+            // Drawn for a width the pane no longer has; the current width's
+            // request is already queued behind it.
+            if result.width != self.mermaid_last_render_width
+                || !self.mermaid_pending.remove(&result.hash)
+            {
+                continue;
+            }
+            let img = match result.image {
+                Ok(img) => img,
+                Err(e) => {
+                    self.mermaid_render_errors.insert(result.hash, e);
+                    continue;
                 }
-                false
-            }
-            Err(e) => {
-                self.mermaid_render_errors.insert(hash, e);
-                false
-            }
+            };
+            let (Some(picker), Some(worker)) = (self.picker.as_mut(), &self.image_worker) else {
+                continue;
+            };
+            let dims = (img.width(), img.height());
+            let font_h = match picker.font_size().height {
+                0 => 16u32,
+                h => u32::from(h),
+            };
+            let rows = dims.1.div_ceil(font_h) as usize;
+            let protocol = picker.new_resize_protocol(img);
+            self.mermaid_protocol_cache
+                .insert(result.hash, worker.wrap(protocol));
+            self.mermaid_image_dims.insert(result.hash, dims);
+            self.mermaid_placeholder_rows
+                .insert(result.hash, rows.max(1));
+            self.mermaid_needs_reindex = true;
         }
+        arrived
     }
 
     /// Re-index interactive elements using pixel-accurate placeholder rows if new dims arrived.
@@ -1563,11 +1601,16 @@ impl App {
     /// Results may arrive after a resize or GIF frame has superseded them;
     /// `AsyncProtocol` generation checks discard those stale completions.
     pub fn process_image_results(&mut self) -> bool {
+        #[cfg(all(feature = "mermaid", unix))]
+        let diagrams_arrived = self.process_mermaid_results();
+        #[cfg(not(all(feature = "mermaid", unix)))]
+        let diagrams_arrived = false;
+
         let Some(worker) = &self.image_worker else {
-            return false;
+            return diagrams_arrived;
         };
         let results = worker.drain();
-        let had_results = !results.is_empty();
+        let had_results = diagrams_arrived || !results.is_empty();
 
         for result in results {
             let mut result = Some(result);
@@ -1615,6 +1658,10 @@ impl App {
     }
 
     pub fn has_pending_image_work(&self) -> bool {
+        #[cfg(all(feature = "mermaid", unix))]
+        if !self.mermaid_pending.is_empty() {
+            return true;
+        }
         self.image_worker
             .as_ref()
             .is_some_and(ImageWorker::has_pending)

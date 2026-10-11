@@ -12,6 +12,74 @@ const MAX_RASTER_PIXELS: f32 = 16_000_000.0;
 /// costs pixels without adding detail.
 const MAX_UPSCALE: f32 = 2.0;
 
+/// Largest diagram source treemd will lay out. Layout cost grows much faster
+/// than the source: a few kilobytes of densely connected nodes takes minutes.
+/// Diagrams run on [`MermaidWorker`], so that no longer freezes the UI, but
+/// past this size it is not worth the CPU.
+const MAX_SOURCE_BYTES: usize = 32 * 1024;
+
+/// A finished diagram, for the pane width it was drawn at.
+pub struct MermaidResult {
+    pub hash: u64,
+    pub width: u32,
+    pub image: Result<DynamicImage, String>,
+}
+
+struct MermaidJob {
+    hash: u64,
+    width: u32,
+    source: String,
+}
+
+/// Lays out and rasterizes diagrams on a thread of its own.
+///
+/// Layout cannot be interrupted, and a dense diagram of a few kilobytes
+/// takes minutes, so it ran inside the frame and froze the UI with raw mode
+/// on, from one block in a README. Off the UI thread, the worst case is one
+/// diagram that never finishes while the rest of treemd carries on.
+pub struct MermaidWorker {
+    jobs: std::sync::mpsc::Sender<MermaidJob>,
+    results: std::sync::mpsc::Receiver<MermaidResult>,
+}
+
+impl MermaidWorker {
+    pub fn new() -> Self {
+        let (jobs, job_rx) = std::sync::mpsc::channel::<MermaidJob>();
+        let (result_tx, results) = std::sync::mpsc::channel();
+        // The thread ends when the worker, and with it the job sender, drops.
+        let _ = std::thread::Builder::new()
+            .name("treemd-mermaid".to_string())
+            .spawn(move || {
+                while let Ok(job) = job_rx.recv() {
+                    let image = render_mermaid_to_image(&job.source, job.width);
+                    let result = MermaidResult {
+                        hash: job.hash,
+                        width: job.width,
+                        image,
+                    };
+                    if result_tx.send(result).is_err() {
+                        break;
+                    }
+                }
+            });
+        Self { jobs, results }
+    }
+
+    /// Queue a diagram, identified by `hash`, for drawing at `width` pixels.
+    pub fn request(&self, hash: u64, source: &str, width: u32) {
+        let _ = self.jobs.send(MermaidJob {
+            hash,
+            width,
+            source: source.to_string(),
+        });
+    }
+
+    /// Every diagram finished since the last call.
+    pub fn drain(&self) -> Vec<MermaidResult> {
+        self.results.try_iter().collect()
+    }
+}
+
 /// Render mermaid source text to a raster image.
 ///
 /// Pipeline: mermaid source → SVG (via mermaid-rs-renderer) → raster (via resvg)
@@ -19,6 +87,13 @@ const MAX_UPSCALE: f32 = 2.0;
 /// Both stages are third-party code that can panic on input it did not
 /// expect, so a panic becomes an error for this one diagram.
 pub fn render_mermaid_to_image(source: &str, target_width: u32) -> Result<DynamicImage, String> {
+    if source.len() > MAX_SOURCE_BYTES {
+        return Err(format!(
+            "diagram is {} KB, over the {} KB limit",
+            source.len() / 1024,
+            MAX_SOURCE_BYTES / 1024
+        ));
+    }
     crate::tui::tty::catch_isolated(|| {
         let svg = render_to_svg(source)?;
         rasterize_svg(&svg, target_width)
@@ -188,6 +263,30 @@ mod tests {
 
     /// A long chain used to rasterize at full pane width with no bound, which
     /// at a wide pane is gigabytes. It has to come back inside the budget.
+    /// A diagram comes back from the worker tagged with what was asked for,
+    /// so a result for a width the pane has since left can be told apart.
+    #[test]
+    fn the_worker_returns_each_diagram_with_its_hash_and_width() {
+        let worker = MermaidWorker::new();
+        worker.request(7, "graph TD\n    A --> B", 400);
+        worker.request(8, &"x".repeat(MAX_SOURCE_BYTES + 1), 400);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut results = Vec::new();
+        while results.len() < 2 && std::time::Instant::now() < deadline {
+            results.extend(worker.drain());
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        results.sort_by_key(|r| r.hash);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!((results[0].hash, results[0].width), (7, 400));
+        assert!(results[0].image.is_ok());
+        // Too large to lay out, refused rather than attempted.
+        let error = results[1].image.as_ref().unwrap_err();
+        assert!(error.contains("limit"), "{error}");
+    }
+
     #[test]
     fn a_long_chain_is_rasterized_within_the_pixel_budget() {
         let mut source = String::from("graph TD\n");
