@@ -637,21 +637,25 @@ impl Engine {
     /// - `Array[a,b]` → slice `[a:b]` (each of `a`/`b` is `Number` or `Null`)
     /// - `Null`       → iterate `[]`
     ///
-    /// If the target evaluates to a single array value, we index *into* that
-    /// array (jq semantics, negative indices supported). Otherwise we index the
-    /// result stream.
+    /// When every value of the target is an array, each one is indexed in
+    /// turn, as jq does, so `.table[0].rows[][0]` is the first cell of every
+    /// row. Indexing the stream instead gave the first row. When the values
+    /// are not arrays, as in `(.h | select(.level == 2))[0]`, the stream
+    /// itself is indexed. Negative indices count from the end either way.
     fn eval_index(&mut self, target: &Expr, index_arg: &Expr) -> Result<Vec<Value>, QueryError> {
         let target_vals = self.eval_expr(target)?;
         let index = decode_index_arg(index_arg);
 
-        // Single array value → index into its elements (jq-style subscripting).
-        if target_vals.len() == 1
-            && let Value::Array(items) = &target_vals[0]
-        {
-            return apply_index(items.clone(), &index);
+        if !target_vals.is_empty() && target_vals.iter().all(|v| matches!(v, Value::Array(_))) {
+            let mut results = Vec::new();
+            for value in target_vals {
+                if let Value::Array(items) = value {
+                    results.extend(apply_index(items, &index)?);
+                }
+            }
+            return Ok(results);
         }
 
-        // Otherwise index the result stream.
         apply_index(target_vals, &index)
     }
 
