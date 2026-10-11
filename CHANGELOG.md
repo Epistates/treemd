@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The config file is written atomically, through a symlink.** It was written in place, so a crash mid-write left it truncated, and a config symlinked from a dotfiles repository is now updated where it lives rather than replaced by a copy
 - **Searching text with characters whose case changes their length no longer crashes.** Typing `İ` in outline or content search over a document containing `İstanbul` panicked, and with other queries the highlight landed on the wrong letters. Matching now reports positions in the original text
 - **A document read from stdin or a URL is not saved to a file named `<stdin>`.** Toggling a checkbox in one wrote that file into the working directory. It now says there is nowhere to save
+- **Editing a table cell changes that cell, not one in another table.** The table was picked by its position among the section's tables as the parser counts them, then found in the file by a separate line-based check that disagreed: it skipped tables written without outer pipes and counted tables inside list items. With either before it, an edit landed in a different table and was saved there. The cell is now located with the same parser, and an edit whose cell in the file does not match the one on screen is refused
+- **Undoing a table edit restores the cell exactly.** Undo wrote back the parser's text of the cell, which has escapes resolved, so `x \| y` came back as `x | y` and split into two cells
+- **Editing a cell keeps its formatting.** The edit started from the parser's text, with `**bold**` and `*italic*` already stripped, so saving any change dropped them. It now starts from the cell as written
 
 ### Security
 

@@ -506,7 +506,8 @@ pub struct PendingEdit {
     pub row: usize,
     /// Column within the table (0-indexed)
     pub col: usize,
-    /// The original value before editing (for undo)
+    /// The cell's source before editing, exactly as written between its
+    /// pipes, which undo writes back verbatim
     pub original_value: String,
     /// The new value after editing
     pub new_value: String,
@@ -607,6 +608,8 @@ pub struct App {
     pub cell_edit_original_value: String, // Original value before editing (for undo)
     pub cell_edit_row: usize,             // Row being edited
     pub cell_edit_col: usize,             // Column being edited
+    /// The cell exactly as written between its pipes, which undo restores.
+    cell_edit_original_source: String,
 
     // Pending edits buffer (for safe editing with explicit save)
     pub pending_edits: Vec<PendingEdit>, // Stack of uncommitted edits
@@ -865,6 +868,7 @@ impl App {
             // Cell editing state
             cell_edit_value: String::new(),
             cell_edit_original_value: String::new(),
+            cell_edit_original_source: String::new(),
             cell_edit_row: 0,
             cell_edit_col: 0,
 
@@ -5958,8 +5962,36 @@ impl App {
                     .unwrap_or_default()
             };
 
-            self.cell_edit_value = cell_value.clone();
-            self.cell_edit_original_value = cell_value; // Store original for undo
+            // Edit the cell as written, so formatting the parser strips from
+            // its text (`**bold**`) survives the edit, and undo can put back
+            // exactly what was there.
+            let table_index = self.calculate_current_table_index()?;
+            let source = crate::tui::edits::table_cell_source(
+                &self.document.content,
+                self.current_section_line_range().0,
+                table_index,
+                row,
+                col,
+            )?;
+            // The cell found in the file has to be the one on screen. If the
+            // two disagree, refusing is better than editing another cell.
+            let letters = |s: &str| -> String {
+                s.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect()
+            };
+            if letters(&source) != letters(&cell_value) {
+                return Err(
+                    "Could not find this cell in the file, so it cannot be edited safely"
+                        .to_string(),
+                );
+            }
+
+            let editable = source.trim().replace("\\|", "|");
+            self.cell_edit_value = editable.clone();
+            self.cell_edit_original_value = editable;
+            self.cell_edit_original_source = source;
             self.cell_edit_row = row;
             self.cell_edit_col = col;
             self.mode = AppMode::CellEdit;
@@ -5978,14 +6010,14 @@ impl App {
     /// Buffer the edited cell value in memory (does not write to file)
     /// Use save_pending_edits_to_file() to write changes to disk
     pub fn save_edited_cell(&mut self) -> Result<(), String> {
-        // Sanitize the cell value to prevent table structure corruption
-        let sanitized_value = Self::sanitize_table_cell(&self.cell_edit_value);
-
         // Skip if no actual change was made
-        if sanitized_value == self.cell_edit_original_value {
+        if self.cell_edit_value == self.cell_edit_original_value {
             self.status_message = Some("No changes made".to_string());
             return Ok(());
         }
+
+        // Sanitize the cell value to prevent table structure corruption
+        let sanitized_value = Self::sanitize_table_cell(&self.cell_edit_value);
 
         // Calculate the table index for this edit
         let table_index = self.calculate_current_table_index()?;
@@ -6009,7 +6041,7 @@ impl App {
             table_index,
             row: self.cell_edit_row,
             col: self.cell_edit_col,
-            original_value: self.cell_edit_original_value.clone(),
+            original_value: self.cell_edit_original_source.clone(),
             new_value: sanitized_value,
         };
         self.pending_edits.push(pending_edit);
@@ -6114,8 +6146,10 @@ impl App {
     /// Undo the last pending edit
     pub fn undo_last_edit(&mut self) -> Result<(), String> {
         if let Some(edit) = self.pending_edits.pop() {
-            // Apply the original value back to the in-memory content
-            let new_content = crate::tui::edits::replace_table_cell(
+            // Put the original source back exactly, escapes and formatting
+            // included. Writing the parser's text instead turned `x \| y`
+            // into `x | y`, splitting the cell in two.
+            let new_content = crate::tui::edits::replace_table_cell_source(
                 &self.document.content,
                 edit.section_start_line,
                 edit.table_index,
