@@ -324,8 +324,8 @@ treemd -q '.table' doc.md     # Tables
 #### Filters and Indexing
 
 ```bash
-treemd -q '.h2[Features]' doc.md       # Fuzzy match
-treemd -q '.h2["Installation"]' doc.md # Exact match
+treemd -q '.h2[Features]' doc.md       # Text contains "Features" (any case)
+treemd -q '.h2["Installation"]' doc.md # Whole text is "Installation" (any case)
 treemd -q '.h2[0]' doc.md              # First h2
 treemd -q '.h2[-1]' doc.md             # Last h2
 treemd -q '.h2[1:3]' doc.md            # Slice
@@ -336,12 +336,15 @@ treemd -q '.code[rust]' doc.md         # By language
 
 ```bash
 treemd -q '.h2 | text' doc.md                    # Get text (strips ##)
-treemd -q '[.h2] | count' doc.md                 # Count elements
-treemd -q '[.h] | limit(5)' doc.md               # First 5
+treemd -q '.h2 | count' doc.md                   # Count elements
+treemd -q '.h | limit(5)' doc.md                 # First 5
 treemd -q '.h | select(contains("API"))' doc.md  # Filter
 treemd -q '.h2 | text | slugify' doc.md          # URL slug
 treemd -q '.link | url' doc.md                   # Extract URLs
+treemd -q '.h2[Install] | .code' doc.md          # Code inside one section
 ```
+
+Functions like `count`, `first`, `sort_by` and `join` see everything a selector returns at once, and a selector piped from a heading looks only inside that heading's section.
 
 #### Hierarchy Operators
 
@@ -362,10 +365,12 @@ treemd -q '. | langs' doc.md           # Code blocks by language
 #### Output Formats
 
 ```bash
-treemd -q '.h2' --query-output json doc.md        # JSON
-treemd -q '.h2' --query-output json-pretty doc.md # Pretty JSON
+treemd -q '.h2' --query-output json doc.md        # JSON array
+treemd -q '.h2' --query-output json-pretty doc.md # Pretty JSON array
 treemd -q '.h2' --query-output jsonl doc.md       # JSON Lines
 ```
+
+`json` and `json-pretty` always print an array, even for a single result.
 
 #### Stdin Support
 
