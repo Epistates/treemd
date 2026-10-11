@@ -286,6 +286,65 @@ fn a_closed_pipe_ends_output_without_a_panic() {
 }
 
 #[test]
+fn a_level_outside_one_to_six_is_rejected() {
+    let f = fixture_file();
+    let (_, stderr, code) = run(&["-l", "-L", "9", f.to_str().unwrap()]);
+    assert_eq!(code, 2, "{stderr}");
+}
+
+/// `-q` with `-l` used to drop `-l` silently.
+#[test]
+fn a_query_conflicts_with_the_other_output_modes() {
+    let f = fixture_file();
+    let (_, stderr, code) = run(&["-q", ".h", "-l", f.to_str().unwrap()]);
+    assert_eq!(code, 2, "{stderr}");
+}
+
+#[test]
+fn exit_status_reports_whether_the_query_matched() {
+    let f = fixture_file();
+    let path = f.to_str().unwrap();
+    let (_, _, code) = run(&["-q", ".h2[Usage]", "-e", path]);
+    assert_eq!(code, 0);
+    let (stdout, _, code) = run(&["-q", ".h6", "-e", path]);
+    assert_eq!((code, stdout.as_str()), (1, ""));
+    // Without -e, nothing matching is still a success, as in jq.
+    let (_, _, code) = run(&["-q", ".h6", path]);
+    assert_eq!(code, 0);
+}
+
+/// `-l docs/` printed a placeholder `# Select a file` heading.
+#[test]
+fn a_directory_in_cli_mode_is_an_error() {
+    let f = fixture_file();
+    let dir = f.parent().unwrap();
+    let (stdout, stderr, code) = run(&["-l", dir.to_str().unwrap()]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("is a directory"), "{stderr}");
+}
+
+#[test]
+fn extra_files_in_cli_mode_are_reported() {
+    let f = fixture_file();
+    let path = f.to_str().unwrap();
+    let (stdout, stderr, code) = run(&["-l", path, path]);
+    assert_eq!(code, 0);
+    assert!(stdout.starts_with("# Title"), "{stdout}");
+    assert!(stderr.contains("only the first file"), "{stderr}");
+}
+
+/// With no terminal to draw on, the TUI wrote its escape sequences into the
+/// pipe. It prints the document instead, as bat and less do.
+#[test]
+fn without_a_terminal_the_document_is_printed() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&[f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, FIXTURE);
+}
+
+#[test]
 fn list_json_output_is_valid_and_has_expected_shape() {
     let f = fixture_file();
     let (stdout, _, code) = run(&["-l", "-o", "json", f.to_str().unwrap()]);

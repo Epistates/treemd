@@ -123,12 +123,25 @@ fn main() -> Result<()> {
             }
         }
     } else {
-        match args.file.len() {
+        let picker_placeholder = || {
+            treemd::input::InputSource::Stdin(
+                "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
+            )
+        };
+        let cli_mode = !launches_tui(&args);
+        if cli_mode && args.file.len() > 1 {
+            eprintln!(
+                "warning: only the first file is read; {} more ignored",
+                args.file.len() - 1
+            );
+        }
+
+        match args.file.first() {
             // No file, but something is piped in: that is the document, as in
             // `cat doc.md | treemd -q '.h'` or `tree | treemd`. This has to
             // come before the file picker, which would otherwise take over
             // whenever the working directory holds a markdown file.
-            0 if treemd::input::is_stdin_piped() => {
+            None if treemd::input::is_stdin_piped() => {
                 match treemd::input::determine_input_source(None) {
                     Ok(source) => (source, false, None),
                     Err(e) => {
@@ -137,114 +150,68 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            0 => {
-                // No file provided - check for .md files in cwd
-                use std::fs;
+            // Nothing to read. The TUI can offer the directory's markdown
+            // files; a listing or a query has no document, which is a usage
+            // error rather than an empty success.
+            None if cli_mode => {
+                eprintln!("error: no input: name a markdown file, or pipe one in");
+                print_usage_hint();
+                process::exit(2);
+            }
+            None => {
                 let cwd = std::env::current_dir().unwrap_or_default();
-                let md_files: Vec<_> = fs::read_dir(&cwd)
-                    .ok()
+                let has_markdown = std::fs::read_dir(&cwd)
                     .into_iter()
                     .flatten()
                     .filter_map(|entry| entry.ok())
-                    .filter(|entry| {
+                    .any(|entry| {
                         let path = entry.path();
                         path.is_file()
                             && path
                                 .extension()
                                 .and_then(|ext| ext.to_str())
-                                .map(|ext| ext == "md" || ext == "markdown")
-                                .unwrap_or(false)
-                    })
-                    .collect();
-
-                if md_files.is_empty() {
+                                .is_some_and(|ext| ext == "md" || ext == "markdown")
+                    });
+                if !has_markdown {
                     eprintln!("No markdown files found in current directory.");
-                    eprintln!("\nUsage: treemd [OPTIONS] <FILE>");
-                    eprintln!("       treemd [OPTIONS] -");
-                    eprintln!("       treemd [OPTIONS] .           # Open file picker");
-                    eprintln!("       tree | treemd [OPTIONS]\n");
+                    print_usage_hint();
+                    process::exit(2);
+                }
+                (picker_placeholder(), true, None)
+            }
+            Some(path) if path.is_dir() => {
+                if cli_mode {
                     eprintln!(
-                        "Tip: Navigate to a directory with .md files, or specify a file path."
+                        "error: {} is a directory; name a markdown file",
+                        path.display()
                     );
-                    eprintln!("\nFor shell completion setup, use:");
-                    eprintln!("  treemd --setup-completions");
-                    std::process::exit(0);
+                    process::exit(1);
                 }
-
-                // Create dummy document to show file picker
-                (
-                    treemd::input::InputSource::Stdin(
-                        "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
-                    ),
-                    true,
-                    None,
-                )
+                (picker_placeholder(), true, Some(path.clone()))
             }
-            1 => {
-                let file_path = &args.file[0];
-                // Check if it's a directory
-                if file_path.is_dir() {
-                    // Directory provided - open file picker in that directory
-                    (
-                        treemd::input::InputSource::Stdin(
-                            "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
-                        ),
-                        true,
-                        Some(file_path.clone()),
-                    )
-                } else {
-                    // Single file path was provided - use existing logic
-                    match treemd::input::determine_input_source(Some(file_path.as_path())) {
-                        Ok(source) => (source, false, None),
-                        Err(treemd::input::InputError::NoTty) => {
-                            eprintln!("Error: markdown file argument is required");
-                            eprintln!("\nUsage: treemd [OPTIONS] <FILE>");
-                            eprintln!("       treemd [OPTIONS] -");
-                            eprintln!("       treemd [OPTIONS] .           # Open file picker");
-                            eprintln!("       tree | treemd [OPTIONS]\n");
-                            eprintln!(
-                                "Use '-' to explicitly read from stdin, or pipe input with CLI flags."
-                            );
-                            eprintln!("\nFor shell completion setup, use:");
-                            eprintln!("  treemd --setup-completions");
-                            std::process::exit(1);
-                        }
-                        Err(e) => {
-                            eprintln!("Error reading input: {}", e);
-                            process::exit(1);
-                        }
-                    }
+            Some(path) => match treemd::input::determine_input_source(Some(path.as_path())) {
+                Ok(source) => (source, false, None),
+                Err(e) => {
+                    eprintln!("Error reading input: {}", e);
+                    process::exit(1);
                 }
-            }
-            _ => {
-                // Multiple files provided - open first file, others available in file picker
-                // For now, just open the first file (file picker will show all files in same dir)
-                let file_path = &args.file[0];
-                if file_path.is_dir() {
-                    // If first arg is a directory, use it for file picker
-                    (
-                        treemd::input::InputSource::Stdin(
-                            "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
-                        ),
-                        true,
-                        Some(file_path.clone()),
-                    )
-                } else {
-                    match treemd::input::determine_input_source(Some(file_path.as_path())) {
-                        Ok(source) => (source, false, None),
-                        Err(treemd::input::InputError::NoTty) => {
-                            eprintln!("Error: markdown file argument is required");
-                            std::process::exit(1);
-                        }
-                        Err(e) => {
-                            eprintln!("Error reading input: {}", e);
-                            process::exit(1);
-                        }
-                    }
-                }
-            }
+            },
         }
     };
+
+    // No terminal to draw on, as in `treemd doc.md > out` or `| cat`: print
+    // the document, as bat and less do, instead of writing the TUI's escape
+    // sequences into a file or a pipe.
+    if launches_tui(&args) && !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        if needs_file_picker {
+            eprintln!("error: stdout is not a terminal, and there is no document to print");
+            process::exit(2);
+        }
+        let (treemd::input::InputSource::File(content)
+        | treemd::input::InputSource::Stdin(content)) = input_source;
+        print!("{content}");
+        return Ok(());
+    }
 
     // Check if stdin was piped (before consuming input_source)
     let stdin_was_piped = matches!(input_source, treemd::input::InputSource::Stdin(_));
@@ -272,7 +239,12 @@ fn main() -> Result<()> {
 
     // Handle query mode
     if let Some(ref query_str) = args.query {
-        return handle_query_mode(&doc, query_str, args.query_output.as_deref());
+        return handle_query_mode(
+            &doc,
+            query_str,
+            args.query_output.as_deref(),
+            args.exit_status,
+        );
     }
 
     // If no flags, launch TUI
@@ -412,6 +384,17 @@ fn main() -> Result<()> {
 /// Fetch a remote document. http(s) URLs are fetched directly;
 /// `github:owner/repo` resolves to the repository's README on the default
 /// branch via raw.githubusercontent.com.
+/// How to give treemd input, for the errors that mean there was none.
+fn print_usage_hint() {
+    eprintln!("\nUsage: treemd [OPTIONS] <FILE>");
+    eprintln!("       treemd [OPTIONS] -");
+    eprintln!("       treemd [OPTIONS] .           # Open file picker");
+    eprintln!("       tree | treemd [OPTIONS]\n");
+    eprintln!("Tip: Navigate to a directory with .md files, or specify a file path.");
+    eprintln!("\nFor shell completion setup, use:");
+    eprintln!("  treemd --setup-completions");
+}
+
 /// Whether these arguments open the TUI rather than printing and exiting.
 fn launches_tui(args: &Cli) -> bool {
     args.query.is_none()
@@ -423,36 +406,51 @@ fn launches_tui(args: &Cli) -> bool {
 }
 
 fn fetch_remote(spec: &str) -> Result<String, String> {
-    let url = if let Some(repo) = spec.strip_prefix("github:") {
-        let repo = repo.trim_matches('/');
-        if repo.split('/').filter(|s| !s.is_empty()).count() != 2 {
-            return Err(format!(
-                "Invalid GitHub spec '{}': expected github:owner/repo",
-                spec
-            ));
-        }
-        format!("https://raw.githubusercontent.com/{}/HEAD/README.md", repo)
-    } else {
-        spec.to_string()
-    };
-
     // ureq sets no timeouts of its own, so a server that accepts and never
     // answers hung treemd for good. An https request also stays on https
     // through its redirects rather than following one down to plain http.
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(std::time::Duration::from_secs(10)))
-        .timeout_global(Some(std::time::Duration::from_secs(30)))
-        .https_only(url.starts_with("https://"))
-        .build()
-        .into();
-    let mut response = agent
-        .get(&url)
-        .call()
-        .map_err(|e| format!("Failed to fetch {}: {}", url, e))?;
-    response
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| format!("Failed to read response from {}: {}", url, e))
+    let agent = |url: &str| -> ureq::Agent {
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(10)))
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .https_only(url.starts_with("https://"))
+            .build()
+            .into()
+    };
+    let fetch = |url: &str, accept: Option<&str>| -> Result<String, String> {
+        let mut request = agent(url).get(url);
+        if let Some(accept) = accept {
+            request = request.header("Accept", accept);
+        }
+        let mut response = request
+            .call()
+            .map_err(|e| format!("Failed to fetch {}: {}", url, e))?;
+        response
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| format!("Failed to read response from {}: {}", url, e))
+    };
+
+    let Some(repo) = spec.strip_prefix("github:") else {
+        return fetch(spec, None);
+    };
+    let repo = repo.trim_matches('/');
+    if repo.split('/').filter(|s| !s.is_empty()).count() != 2 {
+        return Err(format!(
+            "Invalid GitHub spec '{}': expected github:owner/repo",
+            spec
+        ));
+    }
+
+    // GitHub's own answer to "what is this repository's README", whatever
+    // it is named: readme.md, README.markdown, docs/README.md. Asking for
+    // README.md at the root by name missed all of those. The API allows 60
+    // unauthenticated requests an hour, so past that the name is tried.
+    let api = format!("https://api.github.com/repos/{repo}/readme");
+    fetch(&api, Some("application/vnd.github.raw+json")).or_else(|api_error| {
+        let raw = format!("https://raw.githubusercontent.com/{repo}/HEAD/README.md");
+        fetch(&raw, None).map_err(|raw_error| format!("{api_error}; then {raw_error}"))
+    })
 }
 
 fn handle_cli_mode(args: &Cli, doc: &Document) {
@@ -656,7 +654,12 @@ fn extract_section(doc: &Document, section_name: &str) {
     println!("{}", cli::terminal::display(doc.content[start..end].trim()));
 }
 
-fn handle_query_mode(doc: &Document, query_str: &str, output_format: Option<&str>) -> Result<()> {
+fn handle_query_mode(
+    doc: &Document,
+    query_str: &str,
+    output_format: Option<&str>,
+    exit_status: bool,
+) -> Result<()> {
     use treemd::query::{self, OutputFormat};
 
     // Parse output format
@@ -675,13 +678,15 @@ fn handle_query_mode(doc: &Document, query_str: &str, output_format: Option<&str
             // No results prints nothing, like jq, except as JSON, which is
             // always one array so a consumer can parse it the same way
             // whatever the count: `[]` when nothing matched.
-            if results.is_empty()
-                && !matches!(format, OutputFormat::Json | OutputFormat::JsonPretty)
+            if !results.is_empty()
+                || matches!(format, OutputFormat::Json | OutputFormat::JsonPretty)
             {
-                return Ok(());
+                let output = query::format_output(&results, format);
+                println!("{}", cli::terminal::display(&output));
             }
-            let output = query::format_output(&results, format);
-            println!("{}", cli::terminal::display(&output));
+            if exit_status && results.is_empty() {
+                process::exit(1);
+            }
             Ok(())
         }
         Err(e) => {

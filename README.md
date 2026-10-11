@@ -130,7 +130,7 @@ Completions are context-aware: they only offer `.md`/`.markdown` files and direc
 
 ```sh
 treemd README.md                  # Open a file
-treemd github:rust-lang/rust      # Read a GitHub repo's README
+treemd github:rust-lang/rust      # Read a GitHub repo's README, whatever it is named
 treemd https://example.com/doc.md # Open any markdown URL
 ```
 
@@ -370,7 +370,17 @@ treemd -q '.h2' --query-output json-pretty doc.md # Pretty JSON array
 treemd -q '.h2' --query-output jsonl doc.md       # JSON Lines
 ```
 
-`json` and `json-pretty` always print an array, even for a single result.
+`json` and `json-pretty` always print an array, even for a single result,
+and `[]` when nothing matches.
+
+#### Exit Status
+
+A query that matches nothing exits 0, as jq does. Add `-e` to exit 1 instead,
+so a script can tell:
+
+```bash
+treemd -q '.h2[Install]' -e README.md || echo "no install section"
+```
 
 #### Stdin Support
 

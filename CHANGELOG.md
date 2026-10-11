@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CLI misuse is reported instead of answered.** `-L 9` was accepted though there is no level 9; `-q` with `-l` or `-s` silently ignored the other flag; `-l docs/` printed a made-up `# Select a file` heading; extra files were silently ignored; and with no input at all, treemd printed its usage and exited 0. These are errors now (exit 2 for usage, 1 for a directory), and extra files get a warning that only the first is read
+- **`treemd doc.md > out` prints the document.** With no terminal to draw on, the TUI wrote its escape sequences into the file or pipe. It now prints the document, as `bat` and `less` do
+- **`github:owner/repo` finds the README whatever it is named.** It fetched `README.md` at the root, so a repository with `readme.md`, `README.markdown` or `docs/README.md` failed to open. GitHub is asked for the repository's README, falling back to `README.md` past its rate limit
+- **A file over 100 MB is refused rather than read whole**, the limit stdin already had
 - **Scrolling and moving through a long section no longer re-renders it every frame.** Each frame parsed, highlighted, filtered and wrapped the whole section again, so on a large document every keypress and every scroll step took about a second. The section is now laid out once and kept until something it depends on changes, and a frame draws only the rows on screen: on a 21,000-line document a scroll frame takes about a millisecond
 - **A selected element below wrapped text is scrolled into view.** Interactive mode placed elements by counting each paragraph as one line, so anything below a paragraph that wrapped onto several rows was thought to be on screen when it was not, and selecting it left it out of sight. Elements are now placed by where they were drawn
 - **With frontmatter hidden, the pointer marks the link Enter follows.** The interactive index read the section with its frontmatter while the pane showed it without, so their block numbering differed and the pointer sat on one link while Enter opened another
@@ -85,6 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`-e` / `--exit-status`** makes a query that matches nothing exit 1, so a script can tell an empty result from a match. Without it an empty result still exits 0, as jq does
 - **`Ctrl+c` quits**, asking first when there are unsaved edits. Raw mode made it an ordinary key, bound to nothing
 - **`Ctrl+z` suspends to the shell**, and `fg` brings treemd back as it was. Raw mode made it an ordinary key as well. In interactive mode it is still undo
 - **`.children` and `.parent` on a heading.** Both were documented and reported "Property not found". `.children` is the array of headings directly under it, the same as `.h1 > .h`, and `.parent` is the nearest heading above it at a shallower level, or `null`

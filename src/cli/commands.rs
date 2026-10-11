@@ -113,7 +113,12 @@ pub struct Cli {
     ///   1 = # (h1), 2 = ## (h2), 3 = ### (h3), etc.
     ///
     /// Example: -L 2 shows only ## headings
-    #[arg(short = 'L', long = "level", value_name = "LEVEL")]
+    #[arg(
+        short = 'L',
+        long = "level",
+        value_name = "LEVEL",
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=6)
+    )]
     pub level: Option<usize>,
 
     /// Output format for --list and --tree modes
@@ -199,7 +204,12 @@ pub struct Cli {
     ///   -q '.h | select(contains("API"))' # Headings with "API"
     ///
     /// See --query-help for full documentation.
-    #[arg(short = 'q', long = "query", value_name = "EXPR")]
+    #[arg(
+        short = 'q',
+        long = "query",
+        value_name = "EXPR",
+        conflicts_with_all = ["list", "tree", "count", "section", "at_line"]
+    )]
     pub query: Option<String>,
 
     /// Show query language documentation and examples
@@ -226,6 +236,16 @@ pub struct Cli {
     /// Example: -q '.h2' --query-output json
     #[arg(long = "query-output", value_name = "FORMAT")]
     pub query_output: Option<String>,
+
+    /// Exit with status 1 when the query matches nothing
+    ///
+    /// Without it, a query that matches nothing still exits 0, as jq does,
+    /// so a script cannot tell an empty result from a match. With it, the
+    /// exit status says which.
+    ///
+    /// Example: treemd -q '.h2[Install]' -e README.md || echo "no install section"
+    #[arg(short = 'e', long = "exit-status", requires = "query")]
+    pub exit_status: bool,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
