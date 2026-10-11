@@ -9,6 +9,9 @@ on:
   # repository too, not only on the next push.
   schedule:
     - cron: "17 6 * * 1"
+  # The release workflow runs this whole suite on the tagged commit and
+  # builds nothing until it passes.
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always

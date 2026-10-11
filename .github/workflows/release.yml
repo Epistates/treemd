@@ -16,6 +16,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The full CI suite (rust.yml) on the exact commit being released. Nothing
+  # is built for release until it passes, so a tag pushed on a red or
+  # untested commit stops here instead of publishing.
+  ci:
+    name: CI
+    uses: ./.github/workflows/rust.yml
+
   # A pushed tag is immutable (see the "Version tags are immutable" ruleset), so
   # a bad one cannot be re-cut. Catch the mismatches here, before any artifact
   # exists, rather than after downstream packagers have hashed the tarball.
@@ -26,6 +33,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
 
       - name: Tag, Cargo.toml, and CHANGELOG must agree
         if: startsWith(github.ref, 'refs/tags/v')
@@ -47,10 +58,15 @@ jobs:
           echo "$GITHUB_REF_NAME matches Cargo.toml and CHANGELOG.md"
         shell: bash
 
+      # Everything `cargo publish` checks short of uploading, so the
+      # crates.io publish of this tag is known to go through.
+      - name: crates.io publish dry run
+        run: cargo publish --dry-run --locked
+
   build:
     name: Build for ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    needs: preflight
+    needs: [ci, preflight]
     strategy:
       fail-fast: false
       matrix:
