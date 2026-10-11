@@ -93,7 +93,3 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # quick-xml is used only by wayland-scanner's proc macro against
-          # bundled protocol XML. Keep runtime Wayland clipboard support while
-          # upstream moves to quick-xml >=0.41; all other advisories still fail.
-          ignore: RUSTSEC-2026-0194,RUSTSEC-2026-0195

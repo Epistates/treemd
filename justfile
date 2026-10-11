@@ -70,10 +70,9 @@ uninstall:
 update:
     cargo update
 
-# Audit dependencies. The ignored quick-xml advisories are build-time-only in
-# wayland-scanner, which parses bundled protocol XML rather than user input.
+# Audit dependencies
 audit:
-    cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+    cargo audit
 
 # Show outdated dependencies
 outdated:
