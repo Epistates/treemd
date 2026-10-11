@@ -160,8 +160,10 @@ impl<'a> Lexer<'a> {
 
     fn advance(&mut self) -> Option<(usize, char)> {
         let result = self.chars.next();
-        if let Some((pos, _)) = result {
-            self.pos = pos + 1;
+        if let Some((pos, c)) = result {
+            // A byte offset, like every span: past the whole character, not
+            // one byte into it.
+            self.pos = pos + c.len_utf8();
         }
         result
     }
