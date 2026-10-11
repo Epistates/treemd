@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A nested list is its own `.list` entry.** It used to be text in its parent item's `.content`, so `- outer` holding `- inner` reported one list whose item read `outer` plus the inner line. It now reports two lists of one item each. Anything reading `.content` for nested items needs updating
 - **turbovault-parser 2.1.0 to 3.2.0.** The 3.0.0 major is the MCP server's wire format and does not touch the parser API. The parser changes are all in 2.2.0: nested lists are real blocks ([turbovault#79](https://github.com/Epistates/turbovault/issues/79)), and the quoted continuation fix above
-- **ratatui-image 11.0.8 to 11.1.0**, and every other dependency to its latest compatible release
+- **ratatui-image 11.0.8 to 11.1.0**, and every other dependency to its latest compatible release. That moves wayland-scanner off quick-xml 0.39, so [RUSTSEC-2026-0194](https://rustsec.org/advisories/RUSTSEC-2026-0194) and [RUSTSEC-2026-0195](https://rustsec.org/advisories/RUSTSEC-2026-0195) no longer apply and the audit runs with no ignores
 
 ## [0.9.1] - 2026-09-14
 
