@@ -330,6 +330,22 @@ fn string_repeat_overflow_errors_not_aborts() {
     run_err("# X\n", "\"x\" * 1e300");
 }
 
+/// The expected count printed as a Rust range: "expects 0..=0 arguments".
+#[test]
+fn arity_errors_say_the_count_in_words() {
+    let message = |q: &str| {
+        let doc = parse_markdown("# X\n");
+        query::execute(&doc, q).unwrap_err().to_string()
+    };
+    assert!(
+        message("count(1)").contains("Function 'count' takes no arguments, got 1"),
+        "{}",
+        message("count(1)")
+    );
+    assert!(message("split").contains("takes 1 argument, got 0"));
+    assert!(message("replace(\"a\")").contains("takes 2 arguments, got 1"));
+}
+
 #[test]
 fn matches_invalid_regex_errors() {
     run_err("# X\nx\n", ".h1.text | matches(\"[\")");
