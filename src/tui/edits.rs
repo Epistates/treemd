@@ -157,7 +157,11 @@ fn locate_table_cell(
 
     // Row 0 is the header, line 1 the delimiter row, then the body rows.
     let line_number = if row == 0 { 0 } else { row + 1 };
-    let mut offset = section_start + table.start;
+    // The parser starts the table after the header's indentation; cells are
+    // split from the start of the line, or a pipe-less header's first cell
+    // loses its leading spaces.
+    let table_start = section_start + table.start;
+    let mut offset = content[..table_start].rfind('\n').map_or(0, |i| i + 1);
     let (line, line_offset) = content[offset..section_start + table.end]
         .split_inclusive('\n')
         .map(|segment| {
@@ -557,6 +561,50 @@ a | b
         assert!(out.contains("\n1 | Z \n"), "{out}");
     }
 
+    /// A table of `cells` (the first row is the header), with or without
+    /// outer pipes, between two paragraphs.
+    fn table_doc(cells: &[Vec<String>], outer: bool, newline: &str) -> String {
+        let row = |cells: &[String]| {
+            let inner = cells.join(" | ");
+            if outer { format!("| {inner} |") } else { inner }
+        };
+        let rule = row(&vec!["---".to_string(); cells[0].len()]);
+        let mut lines = vec!["Intro.".to_string(), String::new(), row(&cells[0]), rule];
+        lines.extend(cells[1..].iter().map(|cells| row(cells)));
+        lines.extend([String::new(), "Outro.".to_string(), String::new()]);
+        lines.join(newline)
+    }
+
+    proptest::proptest! {
+        /// An edit changes one line of the document, and putting the cell's
+        /// source back gives the document it started from.
+        #[test]
+        fn a_cell_edit_is_local_and_undoes_exactly(
+            cells in proptest::collection::vec(
+                proptest::collection::vec("[a-z0-9]{1,6}( [a-z0-9]{1,6})?", 3),
+                2..6,
+            ),
+            outer in proptest::bool::ANY,
+            crlf in proptest::bool::ANY,
+            pick in (0usize..16, 0usize..3),
+            value in "[a-z0-9]{1,8}",
+        ) {
+            let content = table_doc(&cells, outer, if crlf { "\r\n" } else { "\n" });
+            let (row, col) = (pick.0 % cells.len(), pick.1);
+
+            let original = table_cell_source(&content, 0, 0, row, col).unwrap();
+            let edited = replace_table_cell(&content, 0, 0, row, col, &value).unwrap();
+            let before: Vec<&str> = content.split('\n').collect();
+            let after: Vec<&str> = edited.split('\n').collect();
+            proptest::prop_assert_eq!(before.len(), after.len());
+            let changed = before.iter().zip(&after).filter(|(a, b)| a != b).count();
+            proptest::prop_assert!(changed <= 1, "{changed} lines changed:\n{edited}");
+
+            let restored = replace_table_cell_source(&edited, 0, 0, row, col, &original).unwrap();
+            proptest::prop_assert_eq!(restored, content);
+        }
+    }
+
     /// Undo restores a cell from its source text, byte for byte. Restoring
     /// the parser's text instead dropped an escaped pipe's backslash and
     /// split the cell in two.
@@ -572,6 +620,20 @@ a | b
 
         let edited = replace_table_cell(content, 0, 0, 1, 0, "new").unwrap();
         let restored = replace_table_cell_source(&edited, 0, 0, 1, 0, &original).unwrap();
+        assert_eq!(restored, content);
+    }
+
+    /// Found by the property above: the parser starts a table after its
+    /// header's indentation, so once an edit gave a pipe-less header a
+    /// leading space, undo put the cell back one space to the right.
+    #[test]
+    fn an_indented_header_cell_undoes_exactly() {
+        let content = "Intro.\n\n a | b\n--- | ---\nc | d\n";
+        let original = table_cell_source(content, 0, 0, 0, 0).unwrap();
+        assert_eq!(original, " a ");
+        let edited = replace_table_cell(content, 0, 0, 0, 0, "x").unwrap();
+        assert_eq!(edited, "Intro.\n\n x | b\n--- | ---\nc | d\n");
+        let restored = replace_table_cell_source(&edited, 0, 0, 0, 0, &original).unwrap();
         assert_eq!(restored, content);
     }
 

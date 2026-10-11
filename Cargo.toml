@@ -136,3 +136,7 @@ strip = true
 # Keep unwinding enabled so panic isolation around third-party image/render
 # work can recover and report an error instead of terminating the TUI.
 panic = "unwind"
+
+[dev-dependencies]
+# Property tests: parsing, querying, rendering and editing over generated input
+proptest = "1.12"

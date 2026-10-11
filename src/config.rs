@@ -791,9 +791,8 @@ heading_1 = { rgb = [10, 20, 30] }
 
     #[test]
     fn save_then_load_round_trip() {
-        let dir = std::env::temp_dir().join(format!("treemd-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
 
         let mut c = Config::default();
         c.ui.theme = "Gruvbox".into();
@@ -804,10 +803,6 @@ heading_1 = { rgb = [10, 20, 30] }
         let loaded = Config::load_from_path(&path);
         assert_eq!(loaded.ui.theme, "Gruvbox");
         assert_eq!(loaded.ui.outline_width, 55);
-
-        // Cleanup
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
     }
 
     const USER_CONFIG: &str = r#"# my settings
@@ -862,9 +857,8 @@ something_new = "kept"
 
     #[test]
     fn load_from_path_invalid_toml_falls_back_to_default() {
-        let dir = std::env::temp_dir().join(format!("treemd-test-bad-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
         std::fs::write(&path, "this is not valid = = = toml [[[").unwrap();
 
         // Suppress the eprintln in the test output by just checking the result.
@@ -877,9 +871,6 @@ something_new = "kept"
             std::fs::read_to_string(&path).unwrap(),
             "this is not valid = = = toml [[["
         );
-
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
     }
 
     // ---------- code_theme_dir_path ----------
