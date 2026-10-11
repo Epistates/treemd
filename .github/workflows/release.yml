@@ -154,56 +154,65 @@ jobs:
           fi
         shell: bash
 
-      # macOS Code Signing (optional - requires secrets to be configured)
-      - name: Import Apple Code Signing Certificate
+      # A tagged release must be Developer ID signed and notarized, so on a
+      # tag a failed import fails the job. A manual run without the signing
+      # secrets carries on and is ad-hoc signed below.
+      - name: Import Apple code signing certificate
         if: runner.os == 'macOS'
-        continue-on-error: true
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: Apple-Actions/import-codesign-certs@77ba2a2a8f5cfc8c405ebf3159f767c323e238f9 # v7.1.0
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
-      - name: Code sign and notarize macOS binary
+      - name: Sign and notarize the macOS binary
         if: runner.os == 'macOS'
+        env:
+          TARGET: ${{ matrix.target }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          CERT_IMPORTED=false
+          bin="target/$TARGET/release/treemd"
 
-          # Check if certificate was imported (if secrets exist, cert should be imported)
           if security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
-            CERT_IMPORTED=true
-          fi
+            echo "Signing with Developer ID"
+            codesign --force --timestamp --options runtime \
+              --sign "$APPLE_DEVELOPER_ID" "$bin"
+            codesign --verify --strict --verbose=2 "$bin"
 
-          if [ "$CERT_IMPORTED" = "true" ]; then
-            echo "Signing with Developer ID..."
-            codesign --deep --force --verify --verbose \
-              --timestamp --options runtime \
-              --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
-              target/${{ matrix.target }}/release/treemd
-            codesign -v target/${{ matrix.target }}/release/treemd
-
-            echo "Notarizing with Apple..."
-            ditto -c -k --sequesterRsrc target/${{ matrix.target }}/release/treemd treemd-notarize.zip
-
-            xcrun notarytool submit treemd-notarize.zip \
-              --apple-id "${{ secrets.APPLE_ID }}" \
-              --password "${{ secrets.APPLE_ID_PASSWORD }}" \
-              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-              --wait \
-              --timeout 30m
-
-            echo "Note: Stapling is not applicable to bare CLI binaries"
-            echo "Binary is notarized server-side - users will be verified online"
-
-            echo "Verifying notarization status..."
-            spctl -a -v target/${{ matrix.target }}/release/treemd || true
-            echo "✓ Binary signed and notarized"
+            # notarytool exits 0 even when Apple rejects the submission, so
+            # the verdict is read from its JSON rather than its exit code.
+            ditto -c -k --sequesterRsrc "$bin" treemd-notarize.zip
+            result=$(xcrun notarytool submit treemd-notarize.zip \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_ID_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait --timeout 30m --output-format json)
+            echo "$result"
+            status=$(jq -r '.status' <<<"$result")
+            if [ "$status" != "Accepted" ]; then
+              xcrun notarytool log "$(jq -r '.id' <<<"$result")" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_ID_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" || true
+              echo "::error::notarization finished as '$status', not Accepted"
+              exit 1
+            fi
+            # A bare binary cannot be stapled; Gatekeeper checks the
+            # notarization online the first time it runs.
+            echo "Signed and notarized"
+          elif [ "$IS_TAG" = "true" ]; then
+            echo "::error::no Developer ID Application identity is available, and a tagged release must be signed and notarized"
+            exit 1
           else
-            echo "Developer ID certificate not configured. Using ad-hoc signing..."
-            codesign --remove-signature target/${{ matrix.target }}/release/treemd || true
-            codesign -s - target/${{ matrix.target }}/release/treemd
-            codesign -v target/${{ matrix.target }}/release/treemd
-            echo "⚠ Binary ad-hoc signed (users may see Gatekeeper warning)"
+            echo "::warning::no Developer ID identity, so this non-release build is ad-hoc signed only"
+            codesign --force --sign - "$bin"
+            codesign --verify --verbose=2 "$bin"
           fi
+        shell: bash
 
 
       - name: Prepare artifacts (Windows)
