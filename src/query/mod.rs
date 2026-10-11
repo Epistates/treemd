@@ -131,7 +131,7 @@ impl std::str::FromStr for OutputFormat {
         match s.to_lowercase().as_str() {
             "plain" | "text" => Ok(Self::Plain),
             "json" => Ok(Self::Json),
-            "json-pretty" | "jsonpretty" => Ok(Self::JsonPretty),
+            "json-pretty" | "jsonpretty" | "jsonp" => Ok(Self::JsonPretty),
             "jsonl" | "jsonlines" | "ndjson" => Ok(Self::JsonLines),
             "md" | "markdown" => Ok(Self::Markdown),
             "tree" => Ok(Self::Tree),

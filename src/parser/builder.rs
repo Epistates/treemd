@@ -21,18 +21,22 @@ pub fn build_json_output(doc: &Document, source_path: Option<&Path>) -> Document
     };
 
     // Build sections with content
-    let sections = tree.iter().map(|node| build_section(node, doc)).collect();
+    let lines = doc.heading_lines();
+    let sections = tree
+        .iter()
+        .map(|node| build_section(node, doc, &lines))
+        .collect();
 
     DocumentOutput {
         document: DocumentRoot { metadata, sections },
     }
 }
 
-fn build_section(node: &HeadingNode, doc: &Document) -> Section {
+fn build_section(node: &HeadingNode, doc: &Document, lines: &[usize]) -> Section {
     let heading = &node.heading;
 
     // Extract content for this section
-    let (raw_content, offset, line) = extract_section_content(doc, node.index);
+    let (raw_content, offset, line) = extract_section_content(doc, node.index, lines[node.index]);
 
     // Parse content into blocks
     let blocks = parse_content(&raw_content, line);
@@ -41,7 +45,7 @@ fn build_section(node: &HeadingNode, doc: &Document) -> Section {
     let children = node
         .children
         .iter()
-        .map(|child| build_section(child, doc))
+        .map(|child| build_section(child, doc, lines))
         .collect();
 
     Section {
@@ -64,21 +68,25 @@ fn build_section(node: &HeadingNode, doc: &Document) -> Section {
 /// emitted separately in the `children` array), and shares `Document::body_start`
 /// so CRLF, setext underlines, and EOF headings are handled correctly.
 ///
-/// Returns `(raw_body, body_offset, body_line)`.
-fn extract_section_content(doc: &Document, idx: usize) -> (String, usize, usize) {
+/// Returns `(raw_body, body_offset, body_line)`, given the 1-indexed line the
+/// heading sits on.
+fn extract_section_content(
+    doc: &Document,
+    idx: usize,
+    heading_line: usize,
+) -> (String, usize, usize) {
     let offset = doc.headings[idx].offset;
-
-    // Line number of the heading itself (1-indexed); body starts on the line
-    // after the heading.
-    let line = doc.content[..offset].lines().count() + 1;
-
     let content_start = doc.body_start(idx);
     let end = doc.section_end_any(idx);
+
+    // The body starts on the line after the heading's last line, which for a
+    // setext heading is its underline, two lines down rather than one.
+    let body_line = heading_line + doc.content[offset..content_start].matches('\n').count();
 
     (
         doc.content[content_start..end].trim().to_string(),
         content_start,
-        line + 1,
+        body_line,
     )
 }
 

@@ -180,6 +180,97 @@ fn list_with_text_filter_is_case_insensitive() {
     assert_eq!(stdout.trim(), "## Installation");
 }
 
+/// `-L` used to win outright and drop `--filter`, which the skill recommends
+/// combining.
+#[test]
+fn list_level_and_filter_apply_together() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", "-L", "2", "--filter", "install", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "## Installation\n");
+}
+
+/// A document with no headings is given one for the TUI's outline, but in
+/// CLI output it is a heading the document does not have.
+#[test]
+fn a_document_without_headings_reports_none() {
+    let input = "just text\nmore text\n";
+    let (stdout, _, code) = run_with_stdin(&["-l", "-"], input);
+    assert_eq!((code, stdout.as_str()), (0, ""));
+
+    let (stdout, _, code) = run_with_stdin(&["-q", ".h", "-"], input);
+    assert_eq!((code, stdout.as_str()), (0, ""));
+
+    let (stdout, _, _) = run_with_stdin(&["-q", ".para | text", "-"], input);
+    assert_eq!(stdout, "just text more text\n");
+}
+
+/// A byte order mark in front of the first `#` hid that heading.
+#[test]
+fn a_byte_order_mark_does_not_hide_the_first_heading() {
+    let input = "\u{feff}# BOM Title\n\ntext\n\n## Second\n";
+    let (stdout, _, code) = run_with_stdin(&["-l", "-n", "-"], input);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "# BOM Title [1-5]\n## Second [5-5]\n");
+}
+
+/// `-n`, tql's `.line`, and a heading that does not start its line. `.line`
+/// counted `lines()` over the prefix, which includes the partial `> ` line.
+#[test]
+fn heading_lines_agree_between_list_and_query() {
+    let input = "# Title\n\n> # quoted\n\nSetext\n======\nbody\n";
+    let (listed, _, _) = run_with_stdin(&["-l", "-n", "-"], input);
+    let (queried, _, _) = run_with_stdin(&["-q", ".h | .line", "-"], input);
+    assert_eq!(listed, "# Title [1-2]\n# quoted [3-4]\n# Setext [5-7]\n");
+    assert_eq!(queried, "1\n3\n5\n");
+}
+
+#[test]
+fn query_output_accepts_the_documented_jsonp_alias() {
+    let f = fixture_file();
+    let (stdout, stderr, code) = run(&[
+        "-q",
+        ".h1 | text",
+        "--query-output",
+        "jsonp",
+        f.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "\"Title\"");
+}
+
+/// Writing into a pipe whose reader has gone, as with `| head -1`, used to
+/// panic with "failed printing to stdout". It has to end quietly instead.
+#[cfg(unix)]
+#[test]
+fn a_closed_pipe_ends_output_without_a_panic() {
+    let input: String = (0..20_000).map(|i| format!("## h{i}\n")).collect();
+    let mut child = Command::new(bin())
+        .args(["-l", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn treemd");
+    let mut stdin = child.stdin.take().expect("stdin");
+    std::thread::spawn(move || {
+        let _ = stdin.write_all(input.as_bytes());
+    });
+    // Read one line, then close our end, as `head -1` does.
+    {
+        use std::io::BufRead;
+        let stdout = child.stdout.take().expect("stdout");
+        let mut first = String::new();
+        std::io::BufReader::new(stdout)
+            .read_line(&mut first)
+            .expect("read");
+        assert_eq!(first, "## h0\n");
+    }
+    let out = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "stderr: {stderr}");
+}
+
 #[test]
 fn list_json_output_is_valid_and_has_expected_shape() {
     let f = fixture_file();

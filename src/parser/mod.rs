@@ -52,12 +52,19 @@ pub fn parse_file(path: &Path) -> std::io::Result<Document> {
 ///
 /// A `Document` containing the content and extracted headings with byte offsets.
 pub fn parse_markdown(content: &str) -> Document {
-    let headings = turbovault_parser::parse_headings(content)
+    // A UTF-8 byte order mark is not markdown, and left in place it sits in
+    // front of the first `#`, which then no longer opens a heading. Parse
+    // past it, but keep it in the content so offsets still index the file
+    // and an edit written back leaves it where it was.
+    let body = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let bom_len = content.len() - body.len();
+
+    let headings = turbovault_parser::parse_headings(body)
         .into_iter()
         .map(|h| Heading {
             level: h.level as usize,
             text: h.text,
-            offset: h.position.offset,
+            offset: h.position.offset + bom_len,
             source_len: h.position.length,
         })
         .collect();
@@ -89,6 +96,21 @@ End"#;
         assert_eq!(doc.headings[0].text, "Title");
         assert_eq!(doc.headings[1].level, 2);
         assert_eq!(doc.headings[1].text, "Section 1");
+    }
+
+    /// A byte order mark in front of the first heading hid it entirely, so
+    /// `-l` dropped it and `-s` could not find it.
+    #[test]
+    fn a_byte_order_mark_does_not_hide_the_first_heading() {
+        let md = "\u{feff}# BOM Title\n\ntext\n\n## Second\n";
+        let doc = parse_markdown(md);
+        let texts: Vec<_> = doc.headings.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, ["BOM Title", "Second"]);
+
+        // Offsets still index the content as given, BOM included.
+        assert!(doc.content[doc.headings[0].offset..].starts_with("# BOM Title"));
+        assert!(doc.content[doc.headings[1].offset..].starts_with("## Second"));
+        assert!(doc.content.starts_with('\u{feff}'));
     }
 
     #[test]
