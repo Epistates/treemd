@@ -178,6 +178,21 @@ impl PaletteCommand {
     }
 }
 
+/// The link root for a document at `path`: the enclosing git work tree if
+/// there is one, otherwise the document's own directory. See
+/// [`App::confine_link_path`].
+fn link_root_for(path: &std::path::Path) -> PathBuf {
+    let dir = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    dir.ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or(dir)
+}
+
 /// Whether a link from a document may be handed to the system opener: web
 /// links only. Every place that opens a URL checks this one.
 fn is_openable_url(url: &str) -> bool {
@@ -586,6 +601,10 @@ pub struct App {
     /// disk against this first, so an edit made elsewhere since then is not
     /// silently overwritten by the in-memory copy.
     disk_hash: u64,
+    /// Where links may lead: the document's git work tree, or the directory
+    /// treemd was opened on. Set when a document is opened deliberately (at
+    /// startup or from the file picker), not when a link is followed.
+    link_root: PathBuf,
     pub links_in_view: Vec<Link>, // Links in currently displayed content
     pub link_picker: LinkPickerState,
 
@@ -800,6 +819,7 @@ impl App {
         let picker = images_enabled.then(Self::init_picker).flatten();
         let image_worker = picker.as_ref().map(|_| ImageWorker::new());
         let disk_hash = content_hash(document.content.as_bytes());
+        let link_root = link_root_for(&file_path);
 
         Self {
             document,
@@ -848,6 +868,7 @@ impl App {
             file_path_changed: false,
             suppress_file_watch: false,
             disk_hash,
+            link_root,
             links_in_view: Vec::new(),
             link_picker: LinkPickerState::default(),
 
@@ -4876,6 +4897,7 @@ impl App {
             .to_string();
 
         self.load_document(document, filename, file_path);
+        self.link_root = link_root_for(&self.current_file_path);
 
         // Exit picker mode
         self.mode = AppMode::Normal;
@@ -5108,73 +5130,72 @@ impl App {
         self.load_file_internal(relative_path, anchor)
     }
 
-    /// Where a link to `relative` lands, if that stays inside the current
-    /// document's directory. Every link to a file goes through this, whether
-    /// it opens the file, hands it to the editor, or creates it.
+    /// Where a link to `relative` lands, if that stays under the link root.
+    /// Every link to a file goes through this, whether it opens the file,
+    /// hands it to the editor, or creates it.
     ///
-    /// An absolute path, a root or drive prefix, `..`, and a symlink as the
-    /// final component are refused, as before. Then the landing point is
-    /// judged by where it really is on disk: the deepest part of it that
-    /// exists is resolved through any symlinks and has to sit under the
-    /// document's directory. Checking only the full path let a target that
-    /// did not exist yet through, so with `docs` a symlink out of the
-    /// repository, creating `docs/new.md` wrote wherever `docs` pointed. And
-    /// a link to an existing non-markdown file skipped the checks entirely,
-    /// so `[x](/etc/hosts)` opened in the editor.
+    /// The link root is the git work tree the document belongs to, or the
+    /// directory treemd was opened on when there is none, so `../README.md`
+    /// from `docs/guide.md` works the way it does on GitHub. A leading `/`
+    /// is relative to that root, as GitHub reads it too. A drive or UNC
+    /// prefix is refused.
+    ///
+    /// The link is resolved one component at a time against the real
+    /// filesystem: a component that exists is canonicalized, so a symlink is
+    /// judged by where it points, and `..` steps up from that real location,
+    /// as the OS resolves it. A component that does not exist yet is kept as
+    /// written, for a file about to be created. The result has to sit under
+    /// the root. Judging only the full path let a target that did not exist
+    /// yet through, so with `docs` a symlink out of the repository, creating
+    /// `docs/new.md` wrote wherever `docs` pointed.
     fn confine_link_path(&self, relative: &std::path::Path) -> Result<PathBuf, String> {
         use std::path::{Component, Path};
 
-        if relative
-            .components()
-            .any(|c| matches!(c, Component::ParentDir))
-        {
-            return Err("Path traversal (..) is not allowed for security reasons".to_string());
-        }
-        if relative.is_absolute()
-            || relative
-                .components()
-                .any(|c| matches!(c, Component::RootDir | Component::Prefix(_)))
-        {
-            return Err("Absolute paths are not allowed for security reasons".to_string());
-        }
+        let outside = || "Path escapes the document's directory tree".to_string();
 
         // A stdin or fetched document has no directory of its own; its links
-        // resolve against the working directory, inside the same boundary.
+        // resolve against the working directory.
         let base = self
             .current_file_path
             .parent()
             .filter(|dir| !dir.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        let base_real = base
-            .canonicalize()
-            .map_err(|e| format!("Cannot resolve the document's directory: {e}"))?;
-        let target = base.join(relative);
+        let mut resolved = if relative.has_root() {
+            self.link_root.clone()
+        } else {
+            base.canonicalize()
+                .map_err(|e| format!("Cannot resolve the document's directory: {e}"))?
+        };
 
-        if target.is_symlink() {
-            return Err("Symlinks are not allowed for security reasons".to_string());
-        }
-
-        // `symlink_metadata` rather than `exists`, so a dangling symlink
-        // counts as present and then fails to resolve, instead of being
-        // stepped over and later written through to wherever it points.
-        let mut existing = target.as_path();
-        while existing.symlink_metadata().is_err() {
-            match existing.parent() {
-                Some(parent) if !parent.as_os_str().is_empty() => existing = parent,
-                _ => {
-                    existing = base;
-                    break;
+        for component in relative.components() {
+            match component {
+                Component::RootDir | Component::CurDir => {}
+                Component::Prefix(_) => {
+                    return Err("Absolute paths are not allowed for security reasons".to_string());
+                }
+                Component::ParentDir => {
+                    if !resolved.pop() {
+                        return Err(outside());
+                    }
+                }
+                Component::Normal(name) => {
+                    resolved.push(name);
+                    // `symlink_metadata` rather than `exists`, so a dangling
+                    // symlink counts as present and then fails to resolve,
+                    // instead of being written through later.
+                    if resolved.symlink_metadata().is_ok() {
+                        resolved = resolved
+                            .canonicalize()
+                            .map_err(|_| "Link target cannot be resolved".to_string())?;
+                    }
                 }
             }
         }
-        let existing_real = existing
-            .canonicalize()
-            .map_err(|_| "Link target cannot be resolved".to_string())?;
-        if !existing_real.starts_with(&base_real) {
-            return Err("Path escapes document directory boundary".to_string());
-        }
 
-        Ok(target)
+        if !resolved.starts_with(&self.link_root) {
+            return Err(outside());
+        }
+        Ok(resolved)
     }
 
     /// Internal file loading - skips unsaved changes check
@@ -6670,12 +6691,43 @@ mod link_boundary_tests {
     }
 
     #[test]
-    fn absolute_and_parent_links_are_refused() {
+    fn links_cannot_leave_the_link_root() {
         let dir = tempfile::tempdir().unwrap();
-        let app = app_in(&dir.path().canonicalize().unwrap());
-        assert!(app.confine_link_path(Path::new("/etc/hosts")).is_err());
+        let root = dir.path().canonicalize().unwrap();
+        let app = app_in(&root);
+        // No git tree here, so the root is the document's directory.
         assert!(app.confine_link_path(Path::new("../secret.txt")).is_err());
         assert!(app.confine_link_path(Path::new("a/../../b")).is_err());
+        // A leading `/` is relative to the root, never the filesystem's.
+        assert_eq!(
+            app.confine_link_path(Path::new("/etc/hosts")).unwrap(),
+            root.join("etc/hosts")
+        );
+    }
+
+    /// `../README.md` from a document in a subdirectory is the ordinary
+    /// way a repository's docs link back up, and was refused outright.
+    #[test]
+    fn a_link_may_climb_within_its_git_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        std::fs::write(root.join("README.md"), "# r\n").unwrap();
+        let app = app_in(&root.join("docs"));
+
+        assert_eq!(
+            app.confine_link_path(Path::new("../README.md")).unwrap(),
+            root.join("README.md")
+        );
+        assert_eq!(
+            app.confine_link_path(Path::new("/README.md")).unwrap(),
+            root.join("README.md")
+        );
+        assert!(
+            app.confine_link_path(Path::new("../../outside.md"))
+                .is_err()
+        );
     }
 
     /// The link used to be checked only once it existed, so a file that did
@@ -6707,8 +6759,15 @@ mod link_boundary_tests {
         let mut app = app_in(&dir.path().canonicalize().unwrap());
 
         assert!(
-            app.resolve_relative_file_link(&PathBuf::from("/etc/hosts"), &None)
+            app.resolve_relative_file_link(&PathBuf::from("../secret.txt"), &None)
                 .is_err()
+        );
+        // Root-relative, so never the real /etc/hosts.
+        let _ = app.resolve_relative_file_link(&PathBuf::from("/etc/hosts"), &None);
+        assert!(
+            app.pending_editor_file
+                .as_deref()
+                .is_none_or(|p| p != Path::new("/etc/hosts"))
         );
         assert!(app.pending_editor_file.is_none());
     }
