@@ -2881,6 +2881,7 @@ dependencies = [
  "notify",
  "open",
  "opensesame",
+ "pulldown-cmark",
  "ratatui",
  "ratatui-image",
  "regex",

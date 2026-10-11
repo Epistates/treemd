@@ -45,6 +45,10 @@ unicode-width = "0.2"
 
 # Turbovault integration - OFM parsing with code-block awareness
 turbovault-parser = "3.2.0"
+# The parser turbovault-parser is built on, used directly only to locate a
+# table's source range for in-place cell edits, which turbovault's blocks
+# do not carry. Same version line, so it is one copy in the build.
+pulldown-cmark = { version = "0.13", default-features = false }
 
 # Serialization for JSON output
 serde = { version = "1.0", features = ["derive"] }

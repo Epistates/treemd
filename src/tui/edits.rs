@@ -7,6 +7,8 @@
 //! newline, and they are code-fence aware so edits never land inside fenced
 //! code blocks that merely look like tables or task lists.
 
+use std::ops::Range;
+
 /// Tracks fenced code blocks (``` or ~~~) while scanning lines.
 #[derive(Default)]
 struct FenceTracker {
@@ -63,73 +65,157 @@ fn split_lines_keep_endings(content: &str) -> Vec<(&str, &str)> {
         .collect()
 }
 
-/// Split a table row on unescaped `|` characters, returning the segments
-/// between pipes. `\|` (an escaped pipe inside a cell) does not split.
-fn split_row_segments(line: &str) -> Vec<String> {
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut backslashes = 0usize;
+/// Byte ranges of the top-level tables in `markdown`, in document order.
+///
+/// Located by pulldown-cmark, the parser turbovault-parser runs, with the
+/// same options, so what counts as a table here is what counted as one when
+/// the user selected it: pipe-less rows (`a | b`) included, a table nested in
+/// a list item or a quote excluded, a fence that merely looks like one
+/// skipped. Re-detecting tables with a line heuristic disagreed with the
+/// parser on all three, and an index from one applied to the other edited a
+/// different table.
+fn top_level_tables(markdown: &str) -> Vec<Range<usize>> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
 
-    for ch in line.chars() {
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let mut depth = 0usize;
+    let mut tables = Vec::new();
+    for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Table(_)) if depth == 0 => {
+                tables.push(range);
+                depth += 1;
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    tables
+}
+
+/// Byte ranges of the cells in one table row, between its unescaped pipes,
+/// for rows written with or without outer pipes. `\|` does not split.
+fn cell_spans(line: &str) -> Vec<Range<usize>> {
+    let mut pipes = Vec::new();
+    let mut backslashes = 0usize;
+    for (i, ch) in line.char_indices() {
         if ch == '|' && backslashes.is_multiple_of(2) {
-            segments.push(std::mem::take(&mut current));
-        } else {
-            current.push(ch);
+            pipes.push(i);
         }
         backslashes = if ch == '\\' { backslashes + 1 } else { 0 };
     }
-    segments.push(current);
-    segments
-}
 
-/// True if a table line is a header/body separator row like `| --- | :-: |`.
-fn is_separator_row(line: &str) -> bool {
-    let trimmed = line.trim();
-    let segments = split_row_segments(trimmed);
-    // Drop the empty segments produced by the leading/trailing pipes
-    let cells: Vec<&str> = segments
-        .iter()
-        .map(|s| s.trim())
-        .skip(1)
-        .take(segments.len().saturating_sub(2))
-        .collect();
-
-    !cells.is_empty()
-        && cells.iter().all(|cell| {
-            let body = cell
-                .strip_prefix(':')
-                .unwrap_or(cell)
-                .strip_suffix(':')
-                .unwrap_or_else(|| cell.strip_prefix(':').unwrap_or(cell));
-            !body.is_empty() && body.chars().all(|c| c == '-')
-        })
-}
-
-/// True if a line (outside code fences) is part of a pipe table.
-fn is_table_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.len() > 1
-}
-
-/// Replace a specific cell in a table row line, respecting escaped pipes.
-/// Returns `None` when `col` is out of range for the row.
-fn replace_cell_in_row(line: &str, col: usize, new_value: &str) -> Option<String> {
-    let mut segments = split_row_segments(line);
-    // Format: | cell0 | cell1 |  →  ["", " cell0 ", " cell1 ", ""]
-    let target = col + 1;
-    if target >= segments.len().saturating_sub(1) {
-        return None;
+    let leading = line.trim_start().starts_with('|');
+    let (mut start, inner) = match pipes.split_first() {
+        Some((&first, rest)) if leading => (first + 1, rest),
+        _ => (0, pipes.as_slice()),
+    };
+    let mut spans = Vec::new();
+    for &pipe in inner {
+        spans.push(start..pipe);
+        start = pipe + 1;
     }
-    segments[target] = format!(" {} ", new_value);
-    Some(segments.join("|"))
+    if !line[start..].trim().is_empty() {
+        spans.push(start..line.len());
+    }
+    spans
 }
 
-/// Replace a table cell in `content`.
+/// Byte offset in `content` where 0-indexed line `line` starts.
+fn line_start(content: &str, line: usize) -> Option<usize> {
+    if line == 0 {
+        return Some(0);
+    }
+    content
+        .match_indices('\n')
+        .nth(line - 1)
+        .map(|(i, _)| i + 1)
+}
+
+/// The byte range in `content` of one cell's source text, between its pipes,
+/// surrounding spaces included.
 ///
-/// Tables are counted starting at `section_start_line` (0-indexed); fenced
-/// code blocks anywhere in the document are skipped. `table_index` is the
-/// 0-based table index *within the section*, `row` 0 is the header row
-/// (separator rows are not counted), `col` is the 0-based column.
+/// `table_index` is the 0-based top-level table counting from line
+/// `section_start_line` (0-indexed), `row` 0 is the header row and the
+/// delimiter row is not counted, `col` is 0-based.
+fn locate_table_cell(
+    content: &str,
+    section_start_line: usize,
+    table_index: usize,
+    row: usize,
+    col: usize,
+) -> Result<Range<usize>, String> {
+    let section_start = line_start(content, section_start_line)
+        .ok_or_else(|| format!("Line {section_start_line} is past the end of the document"))?;
+    let section = &content[section_start..];
+    let table = top_level_tables(section)
+        .into_iter()
+        .nth(table_index)
+        .ok_or_else(|| format!("Table {table_index} not found"))?;
+
+    // Row 0 is the header, line 1 the delimiter row, then the body rows.
+    let line_number = if row == 0 { 0 } else { row + 1 };
+    let mut offset = section_start + table.start;
+    let (line, line_offset) = content[offset..section_start + table.end]
+        .split_inclusive('\n')
+        .map(|segment| {
+            let at = offset;
+            offset += segment.len();
+            (segment.trim_end_matches(['\n', '\r']), at)
+        })
+        .nth(line_number)
+        .ok_or_else(|| format!("Row {row} not found in table {table_index}"))?;
+
+    let span = cell_spans(line)
+        .into_iter()
+        .nth(col)
+        .ok_or_else(|| format!("Column {col} out of range in table {table_index} row {row}"))?;
+    Ok(line_offset + span.start..line_offset + span.end)
+}
+
+/// The source text of one table cell, exactly as written between its pipes:
+/// formatting, escapes and surrounding spaces included. See
+/// [`replace_table_cell`] for how the cell is addressed.
+pub fn table_cell_source(
+    content: &str,
+    section_start_line: usize,
+    table_index: usize,
+    row: usize,
+    col: usize,
+) -> Result<String, String> {
+    locate_table_cell(content, section_start_line, table_index, row, col)
+        .map(|range| content[range].to_string())
+}
+
+/// Replace one table cell's source with `source`, verbatim. Undo uses this
+/// with what [`table_cell_source`] returned, so the cell comes back byte for
+/// byte, escapes and formatting included.
+pub fn replace_table_cell_source(
+    content: &str,
+    section_start_line: usize,
+    table_index: usize,
+    row: usize,
+    col: usize,
+    source: &str,
+) -> Result<String, String> {
+    let range = locate_table_cell(content, section_start_line, table_index, row, col)?;
+    let mut out = String::with_capacity(content.len() + source.len());
+    out.push_str(&content[..range.start]);
+    out.push_str(source);
+    out.push_str(&content[range.end..]);
+    Ok(out)
+}
+
+/// Replace a table cell in `content` with `new_value`, padded by a space on
+/// each side.
+///
+/// Tables are counted from `section_start_line` (0-indexed), top-level ones
+/// only, the way the parser reports them; fenced code is never a table.
+/// `table_index` is the 0-based table *within the section*, `row` 0 is the
+/// header row (the delimiter row is not counted), `col` is the 0-based
+/// column. `new_value` must already have its pipes escaped.
 pub fn replace_table_cell(
     content: &str,
     section_start_line: usize,
@@ -138,80 +224,14 @@ pub fn replace_table_cell(
     col: usize,
     new_value: &str,
 ) -> Result<String, String> {
-    let lines = split_lines_keep_endings(content);
-    let mut out = String::with_capacity(content.len() + new_value.len());
-    let mut fences = FenceTracker::default();
-    let mut in_table = false;
-    let mut table_row_idx = 0usize;
-    // Counts tables seen from section_start_line onward; starts "one before"
-    // so the first table found becomes index 0.
-    let mut current_table: Option<usize> = None;
-    let mut modified = false;
-
-    for (idx, (text, ending)) in lines.iter().enumerate() {
-        let in_fence = fences.feed(text);
-        let pipe_line = !in_fence && idx >= section_start_line && is_table_line(text);
-
-        if pipe_line {
-            if !in_table {
-                // A pipe-delimited block is only a GFM table when its header
-                // row is immediately followed by a delimiter row. This mirrors
-                // the parser used to compute `table_index`, so the two never
-                // disagree on what counts as a table; bare `|a|b|` blocks are
-                // emitted as plain content.
-                let is_real_table = lines
-                    .get(idx + 1)
-                    .map(|(next, _)| is_table_line(next) && is_separator_row(next))
-                    .unwrap_or(false);
-                if !is_real_table {
-                    out.push_str(text);
-                    out.push_str(ending);
-                    continue;
-                }
-                in_table = true;
-                table_row_idx = 0;
-                current_table = Some(current_table.map_or(0, |t| t + 1));
-            }
-
-            if is_separator_row(text) {
-                out.push_str(text);
-                out.push_str(ending);
-                continue;
-            }
-
-            if !modified && current_table == Some(table_index) && table_row_idx == row {
-                match replace_cell_in_row(text, col, new_value) {
-                    Some(new_line) => {
-                        out.push_str(&new_line);
-                        modified = true;
-                    }
-                    None => {
-                        return Err(format!(
-                            "Column {} out of range in table {} row {}",
-                            col, table_index, row
-                        ));
-                    }
-                }
-            } else {
-                out.push_str(text);
-            }
-            out.push_str(ending);
-            table_row_idx += 1;
-        } else {
-            in_table = false;
-            out.push_str(text);
-            out.push_str(ending);
-        }
-    }
-
-    if modified {
-        Ok(out)
-    } else {
-        Err(format!(
-            "Table {} not found or row {} not found",
-            table_index, row
-        ))
-    }
+    replace_table_cell_source(
+        content,
+        section_start_line,
+        table_index,
+        row,
+        col,
+        &format!(" {new_value} "),
+    )
 }
 
 /// A task-list line parsed into its components.
@@ -502,11 +522,64 @@ mod tests {
         assert!(err.contains("out of range"));
     }
 
+    /// The parser counts a table without outer pipes, and a table nested in
+    /// a list item is not a top-level table. A line heuristic disagreed on
+    /// both, so the index the app computed from the parser edited a
+    /// different table.
     #[test]
-    fn separator_detection() {
-        assert!(is_separator_row("| --- | --- |"));
-        assert!(is_separator_row("| :-: | ---: |"));
-        assert!(!is_separator_row("| a --- b | c |"));
-        assert!(!is_separator_row("| |"));
+    fn tables_are_counted_the_way_the_parser_counts_them() {
+        let content = "\
+# S
+
+a | b
+--|--
+1 | 2
+
+- item
+
+  | in | list |
+  |----|------|
+  | x  | y    |
+
+| C | D |
+|---|---|
+| 3 | 4 |
+";
+        // Table 1 is `| C | D |`: the pipe-less one is table 0, and the one
+        // inside the list item is not counted.
+        let out = replace_table_cell(content, 0, 1, 1, 0, "EDITED").unwrap();
+        assert!(out.contains("| EDITED | 4 |"), "{out}");
+        assert!(out.contains("1 | 2"));
+        assert!(out.contains("| x  | y    |"));
+
+        // And the pipe-less table edits in place.
+        let out = replace_table_cell(content, 0, 0, 1, 1, "Z").unwrap();
+        assert!(out.contains("\n1 | Z \n"), "{out}");
+    }
+
+    /// Undo restores a cell from its source text, byte for byte. Restoring
+    /// the parser's text instead dropped an escaped pipe's backslash and
+    /// split the cell in two.
+    #[test]
+    fn a_cell_round_trips_through_its_source() {
+        let content = "| A | B |\n|---|---|\n| x \\| y | **bold** |\n";
+        let original = table_cell_source(content, 0, 0, 1, 0).unwrap();
+        assert_eq!(original, " x \\| y ");
+        assert_eq!(
+            table_cell_source(content, 0, 0, 1, 1).unwrap(),
+            " **bold** "
+        );
+
+        let edited = replace_table_cell(content, 0, 0, 1, 0, "new").unwrap();
+        let restored = replace_table_cell_source(&edited, 0, 0, 1, 0, &original).unwrap();
+        assert_eq!(restored, content);
+    }
+
+    #[test]
+    fn a_fence_that_looks_like_a_table_is_not_one() {
+        let content = "```\n| A | B |\n|---|---|\n| 1 | 2 |\n```\n\n| C |\n|---|\n| 3 |\n";
+        let out = replace_table_cell(content, 0, 0, 1, 0, "X").unwrap();
+        assert!(out.contains("| 1 | 2 |"));
+        assert!(out.contains("| X |"));
     }
 }
