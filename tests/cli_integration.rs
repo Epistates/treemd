@@ -225,6 +225,20 @@ fn heading_lines_agree_between_list_and_query() {
     assert_eq!(queried, "1\n3\n5\n");
 }
 
+/// JSON output is one array whatever the count, `[]` when nothing
+/// matched, while plain output prints nothing then, as jq does.
+#[test]
+fn an_empty_query_result_is_an_empty_json_array() {
+    let f = fixture_file();
+    let path = f.to_str().unwrap();
+    let (stdout, _, code) = run(&["-q", ".h6", "--query-output", "json", path]);
+    assert_eq!((code, stdout.trim()), (0, "[]"));
+    let (stdout, _, code) = run(&["-q", ".h6", "--query-output", "jsonl", path]);
+    assert_eq!((code, stdout.as_str()), (0, ""));
+    let (stdout, _, code) = run(&["-q", ".h6", path]);
+    assert_eq!((code, stdout.as_str()), (0, ""));
+}
+
 #[test]
 fn query_output_accepts_the_documented_jsonp_alias() {
     let f = fixture_file();
