@@ -121,6 +121,9 @@ impl ContentView {
     }
 }
 
+/// Columns between tab stops.
+const TAB_WIDTH: usize = 4;
+
 /// One grapheme of a line, with the style of the span it came from.
 struct Cell<'a> {
     text: &'a str,
@@ -147,14 +150,36 @@ fn wrap_line(line: Line<'static>, width: u16) -> Vec<(Line<'static>, usize)> {
 
     let mut cells = Vec::new();
     let mut offset = 0;
+    let mut column = 0;
+    let mut has_tab = false;
     for span in &spans {
         for grapheme in span.content.graphemes(true) {
+            // A tab is a control character, which the terminal buffer drops,
+            // so outside code (which expands its own) tabs vanished from the
+            // text. It becomes spaces to the next stop.
+            if grapheme == "\t" {
+                has_tab = true;
+                let stop = TAB_WIDTH - column % TAB_WIDTH;
+                for _ in 0..stop {
+                    cells.push(Cell {
+                        text: " ",
+                        width: 1,
+                        style: span.style,
+                        offset,
+                    });
+                }
+                column += stop;
+                offset += grapheme.len();
+                continue;
+            }
+            let width = grapheme.width();
             cells.push(Cell {
                 text: grapheme,
-                width: grapheme.width(),
+                width,
                 style: span.style,
                 offset,
             });
+            column += width;
             offset += grapheme.len();
         }
     }
@@ -175,10 +200,13 @@ fn wrap_line(line: Line<'static>, width: u16) -> Vec<(Line<'static>, usize)> {
     };
 
     let total: usize = cells.iter().map(|cell| cell.width).sum();
-    if width == 0 || total <= width {
+    if !has_tab && (width == 0 || total <= width) {
         let mut whole = Line::from(spans).style(line_style);
         whole.alignment = alignment;
         return vec![(whole, 0)];
+    }
+    if width == 0 || total <= width {
+        return vec![(build(&cells), 0)];
     }
 
     let mut rows = Vec::new();
@@ -241,6 +269,12 @@ mod tests {
         assert_eq!(view.line_rows, [0, 2, 3]);
         // Every row fits.
         assert!(view.rows.iter().all(|row| row.width() <= 11));
+    }
+
+    #[test]
+    fn tabs_become_spaces_to_the_next_stop() {
+        let view = ContentView::new(vec![Line::from("a\tb\t\tc")], 40, vec![0]);
+        assert_eq!(text(&view.rows[0]), "a   b       c");
     }
 
     #[test]

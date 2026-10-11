@@ -1,7 +1,6 @@
 use crate::config::Config;
 use crate::keybindings::{Action, KeybindingMode, Keybindings};
 use crate::parser::{Document, HeadingNode, Link, extract_links};
-use crate::tui::help_text;
 use crate::tui::image_cache::{AsyncProtocol, ImageWorker, StreamingGif};
 use crate::tui::interactive::{ElementType, InteractiveState};
 use crate::tui::iterm_animation;
@@ -557,6 +556,10 @@ pub struct App {
     pub content_viewport_height: u16, // Actual viewport height for scroll calculations
     pub show_help: bool,
     pub help_scroll: u16,
+    /// The help popup's last scroll position and page height, in rows, as
+    /// laid out by the frame that drew it.
+    pub(crate) help_max_scroll: u16,
+    pub(crate) help_page: u16,
     pub show_search: bool,
     pub outline_search_active: bool, // Whether search input is active (cursor visible)
     pub search_query: String,
@@ -849,6 +852,8 @@ impl App {
             content_viewport_height: 20, // Default, will be updated by UI on first render
             show_help: false,
             help_scroll: 0,
+            help_max_scroll: u16::MAX,
+            help_page: 1,
             show_search: false,
             outline_search_active: false,
             search_query: String::new(),
@@ -2475,13 +2480,19 @@ impl App {
         self.status_message_time = Some(Instant::now());
     }
 
-    /// Clear status message if it has expired
-    pub fn clear_expired_status_message(&mut self) {
+    /// How long a timed status message has left, zero once it has expired,
+    /// or `None` when there is no timed message.
+    pub fn status_message_expires_in(&self) -> Option<Duration> {
         const STATUS_MESSAGE_TIMEOUT: Duration = Duration::from_secs(3);
 
-        if let Some(time) = self.status_message_time
-            && time.elapsed() >= STATUS_MESSAGE_TIMEOUT
-        {
+        self.status_message.as_ref()?;
+        self.status_message_time
+            .map(|time| STATUS_MESSAGE_TIMEOUT.saturating_sub(time.elapsed()))
+    }
+
+    /// Clear status message if it has expired
+    pub fn clear_expired_status_message(&mut self) {
+        if self.status_message_expires_in() == Some(Duration::ZERO) {
             self.status_message = None;
             self.status_message_time = None;
         }
@@ -2996,11 +3007,7 @@ impl App {
     }
 
     pub fn scroll_help_down(&mut self) {
-        let new_scroll = self.help_scroll.saturating_add(1);
-        let max_scroll = help_text::HELP_LINES.len() as u16;
-        if new_scroll < max_scroll {
-            self.help_scroll = new_scroll;
-        }
+        self.help_scroll = self.help_scroll.saturating_add(1).min(self.help_max_scroll);
     }
 
     pub fn scroll_help_up(&mut self) {
@@ -3009,17 +3016,16 @@ impl App {
 
     /// Scroll help popup down by a page
     pub fn scroll_help_page_down(&mut self) {
-        let page_size = self.content_viewport_height.saturating_sub(2).max(1);
-        let new_scroll = self.help_scroll.saturating_add(page_size);
-        let max_scroll = help_text::HELP_LINES.len() as u16;
-        if new_scroll < max_scroll {
-            self.help_scroll = new_scroll;
-        }
+        let page_size = self.help_page.saturating_sub(1).max(1);
+        self.help_scroll = self
+            .help_scroll
+            .saturating_add(page_size)
+            .min(self.help_max_scroll);
     }
 
     /// Scroll help popup up by a page
     pub fn scroll_help_page_up(&mut self) {
-        let page_size = self.content_viewport_height.saturating_sub(2).max(1);
+        let page_size = self.help_page.saturating_sub(1).max(1);
         self.help_scroll = self.help_scroll.saturating_sub(page_size);
     }
 

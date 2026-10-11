@@ -17,28 +17,39 @@ use ratatui::widgets::{
 use super::util::popup_area;
 
 /// Render the help popup with keyboard shortcuts
-pub fn render_help_popup(frame: &mut Frame, app: &App, area: Rect) {
+pub fn render_help_popup(frame: &mut Frame, app: &mut App, area: Rect) {
     // Min 40 cols for readability, min 10 rows for usable scroll area
     let popup_area = popup_area(area, 70, 80, 40, 10);
-    let theme = &app.theme;
-    let keybindings = &app.keybindings;
+    let theme = app.theme.clone();
 
     // Clear the area
     frame.render_widget(Clear, popup_area);
 
-    let help_lines = help_text::build_help_text(keybindings, theme);
-    let help_text_len = help_lines.len();
+    // Wrapped to the popup here, so the scroll limit and page size are the
+    // rows actually drawn. They were the number of unwrapped help lines and
+    // the content pane's height, so scrolling stopped short of the end, or
+    // ran past it, depending on the terminal and the keybindings.
+    let help_lines = help_text::build_help_text(&app.keybindings, &theme);
+    let visible = usize::from(popup_area.height.saturating_sub(2));
+    let rows = crate::tui::content_view::ContentView::new(
+        help_lines,
+        popup_area.width.saturating_sub(2),
+        Vec::new(),
+    )
+    .rows;
+    let max_scroll = rows.len().saturating_sub(visible);
+    app.help_max_scroll = u16::try_from(max_scroll).unwrap_or(u16::MAX);
+    app.help_page = u16::try_from(visible.max(1)).unwrap_or(u16::MAX);
+    app.help_scroll = app.help_scroll.min(app.help_max_scroll);
+    let scroll = usize::from(app.help_scroll);
 
-    let paragraph = Paragraph::new(help_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.modal_border()))
-                .title(" Help ")
-                .style(Style::default().bg(theme.modal_bg())),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((app.help_scroll, 0));
+    let paragraph = Paragraph::new(rows[scroll..].to_vec()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.modal_border()))
+            .title(" Help ")
+            .style(Style::default().bg(theme.modal_bg())),
+    );
 
     frame.render_widget(paragraph, popup_area);
 
@@ -50,7 +61,7 @@ pub fn render_help_popup(frame: &mut Frame, app: &App, area: Rect) {
         .track_symbol(Some("│"))
         .style(Style::default().fg(theme.modal_border()));
 
-    let mut scrollbar_state = ScrollbarState::new(help_text_len).position(app.help_scroll as usize);
+    let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll);
 
     frame.render_stateful_widget(
         scrollbar,
