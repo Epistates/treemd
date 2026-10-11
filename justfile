@@ -159,6 +159,11 @@ release-preflight VERSION:
         fail=1
     fi
 
+    if ! cargo publish --dry-run --locked; then
+        echo "cargo publish --dry-run failed"
+        fail=1
+    fi
+
     if [ "$fail" -ne 0 ]; then
         echo
         echo "preflight failed, do not tag"

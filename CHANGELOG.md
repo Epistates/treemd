@@ -72,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Every GitHub Action is pinned to a commit SHA.** A tag such as `@v7` can be moved to different code after the fact, and the release workflow runs with write access and the signing secrets. Dependabot keeps the pins and their version comments current. `cross` is installed with `--locked` too
 - **cargo-deny replaces cargo-audit in CI.** It reads the same RustSec advisories, with no ignores, and also holds dependencies to an allow-list of licenses, to crates.io as the only source, and to no `*` version requirements. `deny.toml` has the rules and `just deny` runs them locally
 - **Every pull request builds the musl binary and runs it on Alpine.** It was only built at release time, after the tag was pushed, so a musl breakage like [#42](https://github.com/Epistates/treemd/issues/42) could only be found in a release. `scripts/smoke-test.sh` checks that a binary starts, reports its version and lists a document's headings exactly
+- **A release builds nothing until CI passes on the tagged commit.** A tag push used to build and publish straight away, whatever state the commit was in, and a tag cannot be re-cut. The release workflow now runs the full CI suite on that commit first, and its preflight and `just release-preflight` both run `cargo publish --dry-run --locked`
 
 ## [0.9.1] - 2026-09-14
 
