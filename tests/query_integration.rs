@@ -151,6 +151,21 @@ fn index_applies_to_each_array_in_a_stream() {
     );
 }
 
+/// `nth(-1e300)` overflowed negating the saturated index (a panic in debug
+/// builds, the first element in release), and any index too far back gave
+/// the first element.
+#[test]
+fn nth_out_of_range_is_empty() {
+    let md = "# X\n";
+    assert_eq!(run(md, "[1, 2, 3] | nth(-1)"), vec!["3"]);
+    assert_eq!(run(md, "[1, 2, 3] | nth(1)"), vec!["2"]);
+    assert!(run(md, "[1, 2, 3] | nth(-4)").is_empty());
+    assert!(run(md, "[1, 2, 3] | nth(-1e300)").is_empty());
+    assert!(run(md, "[1, 2, 3] | nth(1e300)").is_empty());
+    assert_eq!(run(md, "\"abc\" | nth(-1)"), vec!["c"]);
+    assert!(run(md, "\"abc\" | nth(-1e300)").is_empty());
+}
+
 #[test]
 fn array_slice() {
     assert_eq!(run("# X\n", "[10,20,30][0:2]"), vec!["10", "20"]);
