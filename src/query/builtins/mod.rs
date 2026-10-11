@@ -613,39 +613,34 @@ fn fn_skip(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
     }
 }
 
+/// Position `n` within a sequence of `len`, counting from the end when
+/// negative, or `None` when it falls outside.
+///
+/// Worked in f64 throughout: `nth(-1e300)` cast to i64 saturated, and then
+/// negating it overflowed, which panicked in a debug build and wrapped to
+/// the first element in a release one. An index too far back gave the
+/// first element too, through a saturating subtraction.
+fn resolve_index(n: f64, len: usize) -> Option<usize> {
+    let n = n.trunc();
+    let idx = if n < 0.0 { len as f64 + n } else { n };
+    (idx >= 0.0 && idx < len as f64).then_some(idx as usize)
+}
+
 fn fn_nth(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    let n = args
-        .get(1)
-        .and_then(|v| {
-            if let Value::Number(n) = v {
-                Some(*n as i64)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(0);
+    let n = match args.get(1) {
+        Some(Value::Number(n)) => *n,
+        _ => 0.0,
+    };
 
     match input {
-        Value::Array(a) => {
-            let idx = if n < 0 {
-                a.len().saturating_sub((-n) as usize)
-            } else {
-                n as usize
-            };
-            Ok(a.get(idx).cloned().map(|v| vec![v]).unwrap_or_default())
-        }
-        Value::String(s) => {
-            let idx = if n < 0 {
-                s.chars().count().saturating_sub((-n) as usize)
-            } else {
-                n as usize
-            };
-            Ok(s.chars()
-                .nth(idx)
-                .map(|c| vec![Value::String(c.to_string())])
-                .unwrap_or_default())
-        }
+        Value::Array(a) => Ok(resolve_index(n, a.len())
+            .map(|i| vec![a[i].clone()])
+            .unwrap_or_default()),
+        Value::String(s) => Ok(resolve_index(n, s.chars().count())
+            .and_then(|i| s.chars().nth(i))
+            .map(|c| vec![Value::String(c.to_string())])
+            .unwrap_or_default()),
         _ => Ok(vec![]),
     }
 }
