@@ -394,6 +394,13 @@ Download from the [releases page](https://github.com/epistates/treemd/releases):
 
 Each archive holds the binary, named as above without the extension, and `LICENSE`; the `.tar.gz` archives also hold the man page, `treemd.1`. `SHA256SUMS` lists the hash of every archive, and each `treemd-<target>.sha256` is the hash of the binary inside it. The archives are reproducible: the same binaries always produce byte-identical archives.
 
+Each archive also has a signed build provenance attestation, which shows it was built by this repository's release workflow from the tagged commit:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify treemd-x86_64-unknown-linux-gnu.tar.gz --repo Epistates/treemd
+```
+
 **macOS binaries** are signed with Developer ID and notarized by Apple.
 
 ### Building from Source
