@@ -1,0 +1,50 @@
+# cargo-deny configuration. CI runs `cargo deny check` on every push, pull
+# request, and weekly. Run it locally with `just deny`.
+
+[graph]
+# No `targets` list, so every platform's dependencies are checked, not only
+# the host's: the release ships Linux, macOS and Windows binaries.
+all-features = true
+
+[advisories]
+# No ignores. An advisory that does not apply to how treemd uses a crate
+# still gets an explicit entry here with the reason, never a silent pass.
+ignore = []
+# Vulnerabilities fail at any depth. An unmaintained notice fails only for a
+# crate treemd depends on directly, which is the one it can replace; deeper
+# ones (bincode under syntect, ttf-parser under mermaid-rs-renderer today)
+# are for those crates to move off. cargo-audit, which this replaced, only
+# ever warned on unmaintained crates.
+unmaintained = "workspace"
+
+[licenses]
+# The licenses the current dependency tree needs, and no more. A dependency
+# under anything else fails the check until someone reads it and adds it.
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions come from upstream crates moving at different speeds and
+# are nothing this repository can act on, so they are not reported.
+multiple-versions = "allow"
+# A `*` requirement accepts any future release, breaking or not.
+wildcards = "deny"
+
+[sources]
+# crates.io only: no git dependencies and no other registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

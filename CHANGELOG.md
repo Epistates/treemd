@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 
 - **Every GitHub Action is pinned to a commit SHA.** A tag such as `@v7` can be moved to different code after the fact, and the release workflow runs with write access and the signing secrets. Dependabot keeps the pins and their version comments current. `cross` is installed with `--locked` too
+- **cargo-deny replaces cargo-audit in CI.** It reads the same RustSec advisories, with no ignores, and also holds dependencies to an allow-list of licenses, to crates.io as the only source, and to no `*` version requirements. `deny.toml` has the rules and `just deny` runs them locally
 
 ## [0.9.1] - 2026-09-14
 

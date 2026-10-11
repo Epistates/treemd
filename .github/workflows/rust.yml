@@ -98,27 +98,18 @@ jobs:
       - name: Verify crates.io package
         run: cargo package --locked
 
-  audit:
-    name: Security audit
+  # Advisories (the RustSec database cargo-audit reads), licenses, banned
+  # dependency specs and sources, all configured in deny.toml. The action
+  # runs a prebuilt cargo-deny fixed by the pinned SHA, so nothing is
+  # compiled or resolved at run time.
+  deny:
+    name: cargo-deny
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      # audit-check installs cargo-audit itself, unpinned and without
-      # --locked, so a broken publish anywhere in cargo-audit's dependency
-      # tree fails this job with nothing to say about our code. jiff 0.2.36
-      # did exactly that: it shipped `include_str!` paths reaching outside
-      # the crate, so it would not compile at all. Installing first with
-      # --locked resolves through cargo-audit's own lockfile, and the action
-      # then finds it present and skips its own install.
-      - name: Install cargo-audit from its lockfile
-        run: cargo install cargo-audit --locked
-
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          command: check
+          arguments: --all-features --locked

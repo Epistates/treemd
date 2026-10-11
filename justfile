@@ -70,16 +70,20 @@ uninstall:
 update:
     cargo update
 
-# Audit dependencies
+# Check dependencies for security advisories (requires cargo-deny)
 audit:
-    cargo audit
+    cargo deny --locked check advisories
+
+# Check advisories, licenses, banned specs and sources against deny.toml
+deny:
+    cargo deny --locked check
 
 # Show outdated dependencies
 outdated:
     cargo outdated
 
-# Full CI check: format, lint, test, build
-ci: fmt-check lint test test-minimal audit release
+# Full CI check: format, lint, test, dependencies, build
+ci: fmt-check lint test test-minimal deny release
     @echo "✅ All CI checks passed!"
 
 # Quick test of link following feature
