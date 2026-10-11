@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`group_by("level")` and `sort_by("level")` use the named property.** The string was evaluated as a value, the same for every element, so `group_by` put everything in one group and `sort_by` changed nothing. A string argument now names a property, the same as `.level`
 - **An element looks the same in an object as in JSON output.** `{a: .h1[0]} | text` printed the heading with its byte offset and its whole section body and no `type`, from a second serializer that `--query-output json` did not use. Both now print the tagged form, and a number over 2^63 in plain text prints as itself
 - **`[external]`, `[anchor]`, `[relative]` and `[wikilink]` filter text on anything but a link.** They were link-type filters everywhere, so `.h[external]` matched nothing rather than "External APIs". A keyword in brackets, as in `.h[end]`, was a parse error; it is a word to search for like any other
+- **`sort` orders numbers as numbers, and `unique` keeps distinct values.** Both compared values as text, so `[10, 9, 1] | sort` gave `1 10 9` and `[.h] | unique` merged two headings that shared a title. `sort` and `sort_by` now use jq's order (null, booleans, numbers, strings, arrays, objects), and `unique` drops only values that are the same, type included
 
 ### Security
 

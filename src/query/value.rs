@@ -5,6 +5,7 @@
 
 use indexmap::IndexMap;
 use serde::{Serialize, Serializer};
+use std::cmp::Ordering;
 use std::fmt;
 
 /// Runtime value during query evaluation.
@@ -277,6 +278,50 @@ impl Value {
                 "word_count": d.word_count,
             }),
         }
+    }
+
+    /// Total order used by `sort`, `sort_by` and `unique`, after jq's: null,
+    /// then booleans, numbers, strings, arrays, objects, and last the
+    /// document's elements. Numbers compare as numbers and arrays element
+    /// by element, so `[10, 9, 1] | sort` is `1 9 10`.
+    pub fn sort_cmp(&self, other: &Value) -> Ordering {
+        fn rank(v: &Value) -> u8 {
+            match v {
+                Value::Null => 0,
+                Value::Bool(_) => 1,
+                Value::Number(_) => 2,
+                Value::String(_) => 3,
+                Value::Array(_) => 4,
+                Value::Object(_) | Value::FrontMatter(_) => 5,
+                _ => 6,
+            }
+        }
+
+        match (self, other) {
+            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+            (Value::Number(a), Value::Number(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+            (Value::String(a), Value::String(b)) => a.cmp(b),
+            (Value::Array(a), Value::Array(b)) => a
+                .iter()
+                .zip(b)
+                .map(|(x, y)| x.sort_cmp(y))
+                .find(|o| o.is_ne())
+                .unwrap_or_else(|| a.len().cmp(&b.len())),
+            _ => rank(self).cmp(&rank(other)).then_with(|| {
+                // Maps and elements: by text, then by their full JSON so two
+                // values only tie when they are the same value.
+                self.to_text()
+                    .cmp(&other.to_text())
+                    .then_with(|| self.identity_key().cmp(&other.identity_key()))
+            }),
+        }
+    }
+
+    /// A string that two values share exactly when they are the same value,
+    /// type included: their JSON. Two headings with the same text differ by
+    /// line, and `1` differs from `"1"`.
+    pub(crate) fn identity_key(&self) -> String {
+        self.to_json().to_string()
     }
 
     /// Get the length of this value (for arrays, strings, objects).
