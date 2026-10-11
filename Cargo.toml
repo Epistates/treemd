@@ -85,6 +85,9 @@ tempfile = "3.27"
 # Configuration persistence
 dirs = "7.0"
 toml = "1.1"
+# Saving a setting edits that key in the user's file, keeping its comments,
+# layout and anything treemd does not recognize
+toml_edit = "0.25"
 
 # Keybindings system
 keybinds = { version = "0.2", features = ["crossterm", "serde"] }

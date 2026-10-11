@@ -136,7 +136,12 @@ impl Keybindings {
 
             if let Some(config_bindings) = config.0.get(mode) {
                 for (config_key, config_action) in config_bindings {
-                    let config_seq = keybinds::KeySeq::from_str(config_key)?;
+                    // Checked when the config was read, so a key that does
+                    // not parse here is skipped rather than discarding every
+                    // other custom binding with it.
+                    let Ok(config_seq) = keybinds::KeySeq::from_str(config_key) else {
+                        continue;
+                    };
 
                     if let Some(existing) = binding_vec.iter_mut().find(|b| b.seq == config_seq) {
                         existing.action = *config_action;
@@ -310,6 +315,44 @@ pub fn format_key_compact(key: &str) -> String {
 pub struct KeybindingsConfig(pub HashMap<KeybindingMode, HashMap<String, Action>>);
 
 impl KeybindingsConfig {
+    /// Read a `[keybindings]` table entry by entry, keeping every valid
+    /// binding and adding a warning for each mode, key or action that is
+    /// not one. Deserialized whole, one bad entry failed the entire config.
+    pub fn from_toml_lenient(value: toml::Value, warnings: &mut Vec<String>) -> Self {
+        let mut config = HashMap::new();
+        let toml::Value::Table(modes) = value else {
+            warnings.push("[keybindings] is not a table; ignoring it".to_string());
+            return Self(config);
+        };
+        for (mode_name, bindings) in modes {
+            let Ok(mode) = toml::Value::String(mode_name.clone()).try_into::<KeybindingMode>()
+            else {
+                warnings.push(format!("unknown keybinding mode [keybindings.{mode_name}]"));
+                continue;
+            };
+            let toml::Value::Table(bindings) = bindings else {
+                warnings.push(format!("[keybindings.{mode_name}] is not a table"));
+                continue;
+            };
+            let entries: &mut HashMap<String, Action> = config.entry(mode).or_default();
+            for (key, action) in bindings {
+                if keybinds::KeySeq::from_str(&key).is_err() {
+                    warnings.push(format!("[keybindings.{mode_name}] \"{key}\" is not a key"));
+                    continue;
+                }
+                match action.clone().try_into::<Action>() {
+                    Ok(action) => {
+                        entries.insert(key, action);
+                    }
+                    Err(_) => warnings.push(format!(
+                        "[keybindings.{mode_name}] \"{key}\" = {action}: no such action"
+                    )),
+                }
+            }
+        }
+        Self(config)
+    }
+
     /// Convert to Keybindings, using defaults for any missing bindings
     pub fn to_keybindings(&self) -> Keybindings {
         // Falls back to pure defaults if any key is invalid

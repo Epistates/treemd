@@ -824,6 +824,15 @@ impl App {
 
         // Load keybindings from config (before config is moved)
         let keybindings = config.keybindings();
+        // Anything wrong with the config file. It was printed too, but before
+        // the alternate screen, where nobody saw it.
+        let config_warning = config
+            .warnings
+            .first()
+            .map(|first| match config.warnings.len() {
+                1 => format!("⚠ config: {first}"),
+                n => format!("⚠ config: {first} (and {} more)", n - 1),
+            });
 
         // Picker detection must happen after entering the alternate screen.
         // A single worker then services every protocol without blocking draws.
@@ -894,7 +903,7 @@ impl App {
 
             file_history: Vec::new(),
             file_future: Vec::new(),
-            status_message: None,
+            status_message: config_warning,
             status_message_time: None,
 
             // Interactive element navigation

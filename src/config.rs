@@ -11,6 +11,17 @@ pub struct Config {
     #[serde(skip)]
     pub path: Option<PathBuf>,
 
+    /// Problems found loading the file, such as a key or action name that
+    /// does not exist. The TUI shows them, since anything printed before it
+    /// starts is gone behind the alternate screen.
+    #[serde(skip)]
+    pub warnings: Vec<String>,
+
+    /// The settings as loaded, which [`save`](Self::save) compares against to
+    /// write only what changed.
+    #[serde(skip)]
+    baseline: Option<toml::Table>,
+
     #[serde(default)]
     pub ui: UiConfig,
 
@@ -365,6 +376,11 @@ impl Config {
     /// when there is nothing at it yet or it parsed. A file that failed to
     /// parse is still the user's: saving defaults over it the first time they
     /// changed the theme lost every setting in it over one typo.
+    ///
+    /// `[keybindings]` is read entry by entry: a key that does not parse or
+    /// an action that does not exist is skipped with a warning. Read as part
+    /// of the whole file, one such entry failed the parse, so every setting
+    /// fell back to its default over a single misspelled action name.
     fn load_from_path(path: &Path) -> Self {
         let Ok(content) = fs::read_to_string(path) else {
             return Self {
@@ -373,21 +389,49 @@ impl Config {
             };
         };
 
-        match toml::from_str::<Self>(&content) {
-            Ok(config) => Self {
-                path: Some(path.to_path_buf()),
-                ..config
-            },
-            Err(e) => {
-                eprintln!(
-                    "warning: failed to parse config {}: {} (using defaults; \
-                     settings changed this session will not be saved over it)",
-                    path.display(),
-                    e
-                );
-                Self::default()
+        let unparsed = |e: &dyn std::fmt::Display| {
+            let warning = format!(
+                "failed to parse config {}: {} (using defaults; \
+                 settings changed this session will not be saved over it)",
+                path.display(),
+                e
+            );
+            eprintln!("warning: {warning}");
+            Self {
+                warnings: vec![warning],
+                ..Self::default()
             }
+        };
+
+        let mut table = match content.parse::<toml::Table>() {
+            Ok(table) => table,
+            Err(e) => return unparsed(&e),
+        };
+        let keybindings = table.remove("keybindings");
+        let mut config = match toml::Value::Table(table).try_into::<Self>() {
+            Ok(config) => config,
+            Err(e) => return unparsed(&e),
+        };
+
+        let mut warnings = Vec::new();
+        if let Some(keybindings) = keybindings {
+            config.keybindings = KeybindingsConfig::from_toml_lenient(keybindings, &mut warnings);
         }
+        for warning in &warnings {
+            eprintln!("warning: {}: {warning}", path.display());
+        }
+        config.warnings = warnings;
+        config.baseline = config.settings_table().ok();
+        config.path = Some(path.to_path_buf());
+        config
+    }
+
+    /// The settings as a TOML table, without the keybindings, which a save
+    /// never rewrites.
+    fn settings_table(&self) -> Result<toml::Table, toml::ser::Error> {
+        let mut table = toml::Table::try_from(self)?;
+        table.remove("keybindings");
+        Ok(table)
     }
 
     /// Resolve and load the configuration file, falling back to `Default` if any step fails.
@@ -409,7 +453,20 @@ impl Config {
             fs::create_dir_all(parent)?;
         }
 
-        let contents = toml::to_string_pretty(self)?;
+        // Edit the user's file in place where there is one, writing only the
+        // settings that changed since it was loaded. Serializing the whole
+        // config over it dropped every comment and unknown key, and wrote
+        // out every default the user had left unset.
+        let existing = fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok());
+        let contents = match (existing, &self.baseline) {
+            (Some(mut document), Some(baseline)) => {
+                apply_changes(document.as_table_mut(), baseline, &self.settings_table()?)?;
+                document.to_string()
+            }
+            _ => toml::to_string_pretty(self)?,
+        };
         crate::fsutil::write_atomic(path, contents.as_bytes())?;
 
         Ok(())
@@ -477,6 +534,46 @@ impl Config {
             .and_then(|path| path.parent())
             .map(|parent| parent.join("code-themes"))
     }
+}
+
+/// Write into `document` every value of `new` that differs from `baseline`,
+/// recursing into tables, and leave everything else as it is.
+fn apply_changes(
+    document: &mut toml_edit::Table,
+    baseline: &toml::Table,
+    new: &toml::Table,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (key, value) in new {
+        let before = baseline.get(key);
+        if before == Some(value) {
+            continue;
+        }
+        match value {
+            toml::Value::Table(table) => {
+                let empty = toml::Table::new();
+                let before = match before {
+                    Some(toml::Value::Table(before)) => before,
+                    _ => &empty,
+                };
+                if !document.contains_table(key) {
+                    document.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
+                }
+                let section = document[key.as_str()]
+                    .as_table_mut()
+                    .ok_or_else(|| format!("config key `{key}` is not a table"))?;
+                apply_changes(section, before, table)?;
+            }
+            other => {
+                let mut value = other.to_string().parse::<toml_edit::Value>()?;
+                // Keep the spacing and any comment after the old value.
+                if let Some(old) = document.get(key).and_then(toml_edit::Item::as_value) {
+                    *value.decor_mut() = old.decor().clone();
+                }
+                document[key.as_str()] = toml_edit::value(value);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -711,6 +808,56 @@ heading_1 = { rgb = [10, 20, 30] }
         // Cleanup
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    const USER_CONFIG: &str = r#"# my settings
+[ui]
+theme = "Gruvbox" # the good one
+outline_width = 40
+something_new = "kept"
+
+[keybindings.Normal]
+"j" = "Next"
+"x" = "NoSuchAction"
+"Ctrl+Nope" = "Quit"
+"#;
+
+    /// One misspelled action used to fail the whole file, so every setting,
+    /// the theme included, fell back to its default. Each bad binding is a
+    /// warning now, and everything else still applies.
+    #[test]
+    fn a_bad_keybinding_is_skipped_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, USER_CONFIG).unwrap();
+
+        let c = Config::load_from_path(&path);
+        assert_eq!(c.ui.theme, "Gruvbox");
+        assert_eq!(c.ui.outline_width, 40);
+        assert_eq!(c.warnings.len(), 2, "{:?}", c.warnings);
+        assert!(c.warnings.iter().any(|w| w.contains("NoSuchAction")));
+        assert!(c.warnings.iter().any(|w| w.contains("Ctrl+Nope")));
+        let normal = &c.keybindings.0[&crate::keybindings::KeybindingMode::Normal];
+        assert_eq!(normal.get("j"), Some(&crate::keybindings::Action::Next));
+        assert!(c.path.is_some(), "a usable config can still be saved");
+    }
+
+    /// A save rewrote the whole file from the struct, which dropped comments,
+    /// unknown keys, and any binding it could not read. Only what changed is
+    /// written now.
+    #[test]
+    fn a_save_changes_only_the_setting_that_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, USER_CONFIG).unwrap();
+
+        let mut c = Config::load_from_path(&path);
+        c.set_theme(ThemeName::Nord).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(saved, USER_CONFIG.replace(r#""Gruvbox""#, r#""Nord""#));
+
+        // And the result loads back with the new value.
+        assert_eq!(Config::load_from_path(&path).ui.theme, "Nord");
     }
 
     #[test]
