@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`-L` and `--filter` apply together.** `-l -L 2 --filter api` listed every level-2 heading. `-o json` is the whole document and ignores both, and now says so on stderr instead of silently printing everything
 - **`--query-output jsonp` is accepted**, as the help says
 - **`langs` and `types` list their keys in sorted order** rather than a different order on every run
+- **Terminal escape sequences in a document are shown, not sent, when the CLI prints to a terminal.** A heading or code block carrying `ESC ]0;…` or `ESC [2J` retitled the window or cleared the screen when listed with `-l`, `--tree`, `-s` or `-q`. They now print the way `cat -v` shows them, `^[]0;…`. Piped output is unchanged, byte for byte
 - **Whole numbers print as integers in JSON.** A count was `1.0` where an element's own fields print `1`. A large number in plain output printed as `9223372036854775807` rather than itself
 
 ### Changed
