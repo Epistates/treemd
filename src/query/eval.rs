@@ -649,13 +649,25 @@ impl Engine {
                             }
                         }
                         ElementKind::Code => {
-                            // turbovault's per-block start_line is not reliable
-                            // (it reports 1 for every fenced block), so scope by
-                            // re-parsing the heading's byte range instead of
-                            // filtering the global list by line number.
-                            let scope =
-                                &self.context.raw_content[scope_start_offset..scope_end_offset];
-                            results.extend(extract_code_blocks(scope).into_iter().map(Value::Code));
+                            // A block's start_line is its opening fence's row in
+                            // the document, so the global list scopes by line.
+                            // Re-parsing the section instead numbered its blocks
+                            // from the section's own first line.
+                            let raw = self.context.raw_content.as_bytes();
+                            let line_at = |offset: usize| {
+                                1 + raw[..offset].iter().filter(|&&b| b == b'\n').count()
+                            };
+                            let first = line_at(scope_start_offset);
+                            let past = if scope_end_offset >= raw.len() {
+                                usize::MAX
+                            } else {
+                                line_at(scope_end_offset)
+                            };
+                            for code in &self.context.code_blocks {
+                                if (first..past).contains(&code.start_line) {
+                                    results.push(Value::Code(code.clone()));
+                                }
+                            }
                         }
                         ElementKind::Link => {
                             // Links carry byte offsets, so scope by byte range.
@@ -803,12 +815,12 @@ impl Engine {
 // Helper functions
 
 fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
+    let lines = doc.heading_lines();
     doc.headings
         .iter()
         .enumerate()
         .map(|(idx, h)| {
-            // Calculate line number
-            let line = doc.content[..h.offset].lines().count() + 1;
+            let line = lines[idx];
 
             // Body bounds shared with the document extractor: handles CRLF,
             // setext underlines, and EOF-without-newline uniformly.
@@ -1004,47 +1016,6 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
         })
         .collect();
 
-    out
-}
-
-/// Parse a markdown fragment and return only its code blocks (including those
-/// nested in lists/blockquotes/details). Used to scope code blocks to a
-/// heading's byte range, since turbovault's per-block line numbers are not
-/// reliable for line-range filtering.
-fn extract_code_blocks(fragment: &str) -> Vec<CodeValue> {
-    use crate::parser::content::parse_content;
-    use crate::parser::output::Block;
-
-    fn walk(blocks: &[Block], out: &mut Vec<CodeValue>) {
-        for block in blocks {
-            match block {
-                Block::Code {
-                    language,
-                    content,
-                    start_line,
-                    end_line,
-                } => out.push(CodeValue {
-                    language: language.clone(),
-                    content: content.clone(),
-                    start_line: *start_line,
-                    end_line: *end_line,
-                }),
-                Block::List { items, .. } => {
-                    for item in items {
-                        walk(&item.blocks, out);
-                    }
-                }
-                Block::Blockquote { blocks, .. } | Block::Details { blocks, .. } => {
-                    walk(blocks, out);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let blocks = parse_content(fragment, 1);
-    let mut out = Vec::new();
-    walk(&blocks, &mut out);
     out
 }
 
@@ -1313,6 +1284,30 @@ mod tests {
         let query = parse(query).unwrap();
         let mut engine = Engine::new(&doc);
         engine.execute(&query).unwrap()
+    }
+
+    /// Code under a heading keeps its document line numbers. Scoping used to
+    /// re-parse the section, which numbered its blocks from the section's
+    /// first line, so `.h2[Install] > .code | .start_line` disagreed with
+    /// `.code | .start_line` for the same block.
+    #[test]
+    fn test_scoped_code_blocks_keep_document_line_numbers() {
+        let md = "# Doc\n\n```sh\na\n```\n\n## Install\n\ntext\n\n```bash\nb\n```\n\n\
+                  ### Deep\n\n```rust\nc\n```\n\n## Other\n\n```py\nd\n```\n";
+        let lines = |q: &str| -> Vec<usize> {
+            eval(md, q)
+                .into_iter()
+                .filter_map(|v| match v {
+                    Value::Code(c) => Some(c.start_line),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(lines(".code"), [3, 11, 17, 23]);
+        assert_eq!(lines(".h2[Install] > .code"), [11]);
+        assert_eq!(lines(".h2[Install] >> .code"), [11, 17]);
+        assert_eq!(lines(".h1 >> .code"), [3, 11, 17, 23]);
+        assert_eq!(lines(".h2[Other] > .code"), [23]);
     }
 
     #[test]

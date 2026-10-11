@@ -493,7 +493,8 @@ fn fn_levels(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError
 
 fn fn_langs(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let _ = args;
-    let mut counts = std::collections::HashMap::new();
+    // Sorted, so the same document always prints the same object.
+    let mut counts = std::collections::BTreeMap::new();
     for code in &ctx.code_blocks {
         let lang = code.language.as_deref().unwrap_or("none");
         *counts.entry(lang.to_string()).or_insert(0) += 1;
@@ -508,7 +509,8 @@ fn fn_langs(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
 
 fn fn_types(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let _ = args;
-    let mut counts = std::collections::HashMap::new();
+    // Sorted, so the same document always prints the same object.
+    let mut counts = std::collections::BTreeMap::new();
     for link in &ctx.links {
         *counts
             .entry(link.link_type.as_str().to_string())

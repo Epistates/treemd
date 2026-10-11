@@ -38,6 +38,18 @@ use std::process;
 use treemd::{Document, parser};
 
 fn main() -> Result<()> {
+    // Rust ignores SIGPIPE, so writing into `treemd -l doc.md | head -1`
+    // after `head` exits panicked with "failed printing to stdout". The
+    // default disposition ends the process quietly, as for any other filter.
+    // Remote fetching is unaffected: std's TCP sockets write with
+    // MSG_NOSIGNAL or SO_NOSIGPIPE, so a dropped server is still an error.
+    #[cfg(unix)]
+    // SAFETY: called first in main, before any other thread exists, and
+    // SIG_DFL is a valid disposition for SIGPIPE.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     color_eyre::install()?;
 
     // Handle dynamic shell completions
@@ -237,12 +249,21 @@ fn main() -> Result<()> {
     // Check if stdin was piped (before consuming input_source)
     let stdin_was_piped = matches!(input_source, treemd::input::InputSource::Stdin(_));
 
-    // Process input (handles tree format conversion, markdown passthrough, etc.)
-    let markdown_content = match treemd::input::process_input(input_source) {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("Error processing input: {}", e);
-            process::exit(1);
+    // Process input (handles tree format conversion, markdown passthrough,
+    // etc.). Only for the TUI: the heading it gives a heading-less document is
+    // there so the outline has something to select, and in CLI output it is a
+    // heading the document does not have, shifting every line number by two.
+    let markdown_content = if launches_tui(&args) {
+        match treemd::input::process_input(input_source) {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("Error processing input: {}", e);
+                process::exit(1);
+            }
+        }
+    } else {
+        match input_source {
+            treemd::input::InputSource::File(c) | treemd::input::InputSource::Stdin(c) => c,
         }
     };
 
@@ -254,19 +275,8 @@ fn main() -> Result<()> {
         return handle_query_mode(&doc, query_str, args.query_output.as_deref());
     }
 
-    #[cfg(feature = "unstable-dynamic")]
-    let setup_completions_requested = args.setup_completions;
-    #[cfg(not(feature = "unstable-dynamic"))]
-    let setup_completions_requested = false;
-
     // If no flags, launch TUI
-    if !args.list
-        && !args.tree
-        && !args.count
-        && args.section.is_none()
-        && args.at_line.is_none()
-        && !setup_completions_requested
-    {
+    if launches_tui(&args) {
         // Load configuration
         let mut config = treemd::Config::load();
 
@@ -402,6 +412,16 @@ fn main() -> Result<()> {
 /// Fetch a remote document. http(s) URLs are fetched directly;
 /// `github:owner/repo` resolves to the repository's README on the default
 /// branch via raw.githubusercontent.com.
+/// Whether these arguments open the TUI rather than printing and exiting.
+fn launches_tui(args: &Cli) -> bool {
+    args.query.is_none()
+        && !args.list
+        && !args.tree
+        && !args.count
+        && args.section.is_none()
+        && args.at_line.is_none()
+}
+
 fn fetch_remote(spec: &str) -> Result<String, String> {
     let url = if let Some(repo) = spec.strip_prefix("github:") {
         let repo = repo.trim_matches('/');
@@ -416,7 +436,17 @@ fn fetch_remote(spec: &str) -> Result<String, String> {
         spec.to_string()
     };
 
-    let mut response = ureq::get(&url)
+    // ureq sets no timeouts of its own, so a server that accepts and never
+    // answers hung treemd for good. An https request also stays on https
+    // through its redirects rather than following one down to plain http.
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(10)))
+        .timeout_global(Some(std::time::Duration::from_secs(30)))
+        .https_only(url.starts_with("https://"))
+        .build()
+        .into();
+    let mut response = agent
+        .get(&url)
         .call()
         .map_err(|e| format!("Failed to fetch {}: {}", url, e))?;
     response
@@ -426,14 +456,15 @@ fn fetch_remote(spec: &str) -> Result<String, String> {
 }
 
 fn handle_cli_mode(args: &Cli, doc: &Document) {
-    // Apply filters
-    let headings: Vec<_> = if let Some(level) = args.level {
-        doc.headings_at_level(level)
-    } else if let Some(ref filter) = args.filter {
-        doc.filter_headings(filter)
-    } else {
-        doc.headings.iter().collect()
+    // Apply filters. Both apply when both are given: `-L 2 --filter api` is
+    // the level-2 headings mentioning api, not every level-2 heading.
+    let mut headings: Vec<_> = match args.filter {
+        Some(ref filter) => doc.filter_headings(filter),
+        None => doc.headings.iter().collect(),
     };
+    if let Some(level) = args.level {
+        headings.retain(|h| h.level == level);
+    }
 
     // --at-line takes precedence over the other flag-based modes.
     if let Some(line) = args.at_line {
@@ -449,6 +480,16 @@ fn handle_cli_mode(args: &Cli, doc: &Document) {
     } else if let Some(ref section_name) = args.section {
         extract_section(doc, section_name);
     } else if args.list {
+        // `-o json` is the nested document, always whole. Say so rather than
+        // print every heading as if the filters had been applied.
+        if matches!(args.output, OutputFormat::Json)
+            && (args.level.is_some() || args.filter.is_some())
+        {
+            eprintln!(
+                "note: -L and --filter do not apply to -o json, which is the whole document; \
+                 for filtered JSON use -q, e.g. -q '.h2' --query-output json"
+            );
+        }
         print_headings(&headings, &args.output, doc, args.line_numbers);
     }
 }

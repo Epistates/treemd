@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The pointer on a selected link in a nested list sits on that link's row.** Following a table of contents in interactive mode put the pointer on the top-level entry, whichever of its children was selected
 - **`.list` reports lists in document order.** A nested list is reported right after the list that holds it rather than before
 - **Piped input is read again without `-`.** `cat doc.md | treemd -q '.h'`, `curl … | treemd` and `tree | treemd` ignored stdin whenever no file was named: from a directory holding any markdown file they opened the file picker, so a query ran against its placeholder and reported a `Select a file` heading, and from any other directory treemd printed its usage and exited. Only `treemd -` worked. This came in with the startup file picker in 0.5.5, which checked the directory before checking stdin
+- **Queries and `-o json` are linear in the number of headings.** Each heading's line number was counted from the start of the document, so a 900 KB file with 16,000 headings took 20 seconds to query and a few hundred thousand headings did not finish. The same file now takes a fifth of a second
+- **Piping into `head` no longer panics.** `treemd -l big.md | head -1` printed "failed printing to stdout: Broken pipe" and exited 101 once the reader went away; it now ends quietly, as any filter does
+- **Fetching a remote document times out.** A server that accepted the connection and never answered hung treemd indefinitely. The connection now has 10 seconds and the whole request 30, and an `https://` request no longer follows a redirect down to plain `http://`
+- **A document with no headings reports none.** The CLI gave it a made-up `# Input` heading, the one the TUI uses so its outline has something to select, which also pushed every line number down by two
+- **A byte order mark no longer hides the first heading.** A file starting with a UTF-8 BOM lost its first heading from `-l`, `--tree`, `-q` and `-s`. The BOM is kept in the content, so a checkbox toggled in the TUI still writes it back
+- **Heading line numbers agree everywhere.** `.line` in a query counted one too many for a heading that does not start its line, such as `> # quoted`, so it disagreed with `-n`. The `-o json` section position is the line its body starts on, which for a setext heading is two lines down, not one
+- **Code blocks under a heading keep their document line numbers.** `.h2[Install] > .code | .start_line` numbered blocks from the section's first line, so it disagreed with `.code | .start_line` for the same block
+- **`-L` and `--filter` apply together.** `-l -L 2 --filter api` listed every level-2 heading. `-o json` is the whole document and ignores both, and now says so on stderr instead of silently printing everything
+- **`--query-output jsonp` is accepted**, as the help says
+- **`langs` and `types` list their keys in sorted order** rather than a different order on every run
+- **Whole numbers print as integers in JSON.** A count was `1.0` where an element's own fields print `1`. A large number in plain output printed as `9223372036854775807` rather than itself
 
 ### Changed
 

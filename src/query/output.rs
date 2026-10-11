@@ -27,13 +27,10 @@ fn format_plain_value(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
         Value::Bool(b) => b.to_string(),
-        Value::Number(n) => {
-            if n.fract() == 0.0 {
-                (*n as i64).to_string()
-            } else {
-                n.to_string()
-            }
-        }
+        Value::Number(n) => match exact_integer(*n) {
+            Some(i) => i.to_string(),
+            None => n.to_string(),
+        },
         Value::String(s) => s.clone(),
         Value::Array(a) => a
             .iter()
@@ -135,11 +132,24 @@ fn format_json_lines(values: &[Value]) -> String {
         .join("\n")
 }
 
+/// A whole number as an integer, within the range an f64 holds exactly.
+///
+/// So a count prints as `1` rather than `1.0` in JSON, the way an element's
+/// own fields already do, and `1e20` prints as itself rather than clamped to
+/// `i64::MAX` by an `as` cast.
+fn exact_integer(n: f64) -> Option<i64> {
+    const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    (n.fract() == 0.0 && n.abs() <= EXACT).then_some(n as i64)
+}
+
 fn value_to_json(value: &Value) -> serde_json::Value {
     match value {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),
-        Value::Number(n) => serde_json::json!(n),
+        Value::Number(n) => match exact_integer(*n) {
+            Some(i) => serde_json::json!(i),
+            None => serde_json::json!(n),
+        },
         Value::String(s) => serde_json::Value::String(s.clone()),
         Value::Array(a) => serde_json::Value::Array(a.iter().map(value_to_json).collect()),
         Value::Object(o) => {
@@ -335,6 +345,19 @@ fn format_tree_value(
 mod tests {
     use super::*;
     use crate::query::value::HeadingValue;
+
+    #[test]
+    fn whole_numbers_print_as_integers_and_large_ones_are_not_clamped() {
+        let json = |n: f64| format(&[Value::Number(n)], OutputFormat::Json);
+        let plain = |n: f64| format(&[Value::Number(n)], OutputFormat::Plain);
+
+        assert_eq!(json(1.0), "1");
+        assert_eq!(json(-3.0), "-3");
+        assert_eq!(json(1.5), "1.5");
+        assert_eq!(plain(2.0), "2");
+        assert_eq!(plain(1e20), "100000000000000000000");
+        assert_eq!(plain(0.25), "0.25");
+    }
 
     #[test]
     fn test_format_plain_heading() {

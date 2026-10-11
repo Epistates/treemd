@@ -219,6 +219,30 @@ impl Document {
             .unwrap_or(self.content.len())
     }
 
+    /// The 1-indexed line each heading sits on, in heading order.
+    ///
+    /// One sequential pass, counting newlines between consecutive headings.
+    /// Counting from the start of the document for each heading instead is
+    /// quadratic, which on a file with a few thousand headings made every
+    /// query and `-o json` take seconds. Counting newlines rather than
+    /// `lines()` also gets a heading that does not start its line right, such
+    /// as `> # quoted`, where a `lines()` count over the prefix includes the
+    /// partial line and is one too many.
+    pub fn heading_lines(&self) -> Vec<usize> {
+        let mut lines = Vec::with_capacity(self.headings.len());
+        let mut line = 1usize;
+        let mut prev_offset = 0usize;
+        for heading in &self.headings {
+            line += self.content.as_bytes()[prev_offset..heading.offset]
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count();
+            lines.push(line);
+            prev_offset = heading.offset;
+        }
+        lines
+    }
+
     /// Compute the 1-indexed `(start_line, end_line)` for every heading,
     /// keyed by that heading's byte offset (unique per heading).
     ///
@@ -228,23 +252,7 @@ impl Document {
     /// offsets — or the document's last line when no such heading follows.
     pub fn heading_line_ranges(&self) -> HashMap<usize, (usize, usize)> {
         let n = self.headings.len();
-
-        // Single sequential pass: count newlines between consecutive heading
-        // offsets rather than re-scanning from the start of the document for
-        // each heading.
-        let mut start_lines = Vec::with_capacity(n);
-        let mut prev_line = 1usize;
-        let mut prev_offset = 0usize;
-        for heading in &self.headings {
-            let line = prev_line
-                + self.content[prev_offset..heading.offset]
-                    .matches('\n')
-                    .count();
-            start_lines.push(line);
-            prev_line = line;
-            prev_offset = heading.offset;
-        }
-
+        let start_lines = self.heading_lines();
         let total_lines = self.content.lines().count();
 
         let mut ranges = HashMap::with_capacity(n);
