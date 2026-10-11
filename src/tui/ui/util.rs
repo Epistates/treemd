@@ -208,6 +208,45 @@ pub fn align_text(text: &str, width: usize, alignment: &Alignment) -> String {
     }
 }
 
+/// Byte ranges of every case-insensitive match of `query` in `text`, as
+/// ranges into `text` itself, in order and not overlapping.
+///
+/// Lowercasing both and searching the copy does not work: lowercasing changes
+/// the byte length of some characters (`İ` is two bytes and lowercases to
+/// three), so an offset found in the copy lands elsewhere in the original,
+/// or mid-character, which panicked on the slice. A case-insensitive regex of
+/// the escaped query reports positions in the text it searched.
+pub fn find_ignore_case(text: &str, query: &str) -> Vec<(usize, usize)> {
+    use std::cell::RefCell;
+
+    thread_local! {
+        // Highlighting runs per line per frame for one query at a time, so
+        // the last compiled pattern is nearly always the one asked for.
+        static LAST: RefCell<Option<(String, regex::Regex)>> = const { RefCell::new(None) };
+    }
+
+    if query.is_empty() {
+        return Vec::new();
+    }
+    LAST.with(|last| {
+        let mut last = last.borrow_mut();
+        if last.as_ref().is_none_or(|(q, _)| q != query) {
+            let Ok(pattern) = regex::RegexBuilder::new(&regex::escape(query))
+                .case_insensitive(true)
+                .build()
+            else {
+                return Vec::new();
+            };
+            *last = Some((query.to_string(), pattern));
+        }
+        let (_, pattern) = last.as_ref().expect("set above");
+        pattern
+            .find_iter(text)
+            .map(|m| (m.start(), m.end()))
+            .collect()
+    })
+}
+
 /// Highlight search matches within text, returning a Line with styled spans.
 ///
 /// Performs case-insensitive matching and splits the text into segments,
@@ -231,24 +270,10 @@ pub fn highlight_search_matches(
         return vec![Span::styled(text.to_string(), base_style)];
     }
 
-    let text_lower = text.to_lowercase();
-    let query_lower = query.to_lowercase();
-
     let mut spans = Vec::new();
     let mut last_end = 0;
 
-    // Find all matches
-    let mut search_start = 0;
-    while let Some(rel_pos) = text_lower[search_start..].find(&query_lower) {
-        let match_start = search_start + rel_pos;
-        let match_end = match_start + query.len();
-
-        // Verify char boundaries
-        if !text.is_char_boundary(match_start) || !text.is_char_boundary(match_end) {
-            search_start = match_start + 1;
-            continue;
-        }
-
+    for (match_start, match_end) in find_ignore_case(text, query) {
         // Add text before match
         if match_start > last_end {
             spans.push(Span::styled(
@@ -264,11 +289,6 @@ pub fn highlight_search_matches(
         ));
 
         last_end = match_end;
-        search_start = match_end;
-
-        if search_start >= text.len() {
-            break;
-        }
     }
 
     // Add remaining text after last match
@@ -1370,6 +1390,28 @@ mod tests {
             assert_eq!(spans[0].content.as_ref(), "Hello");
             assert_eq!(spans[0].style, highlight);
             assert_eq!(spans[1].content.as_ref(), " World");
+        }
+
+        /// Lowercasing changes the byte length of `İ`, `ẞ` and others, so
+        /// offsets taken from a lowercased copy sliced the original
+        /// mid-character, which panicked, or highlighted the wrong letters.
+        #[test]
+        fn test_case_folding_that_changes_length_is_safe_and_exact() {
+            let base = Style::default().fg(Color::White);
+            let highlight = Style::default().fg(Color::Yellow);
+            let matched = |text: &str, query: &str| -> Vec<String> {
+                highlight_search_matches(text, query, base, highlight)
+                    .into_iter()
+                    .filter(|s| s.style == highlight)
+                    .map(|s| s.content.into_owned())
+                    .collect()
+            };
+
+            assert_eq!(matched("İstanbul İstanbul", "İ"), ["İ", "İ"]);
+            assert_eq!(matched("İab cd", "c"), ["c"]);
+            assert_eq!(matched("Straße STRASSE", "straße"), ["Straße"]);
+            assert_eq!(matched("KELVIN \u{212a} k", "k"), ["K", "\u{212a}", "k"]);
+            assert_eq!(find_ignore_case("ΩΩ", "ω"), [(0, 2), (2, 4)]);
         }
     }
 }

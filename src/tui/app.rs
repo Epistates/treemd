@@ -178,6 +178,15 @@ impl PaletteCommand {
     }
 }
 
+/// Fingerprint of a file's bytes, compared within one session only, so
+/// `DefaultHasher` being unstable across Rust releases does not matter.
+fn content_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn starts_with_ignore_ascii_case(haystack: &str, needle_lower: &str) -> bool {
     haystack.len() >= needle_lower.len()
         && haystack.as_bytes()[..needle_lower.len()].eq_ignore_ascii_case(needle_lower.as_bytes())
@@ -565,7 +574,11 @@ pub struct App {
     pub current_file_path: PathBuf, // Path to current file for resolving relative links
     pub file_path_changed: bool,    // Flag to signal file watcher needs update
     pub suppress_file_watch: bool,  // Skip next file watch check (after internal save)
-    pub links_in_view: Vec<Link>,   // Links in currently displayed content
+    /// Hash of the file as treemd last read or wrote it. A save checks the
+    /// disk against this first, so an edit made elsewhere since then is not
+    /// silently overwritten by the in-memory copy.
+    disk_hash: u64,
+    pub links_in_view: Vec<Link>, // Links in currently displayed content
     pub link_picker: LinkPickerState,
 
     // File picker state
@@ -776,6 +789,7 @@ impl App {
         // A single worker then services every protocol without blocking draws.
         let picker = images_enabled.then(Self::init_picker).flatten();
         let image_worker = picker.as_ref().map(|_| ImageWorker::new());
+        let disk_hash = content_hash(document.content.as_bytes());
 
         Self {
             document,
@@ -823,6 +837,7 @@ impl App {
             current_file_path: file_path,
             file_path_changed: false,
             suppress_file_watch: false,
+            disk_hash,
             links_in_view: Vec::new(),
             link_picker: LinkPickerState::default(),
 
@@ -3291,21 +3306,16 @@ impl App {
         // Convert to plain text using parser (strips links, formatting, etc.)
         // This ensures search matches what's visible when rendered
         let plain_content = turbovault_parser::to_plain_text(&content);
-        let query = self.doc_search.query.to_lowercase();
-
-        // Find all exact substring matches (case-insensitive)
+        // Find all exact substring matches (case-insensitive), as offsets
+        // into the line itself, the same matcher the highlighter uses
         for (line_num, line) in plain_content.lines().enumerate() {
-            let line_lower = line.to_lowercase();
-
-            let mut search_start = 0;
-            while let Some(pos) = line_lower[search_start..].find(&query) {
-                let col_start = search_start + pos;
+            for (start, end) in crate::tui::ui::util::find_ignore_case(line, &self.doc_search.query)
+            {
                 self.doc_search.matches.push(SearchMatch {
                     line: line_num,
-                    col_start,
-                    len: query.len(),
+                    col_start: start,
+                    len: end - start,
                 });
-                search_start = col_start + query.len();
             }
         }
 
@@ -5278,6 +5288,7 @@ impl App {
             self.file_path_changed = true;
         }
 
+        self.disk_hash = content_hash(document.content.as_bytes());
         self.document = document;
         self.filename = filename;
         self.current_file_path = path;
@@ -5669,28 +5680,7 @@ impl App {
             crate::parser::utils::strip_markdown_inline,
         )?;
 
-        // Atomic write: write to temp file, then rename (prevents data corruption)
-        use std::io::Write;
-        let parent_dir = self
-            .current_file_path
-            .parent()
-            .ok_or("Cannot determine parent directory")?;
-
-        let mut temp_file = tempfile::NamedTempFile::new_in(parent_dir)
-            .map_err(|e| format!("Failed to create temp file: {}", e))?;
-
-        temp_file
-            .write_all(new_content.as_bytes())
-            .map_err(|e| format!("Failed to write temp file: {}", e))?;
-
-        temp_file
-            .flush()
-            .map_err(|e| format!("Failed to flush temp file: {}", e))?;
-
-        // Atomic rename (same filesystem guarantees atomicity)
-        temp_file
-            .persist(&self.current_file_path)
-            .map_err(|e| format!("Failed to save file: {}", e))?;
+        self.write_document(&new_content)?;
 
         // Any buffered table edits were persisted along with the toggle
         if had_pending {
@@ -6025,39 +6015,44 @@ impl App {
         Err("Could not locate table".to_string())
     }
 
+    /// Write `content` over the current file, the one place a TUI edit saves.
+    ///
+    /// Refuses when the document is not a file on disk (stdin or a fetched
+    /// URL, whose placeholder path used to have a file named `<stdin>`
+    /// written into the working directory), and when the file has changed
+    /// since treemd last read or wrote it: the in-memory copy predates that
+    /// change, so writing it would quietly undo whatever was done elsewhere.
+    fn write_document(&mut self, content: &str) -> Result<(), String> {
+        let path = self.current_file_path.clone();
+        if !(path.is_absolute() && path.is_file()) {
+            return Err("Not a file on disk, so there is nowhere to save".to_string());
+        }
+        let on_disk = std::fs::read(&path).map_err(|e| format!("Failed to read file: {e}"))?;
+        if content_hash(&on_disk) != self.disk_hash {
+            return Err(format!(
+                "{} changed on disk since it was opened; not saving over it. \
+                 Undo the edit, or reopen the file to see the change",
+                self.filename
+            ));
+        }
+
+        // Our own write is not news to the watcher.
+        self.suppress_file_watch = true;
+        crate::fsutil::write_atomic(&path, content.as_bytes())
+            .map_err(|e| format!("Failed to save file: {e}"))?;
+        self.disk_hash = content_hash(content.as_bytes());
+        Ok(())
+    }
+
     /// Write all pending edits to the file
     pub fn save_pending_edits_to_file(&mut self) -> Result<(), String> {
-        use std::io::Write;
-
         if !self.has_unsaved_changes {
             self.status_message = Some("No changes to save".to_string());
             return Ok(());
         }
 
-        // Atomic write: write to temp file, then rename (prevents data corruption)
-        let parent_dir = self
-            .current_file_path
-            .parent()
-            .ok_or("Cannot determine parent directory")?;
-
-        let mut temp_file = tempfile::NamedTempFile::new_in(parent_dir)
-            .map_err(|e| format!("Failed to create temp file: {}", e))?;
-
-        temp_file
-            .write_all(self.document.content.as_bytes())
-            .map_err(|e| format!("Failed to write temp file: {}", e))?;
-
-        temp_file
-            .flush()
-            .map_err(|e| format!("Failed to flush temp file: {}", e))?;
-
-        // Suppress file watcher for our own save
-        self.suppress_file_watch = true;
-
-        // Atomic rename
-        temp_file
-            .persist(&self.current_file_path)
-            .map_err(|e| format!("Failed to save file: {}", e))?;
+        let content = self.document.content.clone();
+        self.write_document(&content)?;
 
         // Clear the pending edits buffer
         let edit_count = self.pending_edits.len();
@@ -6481,5 +6476,81 @@ mod image_modal_tests {
         assert_eq!(red(&show(0)), 255, "step back");
         assert_eq!(blue(&show(2)), 255, "jump forward");
         assert_eq!(blue(&show(2)), 255, "the same frame again");
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    fn app_for(path: &std::path::Path) -> App {
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        App::new(
+            crate::parser::parse_markdown(&content),
+            "note.md".into(),
+            path.to_path_buf(),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        )
+    }
+
+    #[test]
+    fn a_save_writes_the_file_and_keeps_its_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().canonicalize().unwrap().join("note.md");
+        std::fs::write(&path, "# t\n- [ ] a\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let mut app = app_for(&path);
+        app.write_document("# t\n- [x] a\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# t\n- [x] a\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o644);
+        }
+
+        // A second save from the state the first one left is fine too.
+        app.write_document("# t\n- [ ] a\n").unwrap();
+    }
+
+    /// The in-memory copy predates an edit made elsewhere, so writing it
+    /// would undo that edit. It has to refuse and leave the file alone.
+    #[test]
+    fn a_save_refuses_to_overwrite_a_change_made_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().canonicalize().unwrap().join("note.md");
+        std::fs::write(&path, "# t\n- [ ] a\n").unwrap();
+        let mut app = app_for(&path);
+
+        std::fs::write(&path, "# t\n- [ ] a\n- [ ] added elsewhere\n").unwrap();
+        let error = app.write_document("# t\n- [x] a\n").unwrap_err();
+        assert!(error.contains("changed on disk"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# t\n- [ ] a\n- [ ] added elsewhere\n"
+        );
+    }
+
+    /// Stdin and fetched documents have a placeholder path. A save used to
+    /// write a file named `<stdin>` into the working directory.
+    #[test]
+    fn a_document_that_is_not_a_file_is_not_saved() {
+        let mut app = App::new(
+            crate::parser::parse_markdown("# t\n- [ ] a\n"),
+            "stdin".into(),
+            PathBuf::from("<stdin>"),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+        assert!(app.write_document("# t\n- [x] a\n").is_err());
+        assert!(!std::path::Path::new("<stdin>").exists());
     }
 }

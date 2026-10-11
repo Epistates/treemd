@@ -248,7 +248,7 @@ treemd *.md             # Open file picker with matched files
 | `m` | Set bookmark |
 | `'` | Jump to bookmark |
 | `?` | Toggle help overlay |
-| `q` | Quit (`Esc` backs out of searches/modes) |
+| `q` / `Ctrl+c` | Quit (`Esc` backs out of searches/modes) |
 
 </details>
 

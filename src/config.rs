@@ -360,16 +360,28 @@ impl Config {
     }
 
     /// Load the configuration file, falling back to `Default` on error.
+    ///
+    /// The path is kept, so a later [`save`](Self::save) writes there, only
+    /// when there is nothing at it yet or it parsed. A file that failed to
+    /// parse is still the user's: saving defaults over it the first time they
+    /// changed the theme lost every setting in it over one typo.
     fn load_from_path(path: &Path) -> Self {
         let Ok(content) = fs::read_to_string(path) else {
-            return Self::default();
+            return Self {
+                path: Some(path.to_path_buf()),
+                ..Self::default()
+            };
         };
 
         match toml::from_str::<Self>(&content) {
-            Ok(config) => config,
+            Ok(config) => Self {
+                path: Some(path.to_path_buf()),
+                ..config
+            },
             Err(e) => {
                 eprintln!(
-                    "warning: failed to parse config {}: {} (using defaults)",
+                    "warning: failed to parse config {}: {} (using defaults; \
+                     settings changed this session will not be saved over it)",
                     path.display(),
                     e
                 );
@@ -381,11 +393,7 @@ impl Config {
     /// Resolve and load the configuration file, falling back to `Default` if any step fails.
     pub fn load() -> Self {
         Self::resolve_config_path()
-            .map(|path| {
-                let mut config = Self::load_from_path(&path);
-                config.path = Some(path);
-                config
-            })
+            .map(|path| Self::load_from_path(&path))
             .unwrap_or_default()
     }
 
@@ -394,7 +402,7 @@ impl Config {
         let path = self
             .path
             .as_ref()
-            .ok_or("Could not determine config directory")?;
+            .ok_or("config not saved: no config directory, or the config file did not parse")?;
 
         // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
@@ -402,7 +410,7 @@ impl Config {
         }
 
         let contents = toml::to_string_pretty(self)?;
-        fs::write(path, contents)?;
+        crate::fsutil::write_atomic(path, contents.as_bytes())?;
 
         Ok(())
     }
@@ -713,8 +721,15 @@ heading_1 = { rgb = [10, 20, 30] }
         std::fs::write(&path, "this is not valid = = = toml [[[").unwrap();
 
         // Suppress the eprintln in the test output by just checking the result.
-        let c = Config::load_from_path(&path);
+        let mut c = Config::load_from_path(&path);
         assert_eq!(c.ui.theme, Config::default().ui.theme);
+
+        // Changing a setting must not save defaults over the user's file.
+        assert!(c.set_theme(ThemeName::Nord).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "this is not valid = = = toml [[["
+        );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
