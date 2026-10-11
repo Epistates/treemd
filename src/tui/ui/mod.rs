@@ -846,6 +846,18 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
                 height: 1,
             };
             frame.render_widget(Paragraph::new(error_line), error_area);
+        } else if app.mermaid_pending.contains(&hash) {
+            let pending_line = Line::from(Span::styled(
+                "⧗ rendering mermaid diagram…",
+                Style::default().fg(Color::DarkGray),
+            ));
+            let pending_area = Rect {
+                x: inner.x,
+                y: image_y,
+                width: inner.width,
+                height: 1,
+            };
+            frame.render_widget(Paragraph::new(pending_line), pending_area);
         }
     }
 }
