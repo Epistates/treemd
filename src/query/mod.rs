@@ -35,7 +35,7 @@ pub use ast::Span;
 pub use ast::{Expr, Query};
 pub use error::{QueryError, QueryErrorKind};
 pub use eval::{Engine, EvalContext};
-pub use registry::{Function, FunctionRegistry, Registry};
+pub use registry::{Function, FunctionRegistry, Registry, StreamMode};
 pub use value::{Value, ValueKind};
 
 use crate::parser::Document;
