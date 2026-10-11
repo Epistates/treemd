@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Documentation
+### Fixed
 
-- **The query guide records the one remaining `.list` and `.blockquote` gap.** A list item's indented continuation inside a blockquote is joined to the item with no separator, so `> - step` followed by an indented `text` reports `steptext`. It was noted in the 0.9.0 release entry but not in the guide anyone reads while writing a query, unlike its sibling [turbovault#78](https://github.com/Epistates/turbovault/issues/78), which was. Now pinned by a test as well, so fixing it upstream fails the build and the note comes back out. Tracked at [turbovault#77](https://github.com/Epistates/turbovault/issues/77)
+- **A nested list draws each item on its own row, with its own marker.** Three shapes were wrong before: a nested ordered list drew bullets instead of numbers, a paragraph under a nested item was appended to its parent's row (`• abpara under a`), and a nested list inside a blockquote was folded into its parent's text (`│ • qqi`). A nested task keeps its checkbox
+- **A list item's indented continuation inside a blockquote keeps its own block.** `> - step` followed by an indented `text` reported `steptext` as the item. The item is `step` now and `text` is its paragraph, the same as outside a quote ([turbovault#77](https://github.com/Epistates/turbovault/issues/77))
+- **The pointer on a selected link in a nested list sits on that link's row.** Following a table of contents in interactive mode put the pointer on the top-level entry, whichever of its children was selected
+- **`.list` reports lists in document order.** A nested list is reported right after the list that holds it rather than before
+
+### Changed
+
+- **A nested list is its own `.list` entry.** It used to be text in its parent item's `.content`, so `- outer` holding `- inner` reported one list whose item read `outer` plus the inner line. It now reports two lists of one item each. Anything reading `.content` for nested items needs updating
+- **turbovault-parser 2.1.0 to 3.2.0.** The 3.0.0 major is the MCP server's wire format and does not touch the parser API. The parser changes are all in 2.2.0: nested lists are real blocks ([turbovault#79](https://github.com/Epistates/turbovault/issues/79)), and the quoted continuation fix above
+- **ratatui-image 11.0.8 to 11.1.0**, and every other dependency to its latest compatible release
 
 ## [0.9.1] - 2026-09-14
 

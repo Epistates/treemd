@@ -943,12 +943,8 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                     }
                 }
                 Block::List { ordered, items } => {
-                    for item in items {
-                        if images == Images::Collect {
-                            collect_inline_images(&item.inline, out);
-                        }
-                        walk(&item.blocks, out, Images::Skip);
-                    }
+                    // Pushed before descending so a nested list follows its
+                    // parent, in document order.
                     out.lists.push(ListValue {
                         ordered: *ordered,
                         items: items
@@ -959,6 +955,12 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                             })
                             .collect(),
                     });
+                    for item in items {
+                        if images == Images::Collect {
+                            collect_inline_images(&item.inline, out);
+                        }
+                        walk(&item.blocks, out, Images::Skip);
+                    }
                 }
                 Block::Blockquote { content, blocks } => {
                     out.blockquotes.push(BlockquoteValue {
@@ -1543,16 +1545,12 @@ fn main() {}
         );
     }
 
-    /// A list item's indented continuation inside a blockquote is joined onto
-    /// the item with no separator, so `step` and `text` come back as
-    /// `steptext`. The same list outside a quote is right, and so is an
-    /// unindented paragraph inside one, which is what makes this the quote
-    /// re-serializer's continuation path rather than anything list-specific.
-    ///
-    /// Tracked at Epistates/turbovault#77. Pinned so that fixing it upstream
-    /// fails here and the note in `docs/QUERY_LANGUAGE.md` gets removed.
+    /// A list item's indented continuation inside a blockquote was joined onto
+    /// the item with no separator, so `step` and `text` came back as
+    /// `steptext`, until turbovault-parser 2.2.0 (Epistates/turbovault#77).
+    /// The continuation is the item's own paragraph now, in and out of a quote.
     #[test]
-    fn test_a_quoted_list_item_continuation_is_a_known_upstream_gap() {
+    fn test_a_quoted_list_item_continuation_keeps_its_own_block() {
         let item_text = |md: &str| -> Vec<String> {
             eval(md, ".list")
                 .into_iter()
@@ -1563,17 +1561,36 @@ fn main() {}
                 .flat_map(|l| l.items.into_iter().map(|i| i.content))
                 .collect()
         };
+        let paragraphs = |md: &str| -> Vec<String> {
+            eval(md, ".para").into_iter().map(|v| v.to_text()).collect()
+        };
+
+        for md in [
+            "> - step\n>\n>   text\n",
+            "- step\n\n  text\n",
+            "> - step\n>\n> text\n",
+        ] {
+            assert_eq!(item_text(md), ["step"], "{md:?}");
+            assert_eq!(paragraphs(md), ["text"], "{md:?}");
+        }
+    }
+
+    /// A nested list is its own entry since turbovault-parser 2.2.0, and is
+    /// reported after the list holding it, not before.
+    #[test]
+    fn test_nested_lists_are_reported_in_document_order() {
+        let items = eval("- outer\n  - inner\n    - deep\n- second\n", ".list")
+            .into_iter()
+            .filter_map(|v| match v {
+                Value::List(l) => Some(l.items.into_iter().map(|i| i.content).collect()),
+                _ => None,
+            })
+            .collect::<Vec<Vec<String>>>();
 
         assert_eq!(
-            item_text("> - step\n>\n>   text\n"),
-            ["steptext"],
-            "upstream fixed the separator, drop the note in QUERY_LANGUAGE.md"
+            items,
+            [vec!["outer", "second"], vec!["inner"], vec!["deep"]]
         );
-
-        // The two neighbours that are correct, so a fix that only moves the
-        // problem sideways still fails.
-        assert_eq!(item_text("- step\n\n  text\n"), ["step"]);
-        assert_eq!(item_text("> - step\n>\n> text\n"), ["step"]);
     }
 
     /// Links inside a blockquote kept their text but lost their destination

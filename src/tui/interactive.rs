@@ -1396,16 +1396,14 @@ mod interactive_tests {
 
         // One row for `step`, then 2 + 1 for the fence and its single line.
         assert_eq!(count("1. step\n\n   ```bash\n   cmd\n   ```\n"), 4);
-        // A nested item is a second line of the outer item's content.
+        // A nested item is a nested list block, one row of its own.
         assert_eq!(count("- outer\n  - inner\n"), 2);
         // Plain items are still one row each.
         assert_eq!(count("- a\n- b\n"), 2);
-        // Nested inside a quote is the path that was actually reachable. One
-        // row, because turbovault-parser 2.1.0 folds an indented continuation
-        // into the item rather than leaving it a nested block. That folding
-        // also drops the separator, which is Epistates/turbovault#77, but the
-        // count and the render agree either way.
-        assert_eq!(count("> - step\n>\n>   text\n"), 1);
+        // Nested inside a quote is the path that was actually reachable. The
+        // indented continuation is the item's own paragraph since
+        // turbovault-parser 2.2.0 (Epistates/turbovault#77), so two rows.
+        assert_eq!(count("> - step\n>\n>   text\n"), 2);
     }
 
     /// An image in a list item has to reach the element index with rows

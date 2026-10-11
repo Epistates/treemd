@@ -69,7 +69,15 @@ A paragraph with an ![inline](inline.png) image in it.
   fn in_list_item() {}
   ```
 
+- [ ] nested outer
+  - [x] nested inner ![nested-deep-img](deep.png)
+    1. nested deep
+
 ## Blockquotes
+
+> - quoted step
+>
+>   quoted continuation
 
 > a plain quote
 
@@ -270,15 +278,17 @@ alt="loose2" src="loose2.png" title=None
 alt="nested-in-item" src="nested.png" title=None
 alt="own" src="own.png" title=None
 alt="nested" src="nested2.png" title=None
+alt="nested-deep-img" src="deep.png" title=None
 alt="quoted-img" src="quoted.png" title=None
 == code ==
 lang=Some("rust") start=37 end=39 body="fn in_list_item() {}"
-lang=Some("rust") start=55 end=57 body="fn after_list_in_quote() {}"
-lang=Some("rust") start=61 end=63 body="fn after_prose_in_quote() {}"
-lang=Some("rust") start=76 end=78 body="fn in_callout() {}"
-lang=Some("rust") start=82 end=84 body="fn top_level() {}"
-lang=None start=86 end=88 body="no language"
+lang=Some("rust") start=63 end=65 body="fn after_list_in_quote() {}"
+lang=Some("rust") start=69 end=71 body="fn after_prose_in_quote() {}"
+lang=Some("rust") start=84 end=86 body="fn in_callout() {}"
+lang=Some("rust") start=90 end=92 body="fn top_level() {}"
+lang=None start=94 end=96 body="no language"
 == blockquotes ==
+"- quoted step\n\n  quoted continuation"
 "a plain quote"
 "first line\nsecond line\nthird line"
 "![quoted-img](quoted.png)"
@@ -289,7 +299,7 @@ lang=None start=86 end=88 body="no language"
 "[!WARNING] Multi line callout\nbody line one\nbody line two"
 "[!TIP] Callout with a fence\nbefore the fence\n\n```rust\nfn in_callout() {}\n```"
 == lists ==
-ordered=false items=7
+ordered=false items=8
   - "tight item ![tight](tight.png)"
   - "tight item with a [link](https://example.com)"
   - "loose item ![loose](loose.png)"
@@ -297,6 +307,13 @@ ordered=false items=7
   - "multi-block item"
   - "item with its own image ![own](own.png)"
   - "item holding a fence"
+  - "nested outer"
+ordered=false items=1
+  - "nested inner ![nested-deep-img](deep.png)"
+ordered=true items=1
+  - "nested deep"
+ordered=false items=1
+  - "quoted step"
 ordered=false items=1
   - "a list inside a quote"
 == links ==
@@ -306,11 +323,11 @@ text="quoted link" url="https://quoted.example"
 == tables ==
 headers=["Column A", "B"] rows=1
 == counts ==
-.para 15
-.img 13
+.para 16
+.img 14
 .code 6
-.quote 9
-.list 2
+.quote 10
+.list 5
 .link 3
 .table 1
 "#;

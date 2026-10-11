@@ -44,7 +44,7 @@ ureq = "3"
 unicode-width = "0.2"
 
 # Turbovault integration - OFM parsing with code-block awareness
-turbovault-parser = "2.1.0"
+turbovault-parser = "3.2.0"
 
 # Serialization for JSON output
 serde = { version = "1.0", features = ["derive"] }
@@ -60,7 +60,7 @@ crossterm = "0.29"
 color-eyre = "0.6"
 
 # Image rendering in TUI
-ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }
+ratatui-image = { version = "11.1", default-features = false, features = ["crossterm"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 gif = "0.14"
 
