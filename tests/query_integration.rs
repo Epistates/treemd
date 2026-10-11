@@ -246,6 +246,27 @@ fn string_keys_name_a_property() {
     );
 }
 
+/// An element inside an object went through serde's derive, which printed
+/// the byte offset and the whole section body and no `type`, while
+/// `--query-output json` printed the tagged form. Both use one serializer.
+#[test]
+fn an_element_serializes_the_same_everywhere() {
+    let md = "# Title\n\nbody\n";
+    let doc = parse_markdown(md);
+    let expected = r#"{"type":"heading","level":1,"text":"Title","line":1}"#;
+
+    assert_eq!(
+        run(md, "{a: .h1[0]} | text"),
+        vec![format!(r#"{{"a":{expected}}}"#)]
+    );
+    let heading = query::execute(&doc, ".h1[0]").unwrap();
+    assert_eq!(
+        query::format_output(&heading, query::OutputFormat::JsonLines),
+        expected
+    );
+    assert_eq!(serde_json::to_string(&heading[0]).unwrap(), expected);
+}
+
 // ---------------------------------------------------------------------------
 // String repeat overflow / regex (items 5c, 6c)
 // ---------------------------------------------------------------------------

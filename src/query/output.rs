@@ -1,7 +1,7 @@
 //! Output formatting for query results.
 
 use super::OutputFormat;
-use super::value::Value;
+use super::value::{Value, exact_integer};
 
 /// Format query results according to the specified format.
 pub fn format(values: &[Value], format: OutputFormat) -> String {
@@ -103,13 +103,13 @@ fn format_plain_value(value: &Value) -> String {
                 d.heading_count, d.word_count
             )
         }
-        Value::FrontMatter(fm) => serde_json::to_string_pretty(fm).unwrap_or_default(),
+        Value::FrontMatter(_) => serde_json::to_string_pretty(&value.to_json()).unwrap_or_default(),
     }
 }
 
 fn format_json(values: &[Value], pretty: bool) -> String {
     // Convert to JSON-compatible structure
-    let json_values: Vec<serde_json::Value> = values.iter().map(value_to_json).collect();
+    let json_values: Vec<serde_json::Value> = values.iter().map(Value::to_json).collect();
 
     let output = if json_values.len() == 1 {
         json_values.into_iter().next().unwrap()
@@ -127,117 +127,9 @@ fn format_json(values: &[Value], pretty: bool) -> String {
 fn format_json_lines(values: &[Value]) -> String {
     values
         .iter()
-        .map(|v| serde_json::to_string(&value_to_json(v)).unwrap_or_default())
+        .map(|v| serde_json::to_string(&v.to_json()).unwrap_or_default())
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// A whole number as an integer, within the range an f64 holds exactly.
-///
-/// So a count prints as `1` rather than `1.0` in JSON, the way an element's
-/// own fields already do, and `1e20` prints as itself rather than clamped to
-/// `i64::MAX` by an `as` cast.
-fn exact_integer(n: f64) -> Option<i64> {
-    const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
-    (n.fract() == 0.0 && n.abs() <= EXACT).then_some(n as i64)
-}
-
-fn value_to_json(value: &Value) -> serde_json::Value {
-    match value {
-        Value::Null => serde_json::Value::Null,
-        Value::Bool(b) => serde_json::Value::Bool(*b),
-        Value::Number(n) => match exact_integer(*n) {
-            Some(i) => serde_json::json!(i),
-            None => serde_json::json!(n),
-        },
-        Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Array(a) => serde_json::Value::Array(a.iter().map(value_to_json).collect()),
-        Value::Object(o) => {
-            let map: serde_json::Map<String, serde_json::Value> = o
-                .iter()
-                .map(|(k, v)| (k.clone(), value_to_json(v)))
-                .collect();
-            serde_json::Value::Object(map)
-        }
-        Value::Heading(h) => {
-            serde_json::json!({
-                "type": "heading",
-                "level": h.level,
-                "text": h.text,
-                "line": h.line,
-            })
-        }
-        Value::Code(c) => {
-            serde_json::json!({
-                "type": "code",
-                "language": c.language,
-                "content": c.content,
-                "start_line": c.start_line,
-                "end_line": c.end_line,
-            })
-        }
-        Value::Link(l) => {
-            serde_json::json!({
-                "type": "link",
-                "text": l.text,
-                "url": l.url,
-                "link_type": l.link_type.as_str(),
-            })
-        }
-        Value::Image(i) => {
-            serde_json::json!({
-                "type": "image",
-                "alt": i.alt,
-                "src": i.src,
-                "title": i.title,
-            })
-        }
-        Value::Table(t) => {
-            serde_json::json!({
-                "type": "table",
-                "headers": t.headers,
-                "rows": t.rows,
-            })
-        }
-        Value::List(l) => {
-            serde_json::json!({
-                "type": "list",
-                "ordered": l.ordered,
-                "items": l.items.iter().map(|i| {
-                    serde_json::json!({
-                        "content": i.content,
-                        "checked": i.checked,
-                    })
-                }).collect::<Vec<_>>(),
-            })
-        }
-        Value::Blockquote(b) => {
-            serde_json::json!({
-                "type": "blockquote",
-                "content": b.content,
-            })
-        }
-        Value::Paragraph(p) => {
-            serde_json::json!({
-                "type": "paragraph",
-                "content": p.content,
-            })
-        }
-        Value::Document(d) => {
-            serde_json::json!({
-                "type": "document",
-                "heading_count": d.heading_count,
-                "word_count": d.word_count,
-            })
-        }
-        Value::FrontMatter(fm) => {
-            let map: serde_json::Map<String, serde_json::Value> = fm
-                .iter()
-                .map(|(k, v)| (k.clone(), value_to_json(v)))
-                .collect();
-            serde_json::Value::Object(map)
-        }
-    }
 }
 
 fn format_markdown(values: &[Value]) -> String {
