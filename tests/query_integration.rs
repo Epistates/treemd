@@ -225,6 +225,27 @@ fn group_by_level() {
     }
 }
 
+/// A string key names a property, as the `--query-help` example
+/// `group_by("level")` assumes. It was evaluated as an expression, the same
+/// string for every element, so everything landed in one group and
+/// `sort_by` left the order unchanged.
+#[test]
+fn string_keys_name_a_property() {
+    let md = "# A\n### C\n## B\n# D\n";
+    assert_eq!(
+        run(md, "[.h] | group_by(\"level\") | keys"),
+        vec!["1\n3\n2"]
+    );
+    assert_eq!(
+        run(md, ".h | sort_by(\"level\") | .text"),
+        vec!["A", "D", "B", "C"]
+    );
+    assert_eq!(
+        run(md, ".h | sort_by(\"text\") | .text"),
+        vec!["A", "B", "C", "D"]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // String repeat overflow / regex (items 5c, 6c)
 // ---------------------------------------------------------------------------
