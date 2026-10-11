@@ -546,20 +546,10 @@ fn parse_primary_expr(p: &mut Parser) -> Result<Expr, QueryError> {
     if p.check(&TokenKind::Dot) {
         p.advance();
 
-        // Check what comes after the dot
-        if p.is_at_end()
-            || p.check(&TokenKind::Pipe)
-            || p.check(&TokenKind::Comma)
-            || p.check(&TokenKind::Gt)
-            || p.check(&TokenKind::GtGt)
-            || p.check(&TokenKind::RParen)
-            || p.check(&TokenKind::RBracket)
-        {
-            // Just a dot - identity
-            return Ok(Expr::Identity);
-        }
-
-        // Element or property selector
+        // A dot not followed by a name is the identity, whatever comes
+        // next: `. == "x"`, `. + 1`, and `.[]` (the postfix loop takes the
+        // brackets). Only the end of the query and a few closers were
+        // accepted before, so `select(. == "x")` was a parse error.
         if let TokenKind::Ident(name) = p.current_kind().clone() {
             let name_span = p.current_span();
             p.advance();
@@ -602,15 +592,7 @@ fn parse_primary_expr(p: &mut Parser) -> Result<Expr, QueryError> {
             }
         }
 
-        // Invalid selector
-        return Err(QueryError::new(
-            QueryErrorKind::UnexpectedToken {
-                expected: vec!["identifier"],
-                found: p.current_kind().clone(),
-            },
-            p.current_span(),
-            p.source.to_string(),
-        ));
+        return Ok(Expr::Identity);
     }
 
     // Parenthesized expression

@@ -121,6 +121,18 @@ fn array_negative_index() {
     assert_eq!(run("# X\n", "[10,20,30][-1]"), vec!["30".to_string()]);
 }
 
+/// A dot followed by an operator or brackets is the identity. Only the end
+/// of the query and a few closing tokens were accepted after it, so each of
+/// these was a parse error.
+#[test]
+fn identity_before_an_operator_or_brackets() {
+    assert_eq!(run("# X\n", "\"a\" | . == \"a\""), vec!["true"]);
+    assert_eq!(run("# X\n", "5 | . + 1"), vec!["6"]);
+    assert_eq!(run("# X\n", "[1, 2] | .[]"), vec!["1", "2"]);
+    assert_eq!(run("# X\n", "[1, 2] | .[1]"), vec!["2"]);
+    assert_eq!(run("# X\n", "[3, 4] | .[] | select(. == 4)"), vec!["4"]);
+}
+
 #[test]
 fn array_slice() {
     assert_eq!(run("# X\n", "[10,20,30][0:2]"), vec!["10", "20"]);
