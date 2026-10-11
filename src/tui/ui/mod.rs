@@ -1605,6 +1605,7 @@ fn render_markdown_enhanced(
                     } else {
                         selected_line_offset
                     };
+                    let item_first_row = lines.len();
 
                     // Check if content has nested items (contains newlines with indentation)
                     let has_nested = item.content.contains('\n');
@@ -1701,9 +1702,12 @@ fn render_markdown_enhanced(
                             }
                         }
                     } else {
-                        // Simple single-line item (or item with nested blocks)
-                        let formatted = if !item.inline.is_empty() {
-                            render_inline_elements(&item.inline, theme, selected_link_inline_idx)
+                        // Simple single-line item (or item with nested blocks).
+                        // Only the item's own run: the rest of `inline` is its
+                        // nested blocks, which are drawn below it.
+                        let own = crate::parser::content::own_inline(item);
+                        let formatted = if !own.is_empty() {
+                            render_inline_elements(own, theme, selected_link_inline_idx)
                         } else {
                             format_inline_markdown(&item.content, theme)
                         };
@@ -1711,7 +1715,7 @@ fn render_markdown_enhanced(
                         let mut spans = vec![];
 
                         // Pointer replaces leading spaces, not prepended
-                        if pointer_line.is_some() {
+                        if pointer_line == Some(0) {
                             spans.push(Span::styled(
                                 "→ ",
                                 Style::default()
@@ -1802,6 +1806,28 @@ fn render_markdown_enhanced(
                             indented_spans.extend(nested_line.spans);
                             lines.push(Line::from(indented_spans));
                         }
+                    }
+
+                    // A selected link in a nested item sits `line_offset` rows
+                    // below the item's own, drawn by the nested list above, so
+                    // the pointer goes over that row's indent.
+                    if let Some(row) = pointer_line
+                        .filter(|&offset| !has_nested && offset > 0)
+                        .map(|offset| item_first_row + offset)
+                        && let Some(line) = lines.get_mut(row)
+                        && line.spans.first().is_some_and(|s| s.content == "     ")
+                    {
+                        line.spans[0] = Span::raw("   ");
+                        line.spans.insert(
+                            0,
+                            Span::styled(
+                                "→ ",
+                                Style::default()
+                                    .fg(theme.selection_indicator_fg)
+                                    .bg(theme.selection_indicator_bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        );
                     }
                 }
             }
@@ -2580,15 +2606,17 @@ fn render_block_to_lines(
         }
         ContentBlock::List { ordered, items } => {
             for (i, item) in items.iter().enumerate() {
-                let marker = if *ordered {
-                    format!("{}. ", i + 1)
-                } else {
-                    "• ".to_string()
+                let marker = match item.checked {
+                    Some(true) => "☑ ".to_string(),
+                    Some(false) => "☐ ".to_string(),
+                    None if *ordered => format!("{}. ", i + 1),
+                    None => "• ".to_string(),
                 };
 
-                // Render item content
-                let item_spans = if !item.inline.is_empty() {
-                    render_inline_elements(&item.inline, theme, None)
+                // Render the item's own content; its nested blocks follow.
+                let own = crate::parser::content::own_inline(item);
+                let item_spans = if !own.is_empty() {
+                    render_inline_elements(own, theme, None)
                 } else {
                     format_inline_markdown(&item.content, theme)
                 };
@@ -3354,6 +3382,11 @@ mod tests {
             "- item\n\n  | a |\n  |---|\n  | 1 |\n",
             "> - step\n>\n>   text\n",
             "> - step\n>\n> ```bash\n> cmd\n> ```\n",
+            "- [ ] outer\n  - [x] inner\n    - [ ] deep\n- [x] second\n",
+            "1. one\n   1. sub a\n   2. sub b\n2. two\n",
+            "- a\n  - b\n\n  para under a\n",
+            "> - q\n>   - qi\n",
+            "- [Features](#f)\n  - [TUI](#t)\n  - [CLI](#c)\n",
             // No `<details>` here. Its height depends on whether it is
             // expanded, and the counter takes no state, so the two can only be
             // compared with an InteractiveState to agree on. `index_elements`
@@ -3403,5 +3436,102 @@ mod tests {
             "the counter and the renderer disagree, so scrolling mispositions:\n{}",
             wrong.join("\n")
         );
+    }
+
+    // ---------- nested lists ----------
+
+    fn drawn_rows(md: &str, selected: Option<crate::tui::interactive::ElementId>) -> Vec<String> {
+        let hl = SyntaxHighlighter::new(
+            "base16-ocean.dark",
+            None,
+            CodeBlockBackground::Off,
+            ColorMode::Rgb,
+        );
+        render_markdown_enhanced(
+            md,
+            &hl,
+            &Theme::ocean_dark(),
+            selected,
+            None,
+            Some(80),
+            &std::collections::HashMap::new(),
+            CodeFences::Full,
+        )
+        .lines
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect()
+    }
+
+    /// Since turbovault-parser 2.2.0 a nested list is its own block in the
+    /// item, and the item's inline run also carries everything nested in it.
+    /// Drawing that whole run on the item's row printed `☐ outerinnerdeep`, so
+    /// each row has to carry only its own text, and a nested task keeps its
+    /// checkbox rather than becoming a bullet.
+    #[test]
+    fn a_nested_list_draws_each_item_on_its_own_row() {
+        assert_eq!(
+            drawn_rows(
+                "- [ ] outer\n  - [x] inner\n    - [ ] deep\n- [x] second\n",
+                None
+            ),
+            [
+                "  ☐ outer",
+                "     ☑ inner",
+                "       ☐ deep",
+                "  ☑ second",
+                ""
+            ]
+        );
+        assert_eq!(
+            drawn_rows("1. one\n   1. sub a\n   2. sub b\n2. two\n", None),
+            ["  1. one", "     1. sub a", "     2. sub b", "  2. two", ""]
+        );
+        assert_eq!(
+            drawn_rows("- a\n  - b\n\n  para under a\n", None),
+            ["  • a", "     • b", "     para under a", ""]
+        );
+        assert_eq!(
+            drawn_rows("> - q\n>   - qi\n", None),
+            ["│ • q", "│   • qi", ""]
+        );
+    }
+
+    /// A table of contents is the common nested list, and following one of
+    /// its links is the point of interactive mode. The selected link's pointer
+    /// belongs on the row the link is drawn on, not on the top-level item.
+    #[test]
+    fn a_selected_nested_link_points_at_its_own_row() {
+        use crate::tui::interactive::{ElementId, LINK_OFFSET};
+
+        let md = "- [Features](#features)\n  - [Interactive TUI](#interactive-tui)\n  - [CLI Mode](#cli-mode)\n";
+        let blocks = crate::parser::content::parse_content(md, 0);
+        let Some(ContentBlock::List { items, .. }) = blocks.first() else {
+            panic!("expected a list, got {blocks:?}");
+        };
+        let link_idx = |label: &str| {
+            items[0]
+                .inline
+                .iter()
+                .position(|e| matches!(e, InlineElement::Link { text, .. } if text == label))
+                .unwrap_or_else(|| panic!("no link {label:?}"))
+        };
+        let select = |label: &str| {
+            Some(ElementId {
+                block_idx: 0,
+                sub_idx: Some(link_idx(label) + LINK_OFFSET),
+            })
+        };
+        let pointed = |rows: Vec<String>| -> Vec<usize> {
+            rows.iter()
+                .enumerate()
+                .filter(|(_, r)| r.contains('→'))
+                .map(|(i, _)| i)
+                .collect()
+        };
+
+        assert_eq!(pointed(drawn_rows(md, select("Features"))), [0]);
+        assert_eq!(pointed(drawn_rows(md, select("Interactive TUI"))), [1]);
+        assert_eq!(pointed(drawn_rows(md, select("CLI Mode"))), [2]);
     }
 }
