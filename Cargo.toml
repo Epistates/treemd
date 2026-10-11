@@ -42,6 +42,8 @@ clap_mangen = "0.3"
 ureq = "3"
 
 unicode-width = "0.2"
+# Grapheme clusters for wrapping the content pane; the version ratatui uses.
+unicode-segmentation = "1.13"
 
 # Turbovault integration - OFM parsing with code-block awareness
 turbovault-parser = "3.2.0"
@@ -59,7 +61,7 @@ indexmap = { version = "2.14", features = ["serde"] }
 regex = "1.13"
 
 # TUI framework
-ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache", "unstable-rendered-line-info"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
 crossterm = "0.29"
 color-eyre = "0.6"
 

@@ -553,7 +553,7 @@ pub struct App {
     pub outline_scroll_state: ScrollbarState,
     pub focus: Focus,
     pub outline_items: Vec<OutlineItem>,
-    pub content_scroll: u16,
+    pub content_scroll: usize,
     pub content_scroll_state: ScrollbarState,
     pub content_height: usize,
     pub content_viewport_height: u16, // Actual viewport height for scroll calculations
@@ -597,6 +597,15 @@ pub struct App {
     pub current_file_path: PathBuf, // Path to current file for resolving relative links
     pub file_path_changed: bool,    // Flag to signal file watcher needs update
     pub suppress_file_watch: bool,  // Skip next file watch check (after internal save)
+    /// The displayed text, rendered lines and wrapped rows of the content
+    /// pane, each kept until something it was built from changes.
+    pub(crate) content_cache: crate::tui::content_view::ContentCache,
+    /// The layout of the last frame's content pane, where every element,
+    /// image and search match is found on screen.
+    pub(crate) content_view: std::sync::Arc<crate::tui::content_view::ContentView>,
+    /// Set when the selected element should be scrolled into view once the
+    /// frame being drawn has laid the section out.
+    pending_element_scroll: bool,
     /// Hash of the file as treemd last read or wrote it. A save checks the
     /// disk against this first, so an edit made elsewhere since then is not
     /// silently overwritten by the in-memory copy.
@@ -730,7 +739,7 @@ pub struct FileState {
     pub document: Document,
     pub filename: String,
     pub selected_heading: Option<String>,
-    pub content_scroll: u16,
+    pub content_scroll: usize,
     pub outline_state_selected: Option<usize>,
 }
 
@@ -867,6 +876,9 @@ impl App {
             current_file_path: file_path,
             file_path_changed: false,
             suppress_file_watch: false,
+            content_cache: Default::default(),
+            content_view: Default::default(),
+            pending_element_scroll: false,
             disk_hash,
             link_root,
             links_in_view: Vec::new(),
@@ -1433,7 +1445,7 @@ impl App {
             return;
         }
         self.mermaid_needs_reindex = false;
-        let content_text = self.current_section_content();
+        let content_text = self.displayed_section_content().to_string();
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content_text, 0);
         let rows = self.mermaid_placeholder_rows.clone();
@@ -2532,11 +2544,9 @@ impl App {
     }
 
     /// Maximum scroll offset: stops when last line is at bottom of viewport
-    pub fn max_content_scroll(&self) -> u16 {
-        let viewport = self.content_viewport_height as usize;
+    pub fn max_content_scroll(&self) -> usize {
         self.content_height
-            .saturating_sub(viewport)
-            .min(u16::MAX as usize) as u16
+            .saturating_sub(self.content_viewport_height as usize)
     }
 
     /// Scroll content down by one line
@@ -2545,7 +2555,7 @@ impl App {
         let new_scroll = self.content_scroll.saturating_add(1);
         if new_scroll <= max_scroll {
             self.content_scroll = new_scroll;
-            self.content_scroll_state = self.content_scroll_state.position(new_scroll as usize);
+            self.content_scroll_state = self.content_scroll_state.position(new_scroll);
         }
     }
 
@@ -2553,7 +2563,7 @@ impl App {
     fn scroll_content_up(&mut self) {
         let new_scroll = self.content_scroll.saturating_sub(1);
         self.content_scroll = new_scroll;
-        self.content_scroll_state = self.content_scroll_state.position(new_scroll as usize);
+        self.content_scroll_state = self.content_scroll_state.position(new_scroll);
     }
 
     /// Jump to link by index in filtered list
@@ -2995,7 +3005,7 @@ impl App {
             self.previous_selection = current_selection;
 
             // Reindex interactive elements for the new section
-            let content_text = self.current_section_content();
+            let content_text = self.displayed_section_content().to_string();
 
             use crate::parser::content::parse_content;
             let blocks = parse_content(&content_text, 0);
@@ -3008,13 +3018,11 @@ impl App {
             let content_lines = content_text.lines().count();
             self.content_height = content_lines;
             self.content_scroll_state =
-                ScrollbarState::new(content_lines).position(self.content_scroll as usize);
+                ScrollbarState::new(content_lines).position(self.content_scroll);
             self.metrics_dirty = false;
         } else {
             // Cheap path: just keep the scrollbar position in sync with scroll.
-            self.content_scroll_state = self
-                .content_scroll_state
-                .position(self.content_scroll as usize);
+            self.content_scroll_state = self.content_scroll_state.position(self.content_scroll);
         }
     }
 
@@ -3084,7 +3092,7 @@ impl App {
             // Scroll to show the last line at the bottom of the viewport
             let max_scroll = self.max_content_scroll();
             self.content_scroll = max_scroll;
-            self.content_scroll_state = self.content_scroll_state.position(max_scroll as usize);
+            self.content_scroll_state = self.content_scroll_state.position(max_scroll);
         }
     }
 
@@ -3332,15 +3340,15 @@ impl App {
             return;
         }
 
-        // Get current section content
-        let content = self.current_section_content();
-
-        // Convert to plain text using parser (strips links, formatting, etc.)
-        // This ensures search matches what's visible when rendered
-        let plain_content = turbovault_parser::to_plain_text(&content);
+        // Search the lines the content pane draws, the same ones the
+        // highlighter marks, so the match count and the highlighted current
+        // match agree, and a match's line is a place on screen. Searching a
+        // plain-text conversion of the source instead numbered lines that
+        // were never drawn, so `n` scrolled to the wrong place.
+        let view = std::sync::Arc::clone(&self.content_view);
         // Find all exact substring matches (case-insensitive), as offsets
         // into the line itself, the same matcher the highlighter uses
-        for (line_num, line) in plain_content.lines().enumerate() {
+        for (line_num, line) in view.line_text.iter().enumerate() {
             for (start, end) in crate::tui::ui::util::find_ignore_case(line, &self.doc_search.query)
             {
                 self.doc_search.matches.push(SearchMatch {
@@ -3370,15 +3378,14 @@ impl App {
         if let Some(idx) = self.doc_search.current_idx
             && let Some(m) = self.doc_search.matches.get(idx)
         {
-            let match_line = m.line as u16;
+            // The row the match is drawn on, inside its line if that wraps.
+            let match_line = self.content_view.row_of_offset(m.line, m.col_start);
 
             // Scroll to bring match line into view (center it if possible)
-            let half_viewport = self.content_viewport_height / 2;
+            let half_viewport = usize::from(self.content_viewport_height / 2);
             self.content_scroll = match_line.saturating_sub(half_viewport);
             self.content_scroll = self.content_scroll.min(self.max_content_scroll());
-            self.content_scroll_state = self
-                .content_scroll_state
-                .position(self.content_scroll as usize);
+            self.content_scroll_state = self.content_scroll_state.position(self.content_scroll);
 
             // Check if this match is inside a link
             self.detect_link_at_search_match(m.line, m.col_start, m.len);
@@ -3394,39 +3401,26 @@ impl App {
     ) {
         use crate::parser::links::extract_links;
 
-        // Get current section content
+        // Links of the section, for following one from the match.
         let content = self.current_section_content();
-
-        // Convert line/col to byte offset
-        let mut byte_offset = 0;
-        for (line_num, line) in content.lines().enumerate() {
-            if line_num == match_line {
-                byte_offset += match_col;
-                break;
-            }
-            byte_offset += line.len() + 1; // +1 for newline
-        }
-
-        let match_end = byte_offset + match_len;
-
-        // Extract links and populate links_in_view for potential following
         self.links_in_view = extract_links(&content);
         self.link_picker.filtered_indices = (0..self.links_in_view.len()).collect();
 
-        // Find if match overlaps with any link
-        for (idx, link) in self.links_in_view.iter().enumerate() {
-            let link_start = link.offset;
-            // Estimate link end based on its display text length + some syntax overhead
-            // For markdown: [text](url) - we care about the text portion
-            // For wikilinks: [[target|text]] - we care about the display text
-            let link_end = link_start + link.text.len() + 20; // generous estimate for syntax
-
-            // Check if match overlaps with link region
-            if byte_offset < link_end && match_end > link_start {
-                self.doc_search.selected_link_idx = Some(idx);
-                self.link_picker.selected = Some(idx); // Also set link mode selection
-                break;
-            }
+        // A link is at the match if its text, as drawn, overlaps the match in
+        // the line the match is on.
+        let Some(line) = self.content_view.line_text.get(match_line) else {
+            return;
+        };
+        let match_end = match_col + match_len;
+        let found = self.links_in_view.iter().position(|link| {
+            !link.text.is_empty()
+                && line
+                    .match_indices(link.text.as_str())
+                    .any(|(at, text)| at < match_end && at + text.len() > match_col)
+        });
+        if let Some(idx) = found {
+            self.doc_search.selected_link_idx = Some(idx);
+            self.link_picker.selected = Some(idx); // Also set link mode selection
         }
     }
 
@@ -3553,74 +3547,92 @@ impl App {
 
     pub fn scroll_page_down(&mut self) {
         if self.focus == Focus::Content {
-            let page = self.content_viewport_height.saturating_sub(2).max(1);
+            let page = usize::from(self.content_viewport_height.saturating_sub(2).max(1));
             let new_scroll = self.content_scroll.saturating_add(page);
             self.content_scroll = new_scroll.min(self.max_content_scroll());
-            self.content_scroll_state = self
-                .content_scroll_state
-                .position(self.content_scroll as usize);
+            self.content_scroll_state = self.content_scroll_state.position(self.content_scroll);
         }
     }
 
     pub fn scroll_page_up(&mut self) {
         if self.focus == Focus::Content {
-            let page = self.content_viewport_height.saturating_sub(2).max(1);
+            let page = usize::from(self.content_viewport_height.saturating_sub(2).max(1));
             self.content_scroll = self.content_scroll.saturating_sub(page);
-            self.content_scroll_state = self
-                .content_scroll_state
-                .position(self.content_scroll as usize);
+            self.content_scroll_state = self.content_scroll_state.position(self.content_scroll);
         }
     }
 
     /// Scroll page down in interactive mode (bypasses focus check)
     pub fn scroll_page_down_interactive(&mut self) {
-        let page = self.content_viewport_height.saturating_sub(2).max(1);
+        let page = usize::from(self.content_viewport_height.saturating_sub(2).max(1));
         let new_scroll = self.content_scroll.saturating_add(page);
         self.content_scroll = new_scroll.min(self.max_content_scroll());
-        self.content_scroll_state = self
-            .content_scroll_state
-            .position(self.content_scroll as usize);
+        self.content_scroll_state = self.content_scroll_state.position(self.content_scroll);
     }
 
     /// Scroll page up in interactive mode (bypasses focus check)
     pub fn scroll_page_up_interactive(&mut self) {
-        let page = self.content_viewport_height.saturating_sub(2).max(1);
+        let page = usize::from(self.content_viewport_height.saturating_sub(2).max(1));
         self.content_scroll = self.content_scroll.saturating_sub(page);
-        self.content_scroll_state = self
-            .content_scroll_state
-            .position(self.content_scroll as usize);
+        self.content_scroll_state = self.content_scroll_state.position(self.content_scroll);
     }
 
-    /// Auto-scroll to keep the selected interactive element in view
-    /// viewport_height: height of the visible content area (in lines)
-    pub fn scroll_to_interactive_element(&mut self, viewport_height: u16) {
-        if let Some((start_line, end_line)) = self.interactive_state.current_element_line_range() {
-            let start = start_line as u16;
-            let end = end_line as u16;
-            let scroll = self.content_scroll;
-            let viewport_end = scroll.saturating_add(viewport_height);
+    /// Auto-scroll to keep the selected interactive element in view.
+    ///
+    /// Only asks for it: the rows the element is drawn on are known once the
+    /// frame has laid the section out, so the scroll is applied there, by
+    /// `apply_element_scroll`. Computing it here used the previous
+    /// frame's layout, which is wrong right after anything that changes it,
+    /// such as expanding a `<details>`.
+    pub fn scroll_to_interactive_element(&mut self, _viewport_height: u16) {
+        self.pending_element_scroll = true;
+    }
 
-            // Add margin for smoother scrolling - trigger before element goes completely off-screen
-            let scroll_margin = 2u16.min(viewport_height / 4);
-
-            // Element is above viewport (or too close to top margin) - scroll up
-            if start < scroll.saturating_add(scroll_margin) {
-                self.content_scroll = start.saturating_sub(scroll_margin);
-            }
-            // Element end is below viewport (or within bottom margin) - scroll down
-            else if end.saturating_add(scroll_margin) > viewport_end {
-                // Position so element's end is near bottom of viewport with margin
-                let new_scroll = end
-                    .saturating_add(scroll_margin)
-                    .saturating_sub(viewport_height);
-                self.content_scroll = new_scroll.min(self.max_content_scroll());
-            }
-
-            // Update scrollbar state
-            self.content_scroll_state = self
-                .content_scroll_state
-                .position(self.content_scroll as usize);
+    /// Scroll the selected element into view, if a scroll was asked for,
+    /// against the layout of the frame being drawn.
+    pub(crate) fn apply_element_scroll(&mut self) {
+        if !std::mem::take(&mut self.pending_element_scroll) {
+            return;
         }
+        let Some((start, end)) = self.current_element_rows() else {
+            return;
+        };
+        let viewport = usize::from(self.content_viewport_height.max(1));
+        let scroll = self.content_scroll;
+
+        // Add margin for smoother scrolling - trigger before element goes completely off-screen
+        let margin = 2.min(viewport / 4);
+
+        // Element is above viewport (or too close to top margin) - scroll up
+        if start < scroll + margin {
+            self.content_scroll = start.saturating_sub(margin);
+        }
+        // Element end is below viewport (or within bottom margin) - scroll down
+        else if end + margin > scroll + viewport {
+            // Position so the element's end is near the bottom, but never
+            // past its start: a tall element shows its top.
+            let to_end = (end + margin).saturating_sub(viewport);
+            self.content_scroll = to_end.min(start.saturating_sub(margin));
+        }
+        self.content_scroll = self.content_scroll.min(self.max_content_scroll());
+    }
+
+    /// The screen rows the given element is drawn on, in the current layout.
+    pub(crate) fn element_rows(
+        &self,
+        element: &crate::tui::interactive::InteractiveElement,
+    ) -> Option<(usize, usize)> {
+        let counted = *self
+            .interactive_state
+            .block_lines
+            .get(element.id.block_idx)?;
+        self.content_view
+            .element_rows(element.id.block_idx, counted, element.line_range)
+    }
+
+    /// The screen rows of the selected element, in the current layout.
+    pub(crate) fn current_element_rows(&self) -> Option<(usize, usize)> {
+        self.element_rows(self.interactive_state.current_element()?)
     }
 
     pub fn toggle_expand(&mut self) {
@@ -4339,6 +4351,57 @@ impl App {
             .selected()
             .and_then(|i| self.outline_items.get(i))
             .and_then(|item| item.heading_index)
+    }
+
+    /// The current section as the content pane shows it: with frontmatter and
+    /// LaTeX hidden as configured, unless the raw source is on.
+    ///
+    /// Everything that refers to a block by its index, the interactive
+    /// index, the renderer, and the edits that act on a selected element,
+    /// has to parse this same text. The index used to parse the unfiltered
+    /// section while the renderer drew the filtered one, so with frontmatter
+    /// hidden the pointer marked one link while Enter followed another.
+    pub(crate) fn displayed_section_content(&mut self) -> std::sync::Arc<String> {
+        use std::hash::{Hash, Hasher};
+
+        let raw = self.current_section_content();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (
+            &raw,
+            self.show_raw_source,
+            self.should_hide_frontmatter(),
+            self.should_hide_latex(),
+            self.should_latex_aggressive(),
+        )
+            .hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some((cached, text)) = &self.content_cache.displayed
+            && *cached == key
+        {
+            return std::sync::Arc::clone(text);
+        }
+        let text = std::sync::Arc::new(self.filter_for_display(raw));
+        self.content_cache.displayed = Some((key, std::sync::Arc::clone(&text)));
+        text
+    }
+
+    /// [`Self::displayed_section_content`] without the cache, for callers
+    /// that only borrow the app.
+    fn compute_displayed_section(&self) -> String {
+        self.filter_for_display(self.current_section_content())
+    }
+
+    fn filter_for_display(&self, raw: String) -> String {
+        if self.show_raw_source {
+            raw
+        } else {
+            crate::tui::ui::util::filter_content(
+                &raw,
+                self.should_hide_frontmatter(),
+                self.should_hide_latex(),
+                self.should_latex_aggressive(),
+            )
+        }
     }
 
     /// Get the content for the currently selected section, or the full document if no heading is selected.
@@ -5466,9 +5529,7 @@ impl App {
         }
 
         self.content_scroll = state.content_scroll;
-        self.content_scroll_state = self
-            .content_scroll_state
-            .position(state.content_scroll as usize);
+        self.content_scroll_state = self.content_scroll_state.position(state.content_scroll);
     }
 
     /// Reload current file from disk (used after external editing).
@@ -5505,9 +5566,9 @@ impl App {
         }
 
         // Restore scroll position (may be adjusted if content changed)
-        if (current_scroll as usize) < self.content_height {
+        if current_scroll < self.content_height {
             self.content_scroll = current_scroll;
-            self.content_scroll_state = self.content_scroll_state.position(current_scroll as usize);
+            self.content_scroll_state = self.content_scroll_state.position(current_scroll);
         }
 
         Ok(true)
@@ -5521,7 +5582,7 @@ impl App {
         }
 
         // Get current section content to index
-        let content = self.current_section_content();
+        let content = self.displayed_section_content().to_string();
 
         // Parse content into blocks
         use crate::parser::content::parse_content;
@@ -5533,7 +5594,7 @@ impl App {
 
         // Enter interactive mode at current scroll position (preserve user's view)
         self.interactive_state
-            .enter_at_scroll_position(self.content_scroll as usize);
+            .enter_at_scroll_position(self.content_scroll);
         self.mode = AppMode::Interactive;
 
         // Only scroll if the selected element is not fully visible
@@ -5681,7 +5742,7 @@ impl App {
 
     /// Re-index interactive elements after state changes
     pub fn reindex_interactive_elements(&mut self) {
-        let content = self.current_section_content();
+        let content = self.displayed_section_content().to_string();
 
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
@@ -5708,33 +5769,45 @@ impl App {
                 .to_string()
         };
 
-        // Identify the checkbox text and its occurrence index among identical
-        // checkboxes (same text, same state) in this section, so duplicates
-        // toggle the right line.
-        let content = self.current_section_content();
-        let blocks = parse_content(&content, 0);
-
-        let target_text = if let Some(Block::List { items, .. }) = blocks.get(block_idx) {
-            items.get(item_idx).map(|item| clean(&item.content))
-        } else {
-            None
+        // The selected element's block and item index are in the section as
+        // displayed, where hidden frontmatter or display math can remove
+        // whole blocks. Hiding never adds or removes a list item, though, so
+        // the item's place among the section's task items is the same in the
+        // source, and the source's own text is what the file is matched by.
+        let task_items = |blocks: &[Block]| -> Vec<(usize, usize, String, Option<bool>)> {
+            blocks
+                .iter()
+                .enumerate()
+                .filter_map(|(b_i, block)| match block {
+                    Block::List { items, .. } => Some((b_i, items)),
+                    _ => None,
+                })
+                .flat_map(|(b_i, items)| {
+                    items
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, item)| item.checked.is_some())
+                        .map(move |(i_i, item)| (b_i, i_i, clean(&item.content), item.checked))
+                })
+                .collect()
         };
-        let target_text =
-            target_text.ok_or_else(|| "Could not find checkbox content".to_string())?;
+        let displayed = parse_content(&self.displayed_section_content(), 0);
+        let ordinal = task_items(&displayed)
+            .iter()
+            .position(|(b_i, i_i, _, _)| (*b_i, *i_i) == (block_idx, item_idx))
+            .ok_or_else(|| "Could not find checkbox content".to_string())?;
+        let source = task_items(&parse_content(&self.current_section_content(), 0));
+        let (_, _, target_text, _) = source
+            .get(ordinal)
+            .cloned()
+            .ok_or_else(|| "Could not find checkbox content".to_string())?;
 
-        let mut occurrence = 0usize;
-        'outer: for (b_i, block) in blocks.iter().enumerate() {
-            if let Block::List { items, .. } = block {
-                for (i_i, item) in items.iter().enumerate() {
-                    if b_i == block_idx && i_i == item_idx {
-                        break 'outer;
-                    }
-                    if item.checked == Some(checked) && clean(&item.content) == target_text {
-                        occurrence += 1;
-                    }
-                }
-            }
-        }
+        // Its occurrence among identical checkboxes (same text, same state)
+        // before it in this section, so duplicates toggle the right line.
+        let occurrence = source[..ordinal]
+            .iter()
+            .filter(|(_, _, text, state)| *state == Some(checked) && *text == target_text)
+            .count();
 
         // Apply the toggle on the in-memory content (which includes any
         // buffered table edits) so toggling can never drop them.
@@ -5769,9 +5842,7 @@ impl App {
 
         // Restore scroll position (clamped to valid range)
         self.content_scroll = saved_scroll.min(self.max_content_scroll());
-        self.content_scroll_state = self
-            .content_scroll_state
-            .position(self.content_scroll as usize);
+        self.content_scroll_state = self.content_scroll_state.position(self.content_scroll);
 
         // Restore interactive element selection if still valid
         if let Some(idx) = saved_element_idx
@@ -5897,7 +5968,7 @@ impl App {
                 &element.element_type
         {
             // Parse current section to get table data
-            let content = self.current_section_content();
+            let content = self.compute_displayed_section();
 
             use crate::parser::content::parse_content;
             let blocks = parse_content(&content, 0);
@@ -6088,7 +6159,7 @@ impl App {
         use crate::parser::output::Block;
 
         // Get the current section content to find the right table
-        let section_content = self.current_section_content();
+        let section_content = self.compute_displayed_section();
 
         // Parse to find the table block
         let blocks = parse_content(&section_content, 0);

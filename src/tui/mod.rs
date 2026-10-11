@@ -1,4 +1,5 @@
 mod app;
+mod content_view;
 mod edits;
 mod help_text;
 mod image_cache;
@@ -241,9 +242,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         }
                         // Restore scroll position
                         app.content_scroll = saved_scroll.min(app.max_content_scroll());
-                        app.content_scroll_state = app
-                            .content_scroll_state
-                            .position(app.content_scroll as usize);
+                        app.content_scroll_state =
+                            app.content_scroll_state.position(app.content_scroll);
                         // Sync previous_selection to prevent update_content_metrics() from resetting scroll
                         app.sync_previous_selection();
 
