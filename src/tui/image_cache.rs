@@ -269,6 +269,80 @@ impl std::fmt::Display for ImageError {
 
 impl std::error::Error for ImageError {}
 
+/// Largest image file treemd will open. A screen recording of a few minutes
+/// fits comfortably; past this the file is almost certainly not meant for a
+/// terminal pane.
+const MAX_IMAGE_FILE_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Largest GIF canvas treemd will allocate, in pixels, which is 64 MB of
+/// RGBA. A GIF declares its canvas size in its header, before any frame, and
+/// a 62-byte file can declare 65535x65535: 17 GB, allocated the moment the
+/// document is opened.
+const MAX_GIF_CANVAS_PIXELS: u64 = 16 * 1024 * 1024;
+
+/// Open an image the document names, if it is a regular file of a size worth
+/// drawing.
+///
+/// Checked before opening, because opening a FIFO blocks until something
+/// writes to it, and this runs on the UI thread with raw mode on, so the
+/// session freezes with no way to interrupt it. A terminal or a device is
+/// refused for the same reason.
+pub(crate) fn open_image_file(path: &Path) -> Result<File, ImageError> {
+    let meta = std::fs::metadata(path).map_err(|_| ImageError::NotFound)?;
+    if !meta.is_file() {
+        return Err(ImageError::InvalidFormat("not a regular file".to_string()));
+    }
+    if meta.len() > MAX_IMAGE_FILE_BYTES {
+        return Err(ImageError::InvalidFormat(format!(
+            "{} MB, over the {} MB limit",
+            meta.len() / (1024 * 1024),
+            MAX_IMAGE_FILE_BYTES / (1024 * 1024)
+        )));
+    }
+    File::open(path).map_err(|_| ImageError::NotFound)
+}
+
+/// A GIF decoder for `path`, or `None` when the file is not a GIF.
+///
+/// Refuses a canvas over [`MAX_GIF_CANVAS_PIXELS`] before anything is
+/// allocated for it.
+fn read_gif(
+    path: &Path,
+    color: gif::ColorOutput,
+) -> Result<Option<gif::Decoder<BufReader<File>>>, ImageError> {
+    let file = open_image_file(path)?;
+    let mut options = gif::DecodeOptions::new();
+    options.set_color_output(color);
+    let Ok(decoder) = options.read_info(BufReader::new(file)) else {
+        return Ok(None);
+    };
+    let (width, height) = (decoder.width(), decoder.height());
+    if u64::from(width) * u64::from(height) > MAX_GIF_CANVAS_PIXELS {
+        return Err(ImageError::InvalidFormat(format!(
+            "GIF canvas {width}x{height} is too large"
+        )));
+    }
+    Ok(Some(decoder))
+}
+
+/// [`read_gif`] for a path that has to be a GIF.
+fn require_gif(
+    path: &Path,
+    color: gif::ColorOutput,
+) -> Result<gif::Decoder<BufReader<File>>, ImageError> {
+    read_gif(path, color)?.ok_or_else(|| ImageError::InvalidFormat("not a GIF".to_string()))
+}
+
+/// Decode a still image in any supported format, within the `image` crate's
+/// default allocation limits.
+fn decode_still(path: &Path) -> Result<image::DynamicImage, ImageError> {
+    image::ImageReader::new(BufReader::new(open_image_file(path)?))
+        .with_guessed_format()
+        .map_err(|error| ImageError::InvalidFormat(error.to_string()))?
+        .decode()
+        .map_err(|error| ImageError::InvalidFormat(error.to_string()))
+}
+
 /// Namespace for image loading static methods.
 pub struct ImageCache;
 
@@ -342,12 +416,7 @@ impl StreamingGif {
     }
 
     fn open_decoder(path: &Path) -> Result<gif::Decoder<BufReader<File>>, ImageError> {
-        let file = File::open(path).map_err(|_| ImageError::NotFound)?;
-        let mut options = gif::DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::RGBA);
-        options
-            .read_info(BufReader::new(file))
-            .map_err(|error| ImageError::InvalidFormat(error.to_string()))
+        require_gif(path, gif::ColorOutput::RGBA)
     }
 
     fn reset_decoder(&mut self) -> Result<(), ImageError> {
@@ -503,12 +572,7 @@ impl ImageCache {
     /// The decoder reuses its frame buffer, so memory remains bounded even for
     /// long terminal recordings that a capable terminal will animate itself.
     pub fn extract_gif_frame_delays(path: &Path) -> Result<Vec<u32>, ImageError> {
-        let file = File::open(path).map_err(|_| ImageError::NotFound)?;
-        let mut options = gif::DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::Indexed);
-        let mut decoder = options
-            .read_info(BufReader::new(file))
-            .map_err(|error| ImageError::InvalidFormat(error.to_string()))?;
+        let mut decoder = require_gif(path, gif::ColorOutput::Indexed)?;
         let mut delays = Vec::new();
 
         while let Some(frame) = decoder
@@ -535,12 +599,7 @@ impl ImageCache {
         path: &Path,
         target_index: usize,
     ) -> Result<image::DynamicImage, ImageError> {
-        let file = File::open(path).map_err(|_| ImageError::NotFound)?;
-        let mut options = gif::DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::RGBA);
-        let mut decoder = options
-            .read_info(BufReader::new(file))
-            .map_err(|error| ImageError::InvalidFormat(error.to_string()))?;
+        let mut decoder = require_gif(path, gif::ColorOutput::RGBA)?;
         let width = u32::from(decoder.width());
         let height = u32::from(decoder.height());
         let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
@@ -603,16 +662,8 @@ impl ImageCache {
     /// For non-GIF images, returns a single frame with 0ms delay (static).
     /// Maintains a persistent canvas to properly handle GIF disposal methods.
     pub fn extract_all_frames(path: &Path) -> Result<Vec<GifFrame>, ImageError> {
-        use std::fs::File;
-
-        let file = File::open(path).map_err(|_| ImageError::NotFound)?;
-        let reader = BufReader::new(file);
-
-        let mut options = gif::DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::RGBA);
-
-        match options.read_info(reader) {
-            Ok(mut decoder) => {
+        match read_gif(path, gif::ColorOutput::RGBA)? {
+            Some(mut decoder) => {
                 let width = decoder.width() as u32;
                 let height = decoder.height() as u32;
                 let mut frames = Vec::new();
@@ -666,23 +717,16 @@ impl ImageCache {
                     Ok(frames)
                 }
             }
-            Err(_) => Self::load_static_image(path),
+            None => Self::load_static_image(path),
         }
     }
 
     /// Load a static (non-GIF) image as a single frame
     fn load_static_image(path: &Path) -> Result<Vec<GifFrame>, ImageError> {
-        image::ImageReader::open(path)
-            .ok()
-            .and_then(|r| r.with_guessed_format().ok())
-            .and_then(|r| r.decode().ok())
-            .map(|img| {
-                vec![GifFrame {
-                    image: img,
-                    delay_ms: 0,
-                }]
-            })
-            .ok_or_else(|| ImageError::InvalidFormat("Unsupported image format".to_string()))
+        Ok(vec![GifFrame {
+            image: decode_still(path)?,
+            delay_ms: 0,
+        }])
     }
 
     /// Extract the first frame from an image file, properly handling GIFs.
@@ -690,39 +734,16 @@ impl ImageCache {
     /// For regular images, returns the image as-is.
     /// For GIFs, extracts and composites the first frame with proper transparency.
     pub fn extract_first_frame(path: &Path) -> Result<image::DynamicImage, ImageError> {
-        use std::fs::File;
-
-        let file = File::open(path).map_err(|_| ImageError::NotFound)?;
-        let reader = BufReader::new(file);
-
-        let mut options = gif::DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::RGBA);
-
-        match options.read_info(reader) {
-            Ok(mut decoder) => {
-                let width = decoder.width() as u32;
-                let height = decoder.height() as u32;
-
-                if let Ok(Some(frame)) = decoder.read_next_frame() {
-                    let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-                    Self::composite_gif_frame(&mut canvas, frame, width, height);
-                    Ok(image::DynamicImage::ImageRgba8(canvas))
-                } else {
-                    image::ImageReader::open(path)
-                        .ok()
-                        .and_then(|r| r.with_guessed_format().ok())
-                        .and_then(|r| r.decode().ok())
-                        .ok_or_else(|| {
-                            ImageError::InvalidFormat("Failed to decode image".to_string())
-                        })
-                }
+        if let Some(mut decoder) = read_gif(path, gif::ColorOutput::RGBA)? {
+            let width = decoder.width() as u32;
+            let height = decoder.height() as u32;
+            if let Ok(Some(frame)) = decoder.read_next_frame() {
+                let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
+                Self::composite_gif_frame(&mut canvas, frame, width, height);
+                return Ok(image::DynamicImage::ImageRgba8(canvas));
             }
-            Err(_) => image::ImageReader::open(path)
-                .ok()
-                .and_then(|r| r.with_guessed_format().ok())
-                .and_then(|r| r.decode().ok())
-                .ok_or_else(|| ImageError::InvalidFormat("Unsupported format".to_string())),
         }
+        decode_still(path)
     }
 }
 
@@ -886,5 +907,56 @@ mod tests {
         );
         let second = ImageCache::extract_gif_frame(file.path(), 1).unwrap();
         assert_eq!(second.to_rgba8().get_pixel(0, 0), &Rgba([0, 255, 0, 255]));
+    }
+
+    /// A GIF's canvas size comes from its header, so a file of a few dozen
+    /// bytes can ask for gigabytes. Every path that composites a GIF has to
+    /// refuse it before allocating.
+    #[test]
+    fn a_gif_declaring_a_huge_canvas_is_refused_before_allocating() {
+        use std::borrow::Cow;
+
+        let mut file = tempfile::NamedTempFile::new().expect("temporary gif");
+        {
+            let palette = [255, 0, 0, 0, 255, 0];
+            let mut encoder = gif::Encoder::new(file.as_file_mut(), 60_000, 60_000, &palette)
+                .expect("gif encoder");
+            let frame = gif::Frame {
+                width: 1,
+                height: 1,
+                buffer: Cow::Owned(vec![0]),
+                ..gif::Frame::default()
+            };
+            encoder.write_frame(&frame).expect("frame");
+        }
+        let path = file.path();
+        assert!(std::fs::metadata(path).unwrap().len() < 100);
+
+        assert!(StreamingGif::open(path).is_err());
+        assert!(ImageCache::extract_first_frame(path).is_err());
+        assert!(ImageCache::extract_all_frames(path).is_err());
+        assert!(ImageCache::extract_gif_frame(path, 0).is_err());
+        assert!(ImageCache::extract_gif_frame_delays(path).is_err());
+    }
+
+    /// Opening a FIFO blocks until something writes to it, which on the UI
+    /// thread freezes the session with raw mode on. An image path that is not
+    /// a regular file is refused without opening it.
+    #[test]
+    fn an_image_path_that_is_not_a_regular_file_is_refused() {
+        let dir = tempfile::tempdir().expect("temporary dir");
+        assert!(open_image_file(dir.path()).is_err());
+        assert!(ImageCache::extract_first_frame(dir.path()).is_err());
+
+        #[cfg(unix)]
+        {
+            let fifo = dir.path().join("pipe.png");
+            let c_path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+            // SAFETY: `c_path` is a valid NUL-terminated path for the call's duration.
+            assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+            assert!(open_image_file(&fifo).is_err());
+            assert!(ImageCache::extract_first_frame(&fifo).is_err());
+            assert!(StreamingGif::open(&fifo).is_err());
+        }
     }
 }

@@ -6,7 +6,6 @@
 //! bounded for large recordings.
 
 use ratatui::layout::Rect;
-use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
 use std::path::Path;
 
@@ -15,7 +14,7 @@ use std::path::Path;
 const RAW_CHUNK_SIZE: usize = 48 * 1024;
 
 pub(crate) fn transmit_gif<W: Write>(writer: &mut W, path: &Path, area: Rect) -> io::Result<()> {
-    let file = File::open(path)?;
+    let file = crate::tui::image_cache::open_image_file(path).map_err(io::Error::other)?;
     let file_size = file.metadata()?.len();
     let mut reader = BufReader::new(file);
     let mut raw = vec![0; RAW_CHUNK_SIZE];
