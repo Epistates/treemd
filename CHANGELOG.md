@@ -107,6 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - **`--query-help` covers the whole language.** It listed `any` and `all` as taking no argument, called `.h2["Installation"]` an exact match when it ignores case, and left out `.para`, `.frontmatter`, `keys`, `values`, `has`, `type`, `empty`, the operators, `//`, conditionals and object construction
+- **The query guide describes the language that ships.** It claimed to be verified against 0.7.0, listed a REPL and shell completion for query syntax as done, documented `.content` as both including and excluding subsections (it includes them), and gave a grammar in which a comma bound tighter than a pipe and a `regex` production that does not exist. The grammar now matches the parser, and the guide covers streams and collection functions, selectors after a pipe, operators and the JSON array output
 
 ## [0.9.1] - 2026-09-14
 
