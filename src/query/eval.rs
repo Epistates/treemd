@@ -1282,13 +1282,16 @@ fn code_matches_language(code: &CodeValue, language: &str) -> bool {
         .is_some_and(|lang| lang.eq_ignore_ascii_case(language))
 }
 
+/// `==` as jq has it: values of different types are never equal, so
+/// `1 == "1"` and `null == ""` are false. Comparing text made them true.
+/// Arrays, objects and elements are equal when they hold the same values.
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Number(a), Value::Number(b)) => (a - b).abs() < f64::EPSILON,
         (Value::String(a), Value::String(b)) => a == b,
-        _ => a.to_text() == b.to_text(),
+        _ => a.identity_key() == b.identity_key(),
     }
 }
 

@@ -160,6 +160,21 @@ fn array_slice() {
 // Conditionals (item 4b)
 // ---------------------------------------------------------------------------
 
+/// Mixed types compared by text, so `1 == "1"` was true.
+#[test]
+fn equality_is_type_strict() {
+    let md = "# X\n";
+    assert_eq!(run(md, "1 == \"1\""), vec!["false"]);
+    assert_eq!(run(md, "null == \"\""), vec!["false"]);
+    assert_eq!(run(md, "true == \"true\""), vec!["false"]);
+    assert_eq!(run(md, "1 != \"1\""), vec!["true"]);
+    assert_eq!(run(md, "[1, 2] == [1, 2]"), vec!["true"]);
+    assert_eq!(run(md, "[1] == [\"1\"]"), vec!["false"]);
+    assert_eq!(run(md, "{a: 1} == {a: 1}"), vec!["true"]);
+    assert_eq!(run(md, ".h1[0] == .h1[0]"), vec!["true"]);
+    assert_eq!(run(md, ".h1[0].level == 1"), vec!["true"]);
+}
+
 #[test]
 fn elif_chain_single_end() {
     assert_eq!(
