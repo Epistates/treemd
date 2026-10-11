@@ -60,7 +60,7 @@ clean:
 install:
     @echo "Installing treemd..."
     cargo install --path . --force
-    @echo "✅ Installation complete! Run 'treemd --help' to get started."
+    @echo "Installation complete. Run 'treemd --help' to get started."
 
 # Uninstall the binary
 uninstall:
@@ -84,7 +84,7 @@ outdated:
 
 # Full CI check: format, lint, test, dependencies, build
 ci: fmt-check lint test test-minimal deny release
-    @echo "✅ All CI checks passed!"
+    @echo "All CI checks passed."
 
 # Quick test of link following feature
 test-links: install
