@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An element looks the same in an object as in JSON output.** `{a: .h1[0]} | text` printed the heading with its byte offset and its whole section body and no `type`, from a second serializer that `--query-output json` did not use. Both now print the tagged form, and a number over 2^63 in plain text prints as itself
 - **`[external]`, `[anchor]`, `[relative]` and `[wikilink]` filter text on anything but a link.** They were link-type filters everywhere, so `.h[external]` matched nothing rather than "External APIs". A keyword in brackets, as in `.h[end]`, was a parse error; it is a word to search for like any other
 - **`sort` orders numbers as numbers, and `unique` keeps distinct values.** Both compared values as text, so `[10, 9, 1] | sort` gave `1 10 9` and `[.h] | unique` merged two headings that shared a title. `sort` and `sort_by` now use jq's order (null, booleans, numbers, strings, arrays, objects), and `unique` drops only values that are the same, type included
+- **An index after a stream of arrays applies to each array.** `.table[0].rows[][0]` returned the first row's cells, not the first cell of every row as the docs promise, because the index picked from the stream of rows. It now indexes each row, as jq does. An index after a stream of anything else still picks from the stream, so `(.h | select(.level == 2))[0]` is the first match
 
 ### Security
 

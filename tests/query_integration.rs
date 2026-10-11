@@ -133,6 +133,24 @@ fn identity_before_an_operator_or_brackets() {
     assert_eq!(run("# X\n", "[3, 4] | .[] | select(. == 4)"), vec!["4"]);
 }
 
+/// An index after a stream of arrays applies to each array. It indexed the
+/// stream, so `.table[0].rows[][0]` returned the first row's cells rather
+/// than the first cell of each row.
+#[test]
+fn index_applies_to_each_array_in_a_stream() {
+    let md = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\n| c |\n|---|\n| 5 |\n";
+    assert_eq!(run(md, ".table[0].rows[][0]"), vec!["1", "3"]);
+    assert_eq!(run(md, ".table[0].rows[][-1]"), vec!["2", "4"]);
+    assert_eq!(run(md, ".table[0].rows[0][1]"), vec!["2"]);
+    assert_eq!(run(md, ".table.rows[0] | .[0]"), vec!["1", "5"]);
+    assert_eq!(run(md, ".table[].rows[] | count"), vec!["3"]);
+    // A stream of non-arrays is still indexed as a stream.
+    assert_eq!(
+        run("# A\n## B\n## C\n", "(.h | select(.level == 2))[0] | .text"),
+        vec!["B"]
+    );
+}
+
 #[test]
 fn array_slice() {
     assert_eq!(run("# X\n", "[10,20,30][0:2]"), vec!["10", "20"]);
