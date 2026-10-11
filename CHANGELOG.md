@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A list item's indented continuation inside a blockquote keeps its own block.** `> - step` followed by an indented `text` reported `steptext` as the item. The item is `step` now and `text` is its paragraph, the same as outside a quote ([turbovault#77](https://github.com/Epistates/turbovault/issues/77))
 - **The pointer on a selected link in a nested list sits on that link's row.** Following a table of contents in interactive mode put the pointer on the top-level entry, whichever of its children was selected
 - **`.list` reports lists in document order.** A nested list is reported right after the list that holds it rather than before
+- **Piped input is read again without `-`.** `cat doc.md | treemd -q '.h'`, `curl … | treemd` and `tree | treemd` ignored stdin whenever no file was named: from a directory holding any markdown file they opened the file picker, so a query ran against its placeholder and reported a `Select a file` heading, and from any other directory treemd printed its usage and exited. Only `treemd -` worked. This came in with the startup file picker in 0.5.5, which checked the directory before checking stdin
 
 ### Changed
 

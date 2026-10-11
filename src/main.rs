@@ -112,6 +112,19 @@ fn main() -> Result<()> {
         }
     } else {
         match args.file.len() {
+            // No file, but something is piped in: that is the document, as in
+            // `cat doc.md | treemd -q '.h'` or `tree | treemd`. This has to
+            // come before the file picker, which would otherwise take over
+            // whenever the working directory holds a markdown file.
+            0 if treemd::input::is_stdin_piped() => {
+                match treemd::input::determine_input_source(None) {
+                    Ok(source) => (source, false, None),
+                    Err(e) => {
+                        eprintln!("Error reading input: {}", e);
+                        process::exit(1);
+                    }
+                }
+            }
             0 => {
                 // No file provided - check for .md files in cwd
                 use std::fs;
