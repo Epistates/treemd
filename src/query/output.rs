@@ -108,14 +108,11 @@ fn format_plain_value(value: &Value) -> String {
 }
 
 fn format_json(values: &[Value], pretty: bool) -> String {
-    // Convert to JSON-compatible structure
-    let json_values: Vec<serde_json::Value> = values.iter().map(Value::to_json).collect();
-
-    let output = if json_values.len() == 1 {
-        json_values.into_iter().next().unwrap()
-    } else {
-        serde_json::Value::Array(json_values)
-    };
+    // Always an array, whatever the count, so a consumer can parse the
+    // output without knowing in advance how many values a query returns.
+    // A single result used to print bare, and `.link` versus `.link[0]`
+    // changed the shape of the document. `jsonl` is the one-value form.
+    let output = serde_json::Value::Array(values.iter().map(Value::to_json).collect());
 
     if pretty {
         serde_json::to_string_pretty(&output).unwrap_or_default()
@@ -243,9 +240,9 @@ mod tests {
         let json = |n: f64| format(&[Value::Number(n)], OutputFormat::Json);
         let plain = |n: f64| format(&[Value::Number(n)], OutputFormat::Plain);
 
-        assert_eq!(json(1.0), "1");
-        assert_eq!(json(-3.0), "-3");
-        assert_eq!(json(1.5), "1.5");
+        assert_eq!(json(1.0), "[1]");
+        assert_eq!(json(-3.0), "[-3]");
+        assert_eq!(json(1.5), "[1.5]");
         assert_eq!(plain(2.0), "2");
         assert_eq!(plain(1e20), "100000000000000000000");
         assert_eq!(plain(0.25), "0.25");
@@ -265,6 +262,23 @@ mod tests {
 
         let output = format(&[heading], OutputFormat::Plain);
         assert_eq!(output, "## Test");
+    }
+
+    /// The JSON shape used to depend on the result count: one value printed
+    /// bare, several as an array.
+    #[test]
+    fn json_output_is_an_array_whatever_the_count() {
+        let one = [Value::Number(1.0)];
+        let two = [Value::Number(1.0), Value::Number(2.0)];
+
+        assert_eq!(format(&[], OutputFormat::Json), "[]");
+        assert_eq!(format(&one, OutputFormat::Json), "[1]");
+        assert_eq!(format(&two, OutputFormat::Json), "[1,2]");
+        assert_eq!(format(&[], OutputFormat::JsonPretty), "[]");
+        assert_eq!(format(&one, OutputFormat::JsonPretty), "[\n  1\n]");
+        // jsonl stays one value per line.
+        assert_eq!(format(&one, OutputFormat::JsonLines), "1");
+        assert_eq!(format(&two, OutputFormat::JsonLines), "1\n2");
     }
 
     #[test]

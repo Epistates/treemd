@@ -236,7 +236,7 @@ fn query_output_accepts_the_documented_jsonp_alias() {
         f.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "stderr: {stderr}");
-    assert_eq!(stdout.trim(), "\"Title\"");
+    assert_eq!(stdout.trim(), "[\n  \"Title\"\n]");
 }
 
 /// Writing into a pipe whose reader has gone, as with `| head -1`, used to
