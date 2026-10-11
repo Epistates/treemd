@@ -57,7 +57,7 @@ Use it to:
 | **Navigation history** | Go back/forward between files with full state preservation |
 | **Syntax highlighting** | 50+ languages via [syntect](https://crates.io/crates/syntect) |
 | **Vim-style navigation** | `j`/`k`, `g`/`G`, `d`/`u`, `p` (parent) |
-| **Search & filter** | Filter headings (`s`) or search content (`/`) with `n`/`N` navigation |
+| **Search & filter** | Filter headings (`s`) or search the current section (`/`) with `n`/`N` navigation |
 | **Command palette** | Fuzzy-search every command with `:`—no need to memorize keys |
 | **Collapsible tree** | Expand/collapse sections with `Space`/`Enter` |
 | **Bookmarks** | Mark positions (`m`) and jump back (`'`) |
@@ -179,7 +179,7 @@ treemd *.md             # Open file picker with matched files
 | Key | Action |
 |-----|--------|
 | `s` | Search/filter headings in outline |
-| `/` | Search document content |
+| `/` | Search the current section |
 | `Tab` (in search) | Toggle between outline and content search |
 | `n` / `N` | Next/previous match |
 | `Esc` | Exit search mode |
@@ -434,7 +434,7 @@ treemd stores configuration in a TOML file:
 | Platform | Location |
 |----------|----------|
 | Linux/Unix | `~/.config/treemd/config.toml` |
-| macOS | `~/Library/Application Support/treemd/config.toml` |
+| macOS | `~/.config/treemd/config.toml` if it exists, otherwise `~/Library/Application Support/treemd/config.toml` |
 | Windows | `%APPDATA%\treemd\config.toml` |
 
 The file is created automatically when you change settings (theme with `t`, outline width with `[`/`]`).
@@ -445,7 +445,7 @@ The file is created automatically when you change settings (theme with `t`, outl
 [ui]
 theme = "Nord"                  # OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
 outline_width = 30              # 20, 30, or 40
-tree_style = "spaced"           # "spaced" (default) or "compact" (gapless box characters)
+tree_style = "compact"          # "compact" (default, gapless box characters) or "spaced"; used by --tree
 outline_heading_markers = true  # Show #/##/### level markers in outline sidebar
 
 [terminal]
@@ -504,7 +504,9 @@ Remap any key for any mode using intuitive TOML syntax. Multi-key sequences are 
 "Ctrl+p" = "PrevMatch"
 ```
 
-Available modes: `Normal`, `Help`, `ThemePicker`, `Interactive`, `InteractiveTable`, `LinkFollow`, `LinkSearch`, `Search`, `DocSearch`, `CommandPalette`, `ConfirmDialog`, `CellEdit`
+Available modes: `Normal`, `Help`, `ThemePicker`, `Interactive`, `InteractiveTable`, `LinkFollow`, `LinkSearch`, `Search`, `DocSearch`, `CommandPalette`, `ConfirmDialog`, `CellEdit`, `FilePicker`, `FileSearch`
+
+A binding that names an unknown key or action is skipped, and the rest of the file still applies; the status bar says which entries were skipped.
 
 See the built-in defaults in [`src/keybindings/defaults.rs`](src/keybindings/defaults.rs) for all available actions.
 
@@ -627,9 +629,9 @@ Contributions are welcome! Please feel free to submit a [Pull Request](https://g
 - [x] WikiLinks support
 - [x] Customizable keybindings
 - [x] Live file watching (auto-reload)
+- [x] Obsidian and GitHub callouts
 
 **Planned:**
-- [ ] Obsidian Flavored Markdown (callouts)
 - [ ] Fuzzy search improvements
 - [ ] Multiple file tabs
 - [ ] Custom query language plugins
