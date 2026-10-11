@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`.name` reads a key when the input has one, even if it is also an element name.** Element selectors took priority everywhere, so `{p: 1} | .p` printed every paragraph, `.h | {a: .text} | .a` printed every link, and `.fm | .image` printed the document's images rather than the front matter's `image`. A key or property on the input now wins; on the document the selector still does, so `.h2` and `. | .code` are unchanged. The document's `heading_count` is no longer also reachable as `.headings`, which was always the heading selector
 - **A selector piped from a heading selects within that heading's section.** `.h2[0] | .code` returned every code block in the document, not the ones under that h2. It now means the same as `.h2[0] >> .code`, so `.h | {title: .text, code: [.code]}` lists each section's own blocks. `.frontmatter` belongs to the document and is the same from anywhere
 - **`>` and `>>` scope tables, lists, images, paragraphs and blockquotes.** `.h2[Install] > .table` returned nothing whatever the section held, because those elements carry no source position. The section is now parsed on its own to find them
+- **`.` can be followed by an operator or brackets.** `select(. == "x")`, `. + 1` and `.[]` were parse errors, since only the end of the query and a few closing tokens were accepted after a bare dot
 
 ### Security
 
