@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Arity errors say how many arguments a function takes.** `count(1)` reported "expects 0..=0 arguments"; it now says "takes no arguments, got 1"
 - **A query error no longer ends in a blank line**
 - **`_pipe` and `_index` are no longer callable.** They are the parser's internal names for `|` and `[n]`, and typing them worked as undocumented functions. They now report "Unknown function"
+- **`==` no longer treats different types as equal.** Values of different types were compared by their text, so `1 == "1"` and `null == ""` were true. As in jq they are now false, and arrays, objects and elements are equal when they hold the same values
 
 ### Security
 
