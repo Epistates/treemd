@@ -264,12 +264,41 @@ pub fn restore() {
 /// Install a panic hook that restores the terminal before propagating the panic.
 ///
 /// Mirrors `ratatui::init`'s behavior but uses our piped-stdin-aware restore.
+/// A panic inside [`catch_isolated`] is left alone: the hook runs before
+/// `catch_unwind` regains control, so restoring there would drop the TUI out
+/// of the alternate screen and raw mode for a panic that is about to be
+/// handled, and print its message over the frame.
 pub fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if panic_is_isolated() {
+            return;
+        }
         restore();
         prev(info);
     }));
+}
+
+thread_local! {
+    /// How many [`catch_isolated`] calls are live on this thread.
+    static ISOLATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn panic_is_isolated() -> bool {
+    ISOLATED.with(|depth| depth.get() > 0)
+}
+
+/// Run `f`, turning a panic into `Err` without disturbing the terminal.
+///
+/// For third-party work that is allowed to fail (image encoding, mermaid
+/// layout and rasterization), where a panic should become an error for that
+/// one item rather than end the session. Plain `catch_unwind` is not enough
+/// here, see [`install_panic_hook`].
+pub fn catch_isolated<R>(f: impl FnOnce() -> R) -> std::thread::Result<R> {
+    ISOLATED.with(|depth| depth.set(depth.get() + 1));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    ISOLATED.with(|depth| depth.set(depth.get() - 1));
+    result
 }
 
 /// Read a terminal event. fd 0 already points at /dev/tty when stdin was piped
@@ -282,4 +311,27 @@ pub fn read_event() -> io::Result<Event> {
 /// `read_event`.
 pub fn poll_event(timeout: Duration) -> io::Result<bool> {
     poll(timeout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catch_isolated_marks_its_own_extent_and_returns_the_panic() {
+        assert!(!panic_is_isolated());
+
+        let inside = catch_isolated(panic_is_isolated);
+        assert_eq!(inside.ok(), Some(true));
+
+        // Nested, and unwinding through both, still leaves nothing marked.
+        let result = catch_isolated(|| {
+            let inner: std::thread::Result<()> = catch_isolated(|| panic!("inner"));
+            assert!(inner.is_err());
+            assert!(panic_is_isolated());
+            panic!("outer");
+        });
+        assert!(result.is_err());
+        assert!(!panic_is_isolated());
+    }
 }
