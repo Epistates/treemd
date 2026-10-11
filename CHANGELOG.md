@@ -67,6 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GIFs in the Kitty graphics protocol are animated by treemd rather than by the terminal.** The native path sent every frame to replace frame one rather than add a frame, and sized the image from its screen position, so it only ever showed a stretched last frame; it also needed every frame decoded in memory up front. Playback now goes through ratatui-image like every other terminal. iTerm2 still animates the original file natively
 - **A small mermaid diagram is enlarged at most 2x** instead of being stretched to fill the pane, so a two-node diagram no longer takes up dozens of rows
 
+### Internal
+
+- **Every GitHub Action is pinned to a commit SHA.** A tag such as `@v7` can be moved to different code after the fact, and the release workflow runs with write access and the signing secrets. Dependabot keeps the pins and their version comments current. `cross` is installed with `--locked` too
+
 ## [0.9.1] - 2026-09-14
 
 ### Fixed
