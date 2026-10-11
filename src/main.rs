@@ -692,124 +692,174 @@ fn print_query_help() {
 treemd Query Language (tql)
 
 A jq-like query language for navigating and extracting markdown structure.
+Results print one per line; a selector that matches nothing prints nothing
+and exits 0.
 
 ELEMENT SELECTORS
-    .h, .heading    All headings (any level)
-    .h1 - .h6       Headings by level
-    .code           All code blocks
-    .code[rust]     Code blocks by language
-    .link, .a       All links
-    .link[external] External links only
-    .img            All images
-    .table          All tables
-    .list           All lists
-    .blockquote     All blockquotes
+    .h, .heading        All headings (any level)
+    .h1 - .h6           Headings by level
+    .code               All code blocks
+    .link, .a           All links
+    .img, .image        All images
+    .table              All tables
+    .list               All lists (a nested list is its own entry)
+    .blockquote, .quote All blockquotes
+    .para, .p           All paragraphs
+    .frontmatter, .fm   YAML front matter, as an object
+    .                   The whole document
+
+    After a pipe, a selector applied to a heading looks only inside that
+    heading's section: `.h2[0] | .code` is the code under the first h2.
+    On an input that has a key or property of the same name, `.name` reads
+    it instead: `.fm | .image` is the front matter's `image`.
 
 FILTERS & INDEXING
-    .h2[Features]       Heading containing "Features" (fuzzy)
-    .h2["Installation"] Heading with exact text
+    .h2[Features]       h2s whose text contains "Features" (case-insensitive)
+    .h2["Install"]      h2s whose whole text is "Install" (case-insensitive)
+    .code[rust]         Code blocks by language (whole name, case-insensitive)
+    .link[external]     Links by type: external, anchor, relative, wikilink
     .h2[0]              First h2
     .h2[-1]             Last h2
     .h2[1:3]            h2s at index 1 and 2
     .h2[:3]             First 3 h2s
+    .h2[]               Every h2
+    .table[0].rows[][0] After a stream of arrays, an index applies to each
 
 HIERARCHY
-    .h1 > .h2           Direct child h2s under h1s
-    .h1 >> .code        Code blocks anywhere under h1s
+    .h1 > .h2           h2s directly under each h1
+    .h1 > .code         Code in each h1's own body, before its first subheading
+    .h1 >> .code        Code anywhere in each h1's section
+    Works for every element kind except front matter, which is document-wide.
+
+PROPERTIES
+    headings    .text .level .line .slug .content .md .children .parent
+                (.content and .md include subsections; .line is the
+                heading's own line)
+    code        .lang .text .lines .start_line .end_line
+    links       .text .url .type
+    images      .alt .src .title
+    tables      .headers .rows .cols .alignments
+    lists       .items .ordered
+    paragraphs  .text        blockquotes  .text
+    document    .heading_count .word_count .text
+    objects     .key, for any key (also front matter)
 
 PIPES
-    .h2 | text          Get heading text (strips ##)
-    [.h2] | count       Count all h2s
-    .code | lang        Get code block languages
-    .link | url         Get link URLs
+    .h2 | text          Heading text (strips ##)
+    .h2 | count         Number of h2s
+    .code | lang        Code block languages
+    .link | url         Link URLs
+
+    A collection function after a selector (or anything else that yields
+    several values) runs once on all of them: count, length, first, last,
+    nth, limit, skip, sort, sort_by, unique, reverse, group_by, join, min,
+    max, add, any, all, levels, langs, types. Given a single array, as in
+    `[.h2] | count`, they work on that array. Ordering functions (sort,
+    sort_by, unique, reverse, limit, skip) hand back a stream.
 
 COLLECTION FUNCTIONS
-    count, length       Count elements (alias: len, size)
-    first, last         First/last element (alias: head)
-    limit(n), take(n)   First n elements
-    skip(n), drop(n)    Skip first n elements
-    nth(n)              Get element at index
+    count, length       Count values (alias: len, size)
+    first, last         First/last value (alias: head)
+    nth(n)              Value at index n (negative counts from the end)
+    limit(n), take(n)   First n values
+    skip(n), drop(n)    All but the first n values
     reverse             Reverse order
-    sort                Sort alphabetically
-    sort_by(key)        Sort by property
-    unique              Remove duplicates
-    flatten             Flatten nested arrays
-    group_by(key)       Group elements by key
-    min, max            Min/max numeric value
-    add                 Sum numbers or concat strings
+    sort                Sort (null, booleans, numbers, strings, arrays, objects)
+    sort_by(f)          Sort by f, e.g. sort_by(.level) or sort_by("level")
+    unique              Drop repeated values, keeping the first
+    group_by(f)         Object of arrays keyed by f (alias: group)
+    flatten             Flatten one level of nested arrays
+    min, max            Smallest/largest number
+    add                 Sum numbers, or concatenate as text
+    keys, values        Keys/values of an object (indices/items of an array)
 
 STRING FUNCTIONS
-    text                Get text representation
+    text                Text of a value (a heading's text, a code body)
     upper, lower        Case conversion
-    trim                Strip whitespace
-    split(sep)          Split by separator
-    join(sep)           Join with separator
-    replace(a, b)       Replace substring
+    trim                Strip surrounding whitespace
+    split(sep)          Split into an array
+    join(sep)           Join values with sep
+    replace(a, b)       Replace every a with b
     slugify             URL-friendly slug
-    lines, words, chars Count lines/words/chars
+    lines, words, chars Count lines/words/characters
 
-FILTER FUNCTIONS
-    select(cond)        Keep if condition true (alias: where, filter)
-    contains(s)         Contains substring (alias: includes)
-    startswith(s)       Starts with prefix
-    endswith(s)         Ends with suffix
-    matches(regex)      Matches regex pattern
-    any, all            Check if any/all truthy
-    not                 Negate boolean
+TESTS
+    select(cond)        Keep the input when cond is true (alias: where, filter)
+    contains(s)         Text contains s, case-insensitive (alias: includes)
+    startswith(s)       Text starts with s, case-insensitive
+    endswith(s)         Text ends with s, case-insensitive
+    matches(regex)      Text matches a regex (case-sensitive)
+    has(key)            Object has key
+    any(cond), all(cond) Whether cond holds for any/every value
+    empty               Whether the input is null or an empty string,
+                        array or object
+    type                Type name: heading, code, string, number, ...
+    not                 Negation: `not .x` or `.x | not`
 
 CONTENT FUNCTIONS
-    content             Section content (for headings)
-    md                  Raw markdown
-    url, href, src      Get URL/link/image source
+    content             Section body under a heading
+    md                  Raw markdown of a heading's section
+    url, href, src      Link URL or image source
     lang                Code block language
 
 AGGREGATION FUNCTIONS
     stats               Document statistics
     levels              Heading count by level
     langs               Code block count by language
-    types               Link types count
+    types               Link count by type
+    levels, langs and types count the elements they are given (`.h2 |
+    levels`), or the whole document's when given none; stats is always
+    the whole document.
+
+OPERATORS
+    ==, !=              Equality; values of different types are never equal
+    <, <=, >, >=        Comparison of numbers or of strings
+    and, or, not        Logic
+    +, -, *, /, %       Arithmetic; + also joins strings and arrays,
+                        "ab" * 3 repeats a string
+    a // b              a, or b when a is null, false, 0 or empty
+    ( )                 Grouping
+
+CONSTRUCTION & CONDITIONALS
+    {title: .text, n: (.h | count)}     Object
+    [.h2 | .text]                       Array
+    if .level == 1 then "top" elif .level == 2 then "sub" else "deep" end
+    With no else, a false condition passes the input through unchanged.
+    `,` separates whole queries (`.h1, .h2`); it is not allowed inside ( ).
 
 EXAMPLES
     # List all h2 headings
     treemd -q '.h2' doc.md
 
-    # Get heading text only
-    treemd -q '.h2 | text' doc.md
-
     # Count headings
-    treemd -q '[.h2] | count' doc.md
-
-    # First 5 headings
-    treemd -q '[.h] | limit(5)' doc.md
+    treemd -q '.h2 | count' doc.md
 
     # Filter headings (three equivalent ways)
     treemd -q '.h | select(contains("API"))' doc.md
     treemd -q '.h | where(contains("API"))' doc.md
     treemd -q '.h[API]' doc.md
 
-    # All Rust code blocks
-    treemd -q '.code[rust]' doc.md
+    # Rust code under the "Install" section
+    treemd -q '.h2[Install] | .code[rust]' doc.md
 
     # External link URLs
     treemd -q '.link[external] | url' doc.md
 
-    # h2s under "Features" section
-    treemd -q '.h1[Features] > .h2' doc.md
+    # Headings sorted by level, and grouped by level
+    treemd -q '.h | sort_by(.level) | text' doc.md
+    treemd -q '.h | group_by(.level)' doc.md
 
-    # Group headings by level
-    treemd -q '[.h] | group_by("level")' doc.md
-
-    # Document statistics
-    treemd -q '. | stats' doc.md
+    # Outline with each heading's direct children
+    treemd -q '.h1 | {title: .text, sections: [.children[] | .text]}' doc.md
 
     # JSON output
     treemd -q '.h2' --query-output json doc.md
 
 OUTPUT FORMATS (--query-output)
     plain       Human-readable text (default)
-    json        Compact JSON
-    json-pretty Pretty-printed JSON (alias: jsonp)
-    jsonl       Line-delimited JSON (one per line)
+    json        Compact JSON, always an array
+    json-pretty Pretty-printed JSON array (alias: jsonp)
+    jsonl       One JSON value per line
     md          Raw markdown
     tree        Tree structure
 

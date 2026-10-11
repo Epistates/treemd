@@ -104,6 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Release archives carry signed build provenance.** Each archive in `SHA256SUMS` gets a GitHub artifact attestation naming the workflow, commit and tag it was built from, checkable with `gh attestation verify`. Only the packaging job can request the signing token
 - **`scripts/build-all.sh` is removed.** It had drifted from the release workflow, never built the musl targets, could not build the macOS and Windows targets from a single host, and piped every build through `head -20`, which hid failures. The release workflow is the one reference for building each target
 
+### Documentation
+
+- **`--query-help` covers the whole language.** It listed `any` and `all` as taking no argument, called `.h2["Installation"]` an exact match when it ignores case, and left out `.para`, `.frontmatter`, `keys`, `values`, `has`, `type`, `empty`, the operators, `//`, conditionals and object construction
+
 ## [0.9.1] - 2026-09-14
 
 ### Fixed
