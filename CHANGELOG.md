@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A query error's caret points at the right column after non-ASCII text.** It was placed by byte count, so in `.h["日本"] !` it landed several columns past the `!`
 - **Arity errors say how many arguments a function takes.** `count(1)` reported "expects 0..=0 arguments"; it now says "takes no arguments, got 1"
 - **A query error no longer ends in a blank line**
+- **`_pipe` and `_index` are no longer callable.** They are the parser's internal names for `|` and `[n]`, and typing them worked as undocumented functions. They now report "Unknown function"
 
 ### Security
 

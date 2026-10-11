@@ -662,6 +662,18 @@ fn parse_primary_expr(p: &mut Parser) -> Result<Expr, QueryError> {
     // Function call or identifier
     if let TokenKind::Ident(name) = p.current_kind().clone() {
         let name_span = p.current_span();
+
+        // `_pipe` and `_index` are how the parser spells its own pipe and
+        // postfix index forms. Typed by hand they reached those forms as if
+        // they were part of the language.
+        if matches!(name.as_str(), "_pipe" | "_index") {
+            return Err(QueryError::new(
+                QueryErrorKind::UnknownFunction(name),
+                name_span,
+                p.source.to_string(),
+            ));
+        }
+
         p.advance();
 
         // Check for function call
@@ -1143,6 +1155,20 @@ mod tests {
             panic!(
                 "Expected _pipe function, got {:?}",
                 query.expressions[0].stages[0]
+            );
+        }
+    }
+
+    /// The internal pipe and index forms were callable by name, so
+    /// `_pipe(.h, text)` worked as an undocumented pipe and `_index(.h, 0)`
+    /// as an undocumented index, while `_index(.h)` was "Unknown function".
+    #[test]
+    fn test_internal_forms_cannot_be_called() {
+        for query in ["_pipe(.h, text)", "_index(.h, 0)", "_pipe", ".h | _index"] {
+            let err = parse_str(query).unwrap_err();
+            assert!(
+                matches!(err.0.kind, QueryErrorKind::UnknownFunction(_)),
+                "{query}: {err}"
             );
         }
     }
