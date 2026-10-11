@@ -132,7 +132,14 @@ pub fn determine_input_source(file_path: Option<&Path>) -> Result<InputSource, I
             Ok(InputSource::Stdin(content))
         }
         Some(path) => {
-            // File path provided
+            // File path provided, held to the same limit as stdin: it is read
+            // whole, so a multi-gigabyte file named by mistake (or a device)
+            // would otherwise be read into memory before anything is shown.
+            let size = std::fs::metadata(path).map_err(InputError::Io)?.len();
+            let size = usize::try_from(size).unwrap_or(usize::MAX);
+            if size > MAX_INPUT_SIZE {
+                return Err(InputError::InputTooLarge(size));
+            }
             let content = std::fs::read_to_string(path).map_err(InputError::Io)?;
             Ok(InputSource::File(content))
         }
