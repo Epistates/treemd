@@ -178,6 +178,13 @@ impl PaletteCommand {
     }
 }
 
+/// Whether a link from a document may be handed to the system opener: web
+/// links only. Every place that opens a URL checks this one.
+fn is_openable_url(url: &str) -> bool {
+    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
 /// Fingerprint of a file's bytes, compared within one session only, so
 /// `DefaultHasher` being unstable across Rust releases does not matter.
 fn content_hash(bytes: &[u8]) -> u64 {
@@ -4936,15 +4943,10 @@ impl App {
     /// Returns `true` if the caller should exit its current mode (link-follow or interactive).
     fn resolve_relative_file_link(
         &mut self,
-        path: &PathBuf,
+        path: &std::path::Path,
         anchor: &Option<String>,
     ) -> Result<bool, String> {
         let has_md_extension = Self::is_markdown_extension(path);
-
-        let current_dir = self
-            .current_file_path
-            .parent()
-            .ok_or("Cannot determine current directory")?;
 
         if has_md_extension {
             self.load_file(path, anchor.as_deref())?;
@@ -4953,15 +4955,17 @@ impl App {
         } else {
             // No markdown extension — try .md, then as-is, then prompt to create
             let md_path = PathBuf::from(format!("{}.md", path.display()));
-            let absolute_md_path = current_dir.join(&md_path);
 
-            if absolute_md_path.exists() && !absolute_md_path.is_symlink() {
+            if self
+                .confine_link_path(&md_path)
+                .is_ok_and(|absolute_md_path| absolute_md_path.exists())
+            {
                 self.load_file(&md_path, anchor.as_deref())?;
                 Ok(true)
             } else {
-                let absolute_path = current_dir.join(path);
+                let absolute_path = self.confine_link_path(path)?;
 
-                if absolute_path.exists() && !absolute_path.is_symlink() {
+                if absolute_path.exists() {
                     // Non-markdown file — open in editor
                     self.pending_editor_file = Some(absolute_path);
                     Ok(true)
@@ -4970,7 +4974,7 @@ impl App {
                     let relative_path = if path.extension().is_none() {
                         PathBuf::from(format!("{}.md", path.display()))
                     } else {
-                        path.clone()
+                        path.to_path_buf()
                     };
                     self.load_file(&relative_path, anchor.as_deref())?;
                     Ok(self.mode != AppMode::ConfirmFileCreate)
@@ -5013,8 +5017,14 @@ impl App {
                 Ok(())
             }
             crate::parser::LinkTarget::External(url) => {
-                // Try to open in default browser
-                let open_result = open::that(&url);
+                // Try to open in default browser, if it is a web link. Any
+                // other scheme is only copied: `mailto:` can carry an
+                // `attach=` that some mail clients honor.
+                let open_result = if is_openable_url(&url) {
+                    open::that(&url)
+                } else {
+                    Err(std::io::Error::other("not a web link"))
+                };
 
                 // Also copy to clipboard as backup
                 let mut clipboard_success = false;
@@ -5076,11 +5086,15 @@ impl App {
     ///
     /// Security: Validates path to prevent directory traversal attacks.
     /// Files must be within the current file's directory or its subdirectories.
-    fn load_file(&mut self, relative_path: &PathBuf, anchor: Option<&str>) -> Result<(), String> {
+    fn load_file(
+        &mut self,
+        relative_path: &std::path::Path,
+        anchor: Option<&str>,
+    ) -> Result<(), String> {
         // Check for unsaved changes before navigating to a different file
         if self.has_unsaved_changes {
             self.pending_navigation = Some(PendingNavigation::LoadFile(
-                relative_path.clone(),
+                relative_path.to_path_buf(),
                 anchor.map(|s| s.to_string()),
             ));
             self.mode = AppMode::ConfirmSaveBeforeNav;
@@ -5090,48 +5104,85 @@ impl App {
         self.load_file_internal(relative_path, anchor)
     }
 
-    /// Internal file loading - skips unsaved changes check
+    /// Where a link to `relative` lands, if that stays inside the current
+    /// document's directory. Every link to a file goes through this, whether
+    /// it opens the file, hands it to the editor, or creates it.
     ///
-    /// Security: Validates path to prevent directory traversal attacks.
-    /// Files must be within the current file's directory or its subdirectories.
-    fn load_file_internal(
-        &mut self,
-        relative_path: &PathBuf,
-        anchor: Option<&str>,
-    ) -> Result<(), String> {
-        // Reject absolute paths
-        if relative_path.is_absolute() {
-            return Err("Absolute paths are not allowed for security reasons".to_string());
-        }
+    /// An absolute path, a root or drive prefix, `..`, and a symlink as the
+    /// final component are refused, as before. Then the landing point is
+    /// judged by where it really is on disk: the deepest part of it that
+    /// exists is resolved through any symlinks and has to sit under the
+    /// document's directory. Checking only the full path let a target that
+    /// did not exist yet through, so with `docs` a symlink out of the
+    /// repository, creating `docs/new.md` wrote wherever `docs` pointed. And
+    /// a link to an existing non-markdown file skipped the checks entirely,
+    /// so `[x](/etc/hosts)` opened in the editor.
+    fn confine_link_path(&self, relative: &std::path::Path) -> Result<PathBuf, String> {
+        use std::path::{Component, Path};
 
-        // Reject paths containing .. components (path traversal)
-        if relative_path
+        if relative
             .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
+            .any(|c| matches!(c, Component::ParentDir))
         {
             return Err("Path traversal (..) is not allowed for security reasons".to_string());
         }
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|c| matches!(c, Component::RootDir | Component::Prefix(_)))
+        {
+            return Err("Absolute paths are not allowed for security reasons".to_string());
+        }
 
-        // Resolve path relative to current file
-        let current_dir = self
+        // A stdin or fetched document has no directory of its own; its links
+        // resolve against the working directory, inside the same boundary.
+        let base = self
             .current_file_path
             .parent()
-            .ok_or("Cannot determine current directory")?;
-        let absolute_path = current_dir.join(relative_path);
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let base_real = base
+            .canonicalize()
+            .map_err(|e| format!("Cannot resolve the document's directory: {e}"))?;
+        let target = base.join(relative);
 
-        // Verify the resolved path is within allowed boundaries
-        // (defense in depth - even though we rejected .., canonicalize to be sure)
-        if let (Ok(canonical_path), Ok(canonical_base)) =
-            (absolute_path.canonicalize(), current_dir.canonicalize())
-            && !canonical_path.starts_with(&canonical_base)
-        {
+        if target.is_symlink() {
+            return Err("Symlinks are not allowed for security reasons".to_string());
+        }
+
+        // `symlink_metadata` rather than `exists`, so a dangling symlink
+        // counts as present and then fails to resolve, instead of being
+        // stepped over and later written through to wherever it points.
+        let mut existing = target.as_path();
+        while existing.symlink_metadata().is_err() {
+            match existing.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => existing = parent,
+                _ => {
+                    existing = base;
+                    break;
+                }
+            }
+        }
+        let existing_real = existing
+            .canonicalize()
+            .map_err(|_| "Link target cannot be resolved".to_string())?;
+        if !existing_real.starts_with(&base_real) {
             return Err("Path escapes document directory boundary".to_string());
         }
 
-        // Check for symlink (prevent symlink attacks)
-        if absolute_path.is_symlink() {
-            return Err("Symlinks are not allowed for security reasons".to_string());
-        }
+        Ok(target)
+    }
+
+    /// Internal file loading - skips unsaved changes check
+    ///
+    /// Security: the path goes through [`Self::confine_link_path`], so the
+    /// file must be within the current file's directory or below it.
+    fn load_file_internal(
+        &mut self,
+        relative_path: &std::path::Path,
+        anchor: Option<&str>,
+    ) -> Result<(), String> {
+        let absolute_path = self.confine_link_path(relative_path)?;
 
         // Check if file exists - if not, prompt to create it
         if !absolute_path.exists() {
@@ -5213,12 +5264,6 @@ impl App {
         // Normalize backslashes to forward slashes for cross-platform compatibility
         let file_target = file_target.replace('\\', "/");
 
-        // Try to find the file relative to current directory
-        let current_dir = self
-            .current_file_path
-            .parent()
-            .ok_or("Cannot determine current directory")?;
-
         // Check if target already has a markdown extension
         let file_target_lower = file_target.to_lowercase();
         let has_md_extension = file_target_lower.ends_with(".md")
@@ -5239,11 +5284,10 @@ impl App {
         };
 
         for candidate in &candidates {
-            let path = current_dir.join(candidate);
-            // Check for symlinks
-            if path.is_symlink() {
-                continue; // Skip symlinks for security
-            }
+            // Symlinks and anything resolving outside the directory are skipped
+            let Ok(path) = self.confine_link_path(std::path::Path::new(candidate)) else {
+                continue;
+            };
             if path.exists() {
                 return self.load_file(&PathBuf::from(candidate), anchor);
             }
@@ -5255,7 +5299,7 @@ impl App {
         } else {
             format!("{}.md", file_target)
         };
-        let new_path = current_dir.join(&default_filename);
+        let new_path = self.confine_link_path(std::path::Path::new(&default_filename))?;
         self.pending_file_create = Some(new_path);
         self.pending_file_create_message = Some(format!(
             "Wikilink '[[{}]]' not found. Create '{}'?",
@@ -5793,8 +5837,7 @@ impl App {
                 Ok(())
             }
             LinkTarget::External(url) => {
-                // Security: Validate URL scheme (only http/https allowed)
-                if !url.starts_with("http://") && !url.starts_with("https://") {
+                if !is_openable_url(url) {
                     return Err(
                         "Unsafe URL scheme. Only http:// and https:// URLs are allowed."
                             .to_string(),
@@ -6552,5 +6595,97 @@ mod save_tests {
         );
         assert!(app.write_document("# t\n- [x] a\n").is_err());
         assert!(!std::path::Path::new("<stdin>").exists());
+    }
+}
+
+#[cfg(test)]
+mod link_boundary_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn app_in(dir: &Path) -> App {
+        let path = dir.join("doc.md");
+        std::fs::write(&path, "# doc\n").unwrap();
+        App::new(
+            crate::parser::parse_markdown("# doc\n"),
+            "doc.md".into(),
+            path,
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        )
+    }
+
+    #[test]
+    fn a_link_inside_the_directory_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/data.csv"), "a,b").unwrap();
+        let app = app_in(&root);
+
+        assert_eq!(
+            app.confine_link_path(Path::new("notes/data.csv")).unwrap(),
+            root.join("notes/data.csv")
+        );
+        // Not there yet, so it would be created, but inside.
+        assert!(
+            app.confine_link_path(Path::new("notes/new/page.md"))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn absolute_and_parent_links_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app_in(&dir.path().canonicalize().unwrap());
+        assert!(app.confine_link_path(Path::new("/etc/hosts")).is_err());
+        assert!(app.confine_link_path(Path::new("../secret.txt")).is_err());
+        assert!(app.confine_link_path(Path::new("a/../../b")).is_err());
+    }
+
+    /// The link used to be checked only once it existed, so a file that did
+    /// not exist yet under a symlinked directory was created wherever the
+    /// symlink pointed.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_directory_cannot_carry_a_link_outside() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("docs")).unwrap();
+        std::os::unix::fs::symlink(root.join("missing"), root.join("dangling")).unwrap();
+        let app = app_in(&root);
+
+        assert!(app.confine_link_path(Path::new("docs/pwn.sh")).is_err());
+        assert!(
+            app.confine_link_path(Path::new("docs/deeper/pwn.md"))
+                .is_err()
+        );
+        assert!(app.confine_link_path(Path::new("dangling/x.md")).is_err());
+    }
+
+    /// A link to an existing non-markdown file went straight to the editor
+    /// without any of the checks a markdown link gets.
+    #[test]
+    fn a_non_markdown_link_outside_is_not_opened_in_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_in(&dir.path().canonicalize().unwrap());
+
+        assert!(
+            app.resolve_relative_file_link(&PathBuf::from("/etc/hosts"), &None)
+                .is_err()
+        );
+        assert!(app.pending_editor_file.is_none());
+    }
+
+    #[test]
+    fn only_web_links_are_handed_to_the_system_opener() {
+        assert!(is_openable_url("https://example.com"));
+        assert!(is_openable_url("HTTP://example.com"));
+        assert!(!is_openable_url("mailto:a@b.c?attach=/etc/passwd"));
+        assert!(!is_openable_url("file:///etc/passwd"));
+        assert!(!is_openable_url("vscode://x"));
+        assert!(!is_openable_url("javascript:alert(1)"));
     }
 }
