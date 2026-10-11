@@ -5,9 +5,9 @@
 //!
 //! # Architecture
 //!
-//! - [`Action`] - All bindable actions in the application
-//! - [`KeybindingMode`] - Different modes with their own keybinding sets
-//! - [`Keybindings`] - The complete keybinding configuration (backed by keybinds-rs)
+//! - [`Action`](crate::keybindings::Action) - All bindable actions in the application
+//! - [`KeybindingMode`](crate::keybindings::KeybindingMode) - Different modes with their own keybinding sets
+//! - [`Keybindings`](crate::keybindings::Keybindings) - The complete keybinding configuration (backed by keybinds-rs)
 //!
 //! # Configuration
 //!
