@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **With frontmatter hidden, the pointer marks the link Enter follows.** The interactive index read the section with its frontmatter while the pane showed it without, so their block numbering differed and the pointer sat on one link while Enter opened another
 - **Search scrolls to the match.** Matches were found in a plain-text conversion of the source and scrolled to by that line's number, which was not where the match was drawn, so a match late in a long paragraph stayed off screen. Search now runs over what the pane draws, so the match count and the highlighted current match also agree
 - **Content past row 65,535 can be reached.** The scroll offset was 16-bit, so the end of a very long section could not be scrolled to
+- **Closing the terminal or sending SIGTERM restores it.** treemd was killed with raw mode, the alternate screen and mouse reporting still on, so the shell it returned to received mouse movements as typed input. It now exits through its own cleanup
 - **An image no longer covers the text after it.** An image whose top had scrolled out of view was pinned to the top of the pane at full height, over the text below, and images were drawn taller than the rows reserved for them. They now scroll out of view and stay within their rows
 - **A nested list draws each item on its own row, with its own marker.** Three shapes were wrong before: a nested ordered list drew bullets instead of numbers, a paragraph under a nested item was appended to its parent's row (`• abpara under a`), and a nested list inside a blockquote was folded into its parent's text (`│ • qqi`). A nested task keeps its checkbox
 - **A list item's indented continuation inside a blockquote keeps its own block.** `> - step` followed by an indented `text` reported `steptext` as the item. The item is `step` now and `text` is its paragraph, the same as outside a quote ([turbovault#77](https://github.com/Epistates/turbovault/issues/77))
@@ -57,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`Ctrl+c` quits**, asking first when there are unsaved edits. Raw mode made it an ordinary key, bound to nothing
+- **`Ctrl+z` suspends to the shell**, and `fg` brings treemd back as it was. Raw mode made it an ordinary key as well. In interactive mode it is still undo
 
 ### Changed
 

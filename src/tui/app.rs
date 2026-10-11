@@ -31,6 +31,8 @@ pub enum ActionResult {
     RunEditor(PathBuf, Option<u32>),
     /// Redraw the screen (terminal.clear())
     Redraw,
+    /// Hand the terminal back to the shell until resumed
+    Suspend,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1869,6 +1871,9 @@ impl App {
                 } else {
                     return ActionResult::Quit;
                 }
+            }
+            Suspend => {
+                return ActionResult::Suspend;
             }
             Redraw => {
                 return ActionResult::Redraw;
