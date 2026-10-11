@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Editing a table cell changes that cell, not one in another table.** The table was picked by its position among the section's tables as the parser counts them, then found in the file by a separate line-based check that disagreed: it skipped tables written without outer pipes and counted tables inside list items. With either before it, an edit landed in a different table and was saved there. The cell is now located with the same parser, and an edit whose cell in the file does not match the one on screen is refused
 - **Undoing a table edit restores the cell exactly.** Undo wrote back the parser's text of the cell, which has escapes resolved, so `x \| y` came back as `x | y` and split into two cells
 - **Editing a cell keeps its formatting.** The edit started from the parser's text, with `**bold**` and `*italic*` already stripped, so saving any change dropped them. It now starts from the cell as written
+- **`.name` reads a key when the input has one, even if it is also an element name.** Element selectors took priority everywhere, so `{p: 1} | .p` printed every paragraph, `.h | {a: .text} | .a` printed every link, and `.fm | .image` printed the document's images rather than the front matter's `image`. A key or property on the input now wins; on the document the selector still does, so `.h2` and `. | .code` are unchanged. The document's `heading_count` is no longer also reachable as `.headings`, which was always the heading selector
 
 ### Security
 

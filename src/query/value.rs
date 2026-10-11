@@ -562,7 +562,9 @@ impl DocumentValue {
     pub fn get_property(&self, name: &str) -> Option<Value> {
         match name {
             "content" | "text" => Some(Value::String(self.content.clone())),
-            "heading_count" | "headings" => Some(Value::Number(self.heading_count as f64)),
+            // No `headings` alias: on the document `.headings` is the
+            // heading selector, so the alias could never be reached.
+            "heading_count" => Some(Value::Number(self.heading_count as f64)),
             "word_count" | "words" => Some(Value::Number(self.word_count as f64)),
             _ => None,
         }
