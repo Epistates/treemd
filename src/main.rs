@@ -523,7 +523,7 @@ fn print_heading_at_line(doc: &Document, target_line: usize) {
     match best {
         Some(h) => {
             let prefix = "#".repeat(h.level);
-            println!("{} {}", prefix, h.text);
+            println!("{} {}", prefix, cli::terminal::display(&h.text));
         }
         None => {
             eprintln!("No heading at or before line {}", target_line);
@@ -545,9 +545,15 @@ fn print_headings(
                 let prefix = "#".repeat(heading.level);
                 match ranges.as_ref().and_then(|r| r.get(&heading.offset)) {
                     Some(&(start, end)) => {
-                        println!("{} {} [{}-{}]", prefix, heading.text, start, end)
+                        println!(
+                            "{} {} [{}-{}]",
+                            prefix,
+                            cli::terminal::display(&heading.text),
+                            start,
+                            end
+                        )
                     }
-                    None => println!("{} {}", prefix, heading.text),
+                    None => println!("{} {}", prefix, cli::terminal::display(&heading.text)),
                 }
             }
         }
@@ -595,7 +601,7 @@ fn print_tree(
                     Some(ranges) => node.render_box_tree_with_lines("", is_last, compact, ranges),
                     None => node.render_box_tree_styled("", is_last, compact),
                 };
-                print!("{}", rendered);
+                print!("{}", cli::terminal::display(&rendered));
             }
         }
         OutputFormat::Json => {
@@ -647,7 +653,7 @@ fn extract_section(doc: &Document, section_name: &str) {
         .map(|h| h.offset)
         .unwrap_or(doc.content.len());
 
-    println!("{}", doc.content[start..end].trim());
+    println!("{}", cli::terminal::display(doc.content[start..end].trim()));
 }
 
 fn handle_query_mode(doc: &Document, query_str: &str, output_format: Option<&str>) -> Result<()> {
@@ -671,7 +677,7 @@ fn handle_query_mode(doc: &Document, query_str: &str, output_format: Option<&str
                 return Ok(());
             }
             let output = query::format_output(&results, format);
-            println!("{}", output);
+            println!("{}", cli::terminal::display(&output));
             Ok(())
         }
         Err(e) => {
