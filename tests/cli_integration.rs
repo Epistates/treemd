@@ -76,7 +76,20 @@ fn run(args: &[&str]) -> (String, String, i32) {
 
 /// Run treemd with stdin piped from `input` and the given args.
 fn run_with_stdin(args: &[&str], input: &str) -> (String, String, i32) {
-    let mut child = Command::new(bin())
+    run_with_stdin_in(None, args, input)
+}
+
+/// [`run_with_stdin`], from `dir` as the working directory when given.
+fn run_with_stdin_in(
+    dir: Option<&std::path::Path>,
+    args: &[&str],
+    input: &str,
+) -> (String, String, i32) {
+    let mut cmd = Command::new(bin());
+    if let Some(dir) = dir {
+        cmd.current_dir(dir);
+    }
+    let mut child = cmd
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -364,6 +377,30 @@ fn list_reads_markdown_from_stdin() {
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0], "# Alpha");
     assert_eq!(lines[1], "## Beta");
+}
+
+/// Piping without `-` is the documented form (`cat doc.md | treemd -q '.h'`),
+/// and it has to win over the startup file picker. That picker looks for
+/// markdown in the working directory, so run from one that has some, which
+/// is where it used to take over, and from one that has none, where treemd
+/// used to print usage and exit.
+#[test]
+fn piped_stdin_is_read_without_a_dash() {
+    let with_markdown = fixture_file();
+    let with_markdown = with_markdown.parent().expect("fixture dir");
+    let empty = with_markdown.join("empty");
+    std::fs::create_dir_all(&empty).expect("create empty dir");
+
+    for dir in [with_markdown, empty.as_path()] {
+        let (stdout, stderr, code) = run_with_stdin_in(Some(dir), &["-l"], "# Alpha\n## Beta\n");
+        assert_eq!(code, 0, "from {dir:?}, stderr: {stderr}");
+        assert_eq!(stdout, "# Alpha\n## Beta\n", "from {dir:?}");
+
+        let (stdout, stderr, code) =
+            run_with_stdin_in(Some(dir), &["-q", ".h2 | text"], "# Alpha\n## Beta\n");
+        assert_eq!(code, 0, "from {dir:?}, stderr: {stderr}");
+        assert_eq!(stdout, "Beta\n", "from {dir:?}");
+    }
 }
 
 // ------------------------------------------------------------------
