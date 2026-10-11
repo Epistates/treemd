@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Searching text with characters whose case changes their length no longer crashes.** Typing `İ` in outline or content search over a document containing `İstanbul` panicked, and with other queries the highlight landed on the wrong letters. Matching now reports positions in the original text
 - **A document read from stdin or a URL is not saved to a file named `<stdin>`.** Toggling a checkbox in one wrote that file into the working directory. It now says there is nowhere to save
 
+### Security
+
+- **A link to a non-markdown file is held to the same boundary as any other link.** A markdown link refused absolute paths and `..`, but a link to an existing file without a markdown extension skipped those checks and opened in `$EDITOR`, so `[x](/etc/hosts)` or `[x](../secret.txt)` in a document opened that file. Every file link now resolves through one check
+- **Creating a linked file cannot escape through a symlinked directory.** The boundary was only checked once the file existed, so following `[x](docs/new.md)` with `docs` a symlink out of the repository, and confirming the create prompt, wrote the file wherever `docs` pointed. The deepest existing part of the path is now resolved and checked before the prompt, for markdown links and wikilinks alike
+- **Only web links are handed to the system opener in link-follow mode.** Interactive mode already refused other schemes; link-follow mode passed any external link on, including a `mailto:` carrying `attach=`. Other schemes are copied to the clipboard instead
+
 ### Added
 
 - **`Ctrl+c` quits**, asking first when there are unsaved edits. Raw mode made it an ordinary key, bound to nothing
