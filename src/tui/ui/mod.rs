@@ -3695,6 +3695,56 @@ mod screen_tests {
         );
     }
 
+    /// The palette drew every command in one paragraph, so on a small
+    /// terminal the selection moved out of sight after a few steps.
+    #[test]
+    fn the_command_palette_keeps_its_selection_in_view() {
+        let mut app = app_with("# T\n");
+        app.open_command_palette();
+        let count = app.command_palette.filtered.len();
+        assert!(count > 10, "need more commands than fit: {count}");
+        for _ in 1..count {
+            app.command_palette_next();
+        }
+        let selected = &crate::tui::app::PALETTE_COMMANDS
+            [app.command_palette.filtered[app.command_palette.selected]];
+        let screen = draw(&mut app, 80, 24).join("\n");
+        assert!(
+            screen.contains(&format!("▸ {}", selected.name)),
+            "{} not on screen:\n{screen}",
+            selected.name
+        );
+    }
+
+    /// The link picker scrolled by lines while it wrapped them, so with long
+    /// links above it the selection was scrolled past.
+    #[test]
+    fn the_link_picker_keeps_a_selection_below_long_links_in_view() {
+        let mut md = String::from("# T\n\n");
+        for i in 0..20 {
+            md.push_str(&format!(
+                "[{} {i}](https://example.com/{i})\n\n",
+                "a long link label that wraps ".repeat(8)
+            ));
+        }
+        md.push_str("[last one](https://example.com/last)\n");
+        let mut app = app_with(&md);
+        draw(&mut app, 80, 24);
+        app.enter_link_follow_mode();
+        for _ in 0..20 {
+            app.next_link();
+        }
+        // The selection marker is the popup's own; the content pane behind
+        // it can show the same text.
+        let screen = draw(&mut app, 80, 24);
+        assert!(
+            screen
+                .iter()
+                .any(|row| row.contains('▶') && row.contains("last one")),
+            "{screen:#?}"
+        );
+    }
+
     /// Search matched a plain-text conversion of the source and scrolled to
     /// that line's number, so a match late in a wrapped paragraph stayed off
     /// screen.
