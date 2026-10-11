@@ -472,7 +472,8 @@ pub struct HeadingValue {
     pub text: String,
     pub offset: usize,
     pub line: usize,
-    /// Content under this heading (excluding subheadings)
+    /// Body under this heading, subsections included, up to the next
+    /// heading at the same or a shallower level
     pub content: String,
     /// Raw markdown of the entire section
     pub raw_md: String,
