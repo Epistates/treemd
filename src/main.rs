@@ -672,8 +672,12 @@ fn handle_query_mode(doc: &Document, query_str: &str, output_format: Option<&str
     // Execute query
     match query::execute(doc, query_str) {
         Ok(results) => {
-            if results.is_empty() {
-                // No results - exit silently like jq
+            // No results prints nothing, like jq, except as JSON, which is
+            // always one array so a consumer can parse it the same way
+            // whatever the count: `[]` when nothing matched.
+            if results.is_empty()
+                && !matches!(format, OutputFormat::Json | OutputFormat::JsonPretty)
+            {
                 return Ok(());
             }
             let output = query::format_output(&results, format);
@@ -693,7 +697,7 @@ treemd Query Language (tql)
 
 A jq-like query language for navigating and extracting markdown structure.
 Results print one per line; a selector that matches nothing prints nothing
-and exits 0.
+(`[]` with --query-output json) and exits 0.
 
 ELEMENT SELECTORS
     .h, .heading        All headings (any level)
