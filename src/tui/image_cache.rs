@@ -346,14 +346,6 @@ fn decode_still(path: &Path) -> Result<image::DynamicImage, ImageError> {
 /// Namespace for image loading static methods.
 pub struct ImageCache;
 
-/// GIF frame with timing information
-#[derive(Clone)]
-pub struct GifFrame {
-    pub image: image::DynamicImage,
-    /// Delay in milliseconds
-    pub delay_ms: u32,
-}
-
 /// Result of advancing a streaming inline GIF.
 pub(crate) enum GifAdvance {
     Waiting,
@@ -362,12 +354,11 @@ pub(crate) enum GifAdvance {
     Failed(String),
 }
 
-/// A memory-bounded GIF player for inline images.
+/// A memory-bounded GIF player, for inline images and the image viewer.
 ///
-/// The modal viewer deliberately keeps every frame for random access. Inline
-/// images only need forward playback, so retaining a compositing canvas and
-/// decoder avoids expanding a long README recording into hundreds of full-size
-/// RGBA frames.
+/// Retaining one compositing canvas and the decoder, rather than every frame,
+/// keeps a long README recording from expanding into hundreds of full-size
+/// RGBA frames. Playback is forward only; the viewer reopens it to step back.
 pub(crate) struct StreamingGif {
     path: PathBuf,
     decoder: gif::Decoder<BufReader<File>>,
@@ -534,6 +525,19 @@ impl StreamingGif {
             Err(error) => GifAdvance::Failed(error.to_string()),
         }
     }
+
+    /// The next frame regardless of the frame clock, wrapping to the first
+    /// after the last. For the image viewer, which keeps its own timing and
+    /// its own frame index.
+    pub(crate) fn next_frame_looping(&mut self) -> Result<image::DynamicImage, ImageError> {
+        if let Some((image, _)) = self.decode_next()? {
+            return Ok(image);
+        }
+        self.reset_decoder()?;
+        self.decode_next()?
+            .map(|(image, _)| image)
+            .ok_or_else(|| ImageError::InvalidFormat("GIF contains no image frames".to_string()))
+    }
 }
 
 impl ImageCache {
@@ -591,62 +595,6 @@ impl ImageCache {
         }
     }
 
-    /// Decode one composited GIF frame with bounded memory.
-    ///
-    /// Used only for deliberate pause/step actions during terminal-native
-    /// playback; normal playback never expands all frames into memory.
-    pub fn extract_gif_frame(
-        path: &Path,
-        target_index: usize,
-    ) -> Result<image::DynamicImage, ImageError> {
-        let mut decoder = require_gif(path, gif::ColorOutput::RGBA)?;
-        let width = u32::from(decoder.width());
-        let height = u32::from(decoder.height());
-        let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-        let mut previous_disposal = gif::DisposalMethod::Keep;
-        let mut previous_rect = (0, 0, 0, 0);
-        let mut restore_previous: Option<RgbaImage> = None;
-        let mut index = 0;
-
-        while let Some(frame) = decoder
-            .read_next_frame()
-            .map_err(|error| ImageError::InvalidFormat(error.to_string()))?
-        {
-            match previous_disposal {
-                gif::DisposalMethod::Background => {
-                    Self::clear_gif_rect(&mut canvas, previous_rect);
-                }
-                gif::DisposalMethod::Previous => {
-                    if let Some(previous) = restore_previous.take() {
-                        canvas = previous;
-                    }
-                }
-                gif::DisposalMethod::Any | gif::DisposalMethod::Keep => {}
-            }
-
-            let restore_for_this_frame =
-                (frame.dispose == gif::DisposalMethod::Previous).then(|| canvas.clone());
-            Self::composite_gif_frame(&mut canvas, frame, width, height);
-            if index == target_index {
-                return Ok(image::DynamicImage::ImageRgba8(canvas));
-            }
-
-            previous_disposal = frame.dispose;
-            previous_rect = (
-                frame.left.into(),
-                frame.top.into(),
-                frame.width.into(),
-                frame.height.into(),
-            );
-            restore_previous = restore_for_this_frame;
-            index += 1;
-        }
-
-        Err(ImageError::InvalidFormat(format!(
-            "GIF frame {target_index} is out of range"
-        )))
-    }
-
     fn clear_gif_rect(canvas: &mut RgbaImage, rect: (u32, u32, u32, u32)) {
         let (left, top, width, height) = rect;
         for y in top..top.saturating_add(height).min(canvas.height()) {
@@ -654,79 +602,6 @@ impl ImageCache {
                 canvas.put_pixel(x, y, Rgba([0, 0, 0, 0]));
             }
         }
-    }
-
-    /// Extract all frames from a GIF file with timing information.
-    ///
-    /// Returns a vector of frames with their delays in milliseconds.
-    /// For non-GIF images, returns a single frame with 0ms delay (static).
-    /// Maintains a persistent canvas to properly handle GIF disposal methods.
-    pub fn extract_all_frames(path: &Path) -> Result<Vec<GifFrame>, ImageError> {
-        match read_gif(path, gif::ColorOutput::RGBA)? {
-            Some(mut decoder) => {
-                let width = decoder.width() as u32;
-                let height = decoder.height() as u32;
-                let mut frames = Vec::new();
-
-                // Persistent canvas for proper frame compositing
-                let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-                let mut previous_disposal = gif::DisposalMethod::Keep;
-                let mut previous_rect = (0, 0, 0, 0);
-                let mut restore_previous: Option<RgbaImage> = None;
-
-                while let Ok(Some(frame)) = decoder.read_next_frame() {
-                    // Disposal applies immediately before the following frame.
-                    match previous_disposal {
-                        gif::DisposalMethod::Background => {
-                            Self::clear_gif_rect(&mut canvas, previous_rect);
-                        }
-                        gif::DisposalMethod::Previous => {
-                            if let Some(previous) = restore_previous.take() {
-                                canvas = previous;
-                            }
-                        }
-                        gif::DisposalMethod::Any | gif::DisposalMethod::Keep => {}
-                    }
-
-                    let restore_for_this_frame =
-                        (frame.dispose == gif::DisposalMethod::Previous).then(|| canvas.clone());
-
-                    // Composite this frame onto the persistent canvas
-                    Self::composite_gif_frame(&mut canvas, frame, width, height);
-
-                    // Clone the current canvas state as this frame
-                    let delay_ms = (frame.delay as u32) * 10;
-                    frames.push(GifFrame {
-                        image: image::DynamicImage::ImageRgba8(canvas.clone()),
-                        delay_ms: delay_ms.max(20), // Min 20ms (50fps cap)
-                    });
-
-                    previous_disposal = frame.dispose;
-                    previous_rect = (
-                        frame.left.into(),
-                        frame.top.into(),
-                        frame.width.into(),
-                        frame.height.into(),
-                    );
-                    restore_previous = restore_for_this_frame;
-                }
-
-                if frames.is_empty() {
-                    Self::load_static_image(path)
-                } else {
-                    Ok(frames)
-                }
-            }
-            None => Self::load_static_image(path),
-        }
-    }
-
-    /// Load a static (non-GIF) image as a single frame
-    fn load_static_image(path: &Path) -> Result<Vec<GifFrame>, ImageError> {
-        Ok(vec![GifFrame {
-            image: decode_still(path)?,
-            delay_ms: 0,
-        }])
     }
 
     /// Extract the first frame from an image file, properly handling GIFs.
@@ -750,17 +625,6 @@ impl ImageCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_gif_frame_struct() {
-        // GifFrame should store image and delay information
-        let img = image::DynamicImage::new_rgba8(10, 10);
-        let frame = GifFrame {
-            image: img,
-            delay_ms: 100,
-        };
-        assert_eq!(frame.delay_ms, 100);
-    }
 
     #[test]
     fn clear_gif_rect_only_clears_disposal_region() {
@@ -905,8 +769,13 @@ mod tests {
             ImageCache::extract_gif_frame_delays(file.path()).unwrap(),
             vec![20, 70]
         );
-        let second = ImageCache::extract_gif_frame(file.path(), 1).unwrap();
+        let (mut stream, first) = StreamingGif::open(file.path()).unwrap();
+        assert_eq!(first.to_rgba8().get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
+        let second = stream.next_frame_looping().unwrap();
         assert_eq!(second.to_rgba8().get_pixel(0, 0), &Rgba([0, 255, 0, 255]));
+        // The viewer loops by asking past the end.
+        let wrapped = stream.next_frame_looping().unwrap();
+        assert_eq!(wrapped.to_rgba8().get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
     }
 
     /// A GIF's canvas size comes from its header, so a file of a few dozen
@@ -934,8 +803,6 @@ mod tests {
 
         assert!(StreamingGif::open(path).is_err());
         assert!(ImageCache::extract_first_frame(path).is_err());
-        assert!(ImageCache::extract_all_frames(path).is_err());
-        assert!(ImageCache::extract_gif_frame(path, 0).is_err());
         assert!(ImageCache::extract_gif_frame_delays(path).is_err());
     }
 

@@ -889,27 +889,9 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
         height: modal_area.height.saturating_sub(2),
     };
 
-    // Try to start Kitty native animation for multi-frame GIFs.
-    // Kitty handles frame timing internally - no flicker!
-    // Only start when animation is playing (not paused) - this allows:
-    // 1. Manual frame stepping to work via software rendering
-    // 2. Kitty animation to restart when user resumes playback
-    if is_multi_frame
-        && !app.has_kitty_animation()
-        && app.use_kitty_animation
-        && !app.image_modal.animation_paused
-    {
-        // Start animation at center of inner area
-        let image_col = inner_area.x + inner_area.width / 4;
-        let image_row = inner_area.y + inner_area.height / 4;
-        app.start_kitty_animation(image_col, image_row);
-    }
-
-    // Check if Kitty is handling animation
-    let kitty_animating = app.has_kitty_animation();
     let iterm_animating = app.has_native_iterm_modal_animation();
 
-    // Get the active protocol for sizing (even Kitty needs this for layout)
+    // Get the active protocol for sizing
     if let Some(protocol_state) = &mut app.image_modal.state {
         // Calculate image area
         let resize = Resize::Scale(Some(FilterType::Triangle));
@@ -939,13 +921,7 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 "▶"
             };
-            let mode = if kitty_animating {
-                "Kitty"
-            } else if iterm_animating {
-                "iTerm"
-            } else {
-                "GIF"
-            };
+            let mode = if iterm_animating { "iTerm" } else { "GIF" };
             format!(
                 " {} {}/{} {} | ←/→:step Space:play/pause q:close ",
                 mode,
@@ -976,10 +952,8 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
         // takes over. Removing them would make the diff engine print clearing
         // cells across the native animation on the following title redraw.
         // Because the encoded still is unchanged, Ratatui emits it only once.
-        if !kitty_animating {
-            let img_widget = StatefulImage::new().resize(resize);
-            frame.render_stateful_widget(img_widget, image_area, protocol_state);
-        }
+        let img_widget = StatefulImage::new().resize(resize);
+        frame.render_stateful_widget(img_widget, image_area, protocol_state);
 
         if first_frame_ready && let Some(path) = modal_path {
             app.stage_iterm_animation(
