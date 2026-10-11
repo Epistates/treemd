@@ -153,6 +153,7 @@ treemd *.md             # Open file picker with matched files
 | `j` / `k` or `↓` / `↑` | Move down/up |
 | `g` / `G` or `Home` / `End` | Jump to top/bottom |
 | `p` | Jump to parent heading |
+| `Ctrl+e` / `Ctrl+y` | Scroll the content a line, keeping the selection |
 | `d` / `u` or `PageDown` / `PageUp` | Page down/up |
 | `Tab` / `Shift+Tab` | Switch focus between outline and content |
 | `5j` etc. | Repeat motion with a vim count prefix (digits `1`-`9` start a count, shown in the status bar) |

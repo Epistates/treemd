@@ -6203,6 +6203,38 @@ impl App {
 mod palette_tests {
     use super::*;
 
+    /// Every action can be reached, by a key in some mode or from the command
+    /// palette. One that neither binds nor lists is code no user can run.
+    #[test]
+    fn every_action_is_reachable() {
+        use crate::keybindings::{KeybindingMode, Keybindings};
+        use strum::IntoEnumIterator;
+
+        let keys = Keybindings::default();
+        let palette: HashSet<Action> = PALETTE_COMMANDS
+            .iter()
+            .filter_map(|command| match command.action {
+                CommandAction::Dispatch(action) => Some(action),
+                _ => None,
+            })
+            .collect();
+        let unreachable: Vec<Action> = Action::iter()
+            .filter(|action| {
+                // Noop unbinds a key; the JumpToHeading actions ship unbound
+                // because digits are the count prefix, for users to bind.
+                !matches!(action, Action::Noop) && !action.to_string().starts_with("JumpToHeading")
+            })
+            .filter(|action| !palette.contains(action))
+            .filter(|action| {
+                KeybindingMode::iter().all(|mode| keys.keys_for_action(mode, *action).is_empty())
+            })
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "no key or palette entry: {unreachable:?}"
+        );
+    }
+
     fn cmd(name: &'static str, aliases: &'static [&'static str]) -> PaletteCommand {
         PaletteCommand::new(name, aliases, "desc", CommandAction::Quit)
     }

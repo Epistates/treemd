@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
 
 /// Application modes that have their own keybinding sets
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::EnumIter)]
 #[serde(rename_all = "PascalCase")]
 pub enum KeybindingMode {
     /// Normal navigation mode
@@ -368,6 +368,27 @@ impl KeybindingsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key bound twice in one mode does whichever binding the dispatcher
+    /// happens to find first, and the other is silently dead.
+    #[test]
+    fn no_key_is_bound_twice_in_a_mode() {
+        let kb = Keybindings::default();
+        for (mode, binds) in &kb.bindings {
+            let binds = binds.as_slice();
+            for (i, a) in binds.iter().enumerate() {
+                for b in &binds[i + 1..] {
+                    assert!(
+                        a.seq != b.seq,
+                        "{mode:?}: {} is bound to both {:?} and {:?}",
+                        format_key_sequence(&a.seq),
+                        a.action,
+                        b.action
+                    );
+                }
+            }
+        }
+    }
     use crossterm::event::{KeyCode, KeyEventKind, KeyEventState, KeyModifiers};
 
     fn make_key_event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {

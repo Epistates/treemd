@@ -78,6 +78,10 @@ fn add_normal_mode(kb: &mut Keybindings) {
     bind(kb, Normal, "Home", First);
     bind(kb, Normal, "End", Last);
     bind(kb, Normal, "p", JumpToParent);
+    // Scroll the content a line without moving the outline selection, as in
+    // vim. These actions existed with no key to run them.
+    bind(kb, Normal, "Ctrl+e", ScrollDown);
+    bind(kb, Normal, "Ctrl+y", ScrollUp);
 
     // Outline
     bind(kb, Normal, "Enter", ToggleExpand);

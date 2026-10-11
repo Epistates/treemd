@@ -91,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Ctrl+e` / `Ctrl+y` scroll the content a line** without moving the outline selection, as in vim. The actions existed with no key bound to them
 - **`-e` / `--exit-status`** makes a query that matches nothing exit 1, so a script can tell an empty result from a match. Without it an empty result still exits 0, as jq does
 - **`Ctrl+c` quits**, asking first when there are unsaved edits. Raw mode made it an ordinary key, bound to nothing
 - **`Ctrl+z` suspends to the shell**, and `fg` brings treemd back as it was. Raw mode made it an ordinary key as well. In interactive mode it is still undo
