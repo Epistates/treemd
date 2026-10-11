@@ -44,7 +44,7 @@ impl EvalContext {
     /// Create a new context from a document.
     pub fn from_document(doc: &Document) -> Self {
         let headings = extract_headings(doc);
-        let extracted = extract_blocks(doc);
+        let extracted = extract_blocks(&doc.content);
         let frontmatter = extract_frontmatter(doc);
 
         let document = DocumentValue {
@@ -57,7 +57,7 @@ impl EvalContext {
             current: Value::Document(document.clone()),
             headings,
             code_blocks: extracted.code_blocks,
-            links: extracted.links,
+            links: extract_doc_links(&doc.content),
             images: extracted.images,
             tables: extracted.tables,
             lists: extracted.lists,
@@ -238,8 +238,27 @@ impl Engine {
             return Ok(values);
         }
 
-        // Get all elements of the requested kind
-        let mut elements: Vec<Value> = match kind {
+        // A selector piped from a heading selects within that heading's
+        // section, the same as `>>`, so `.h2[0] | .code` is the code under
+        // that h2 rather than every block in the document.
+        let mut elements = match &self.context.current {
+            Value::Heading(parent) => self.scoped_elements(parent, kind, false),
+            _ => self.all_elements(kind),
+        };
+
+        for filter in filters {
+            elements = self.apply_filter(elements, filter)?;
+        }
+        if let Some(idx) = index {
+            elements = apply_index(elements, idx)?;
+        }
+
+        Ok(elements)
+    }
+
+    /// Every element of `kind` in the document.
+    fn all_elements(&self, kind: &ElementKind) -> Vec<Value> {
+        match kind {
             ElementKind::Heading(level) => self
                 .context
                 .headings
@@ -301,19 +320,115 @@ impl Engine {
                 Some(fm) => vec![Value::FrontMatter(fm.clone())],
                 None => Vec::new(),
             },
-        };
-
-        // Apply filters
-        for filter in filters {
-            elements = self.apply_filter(elements, filter)?;
         }
+    }
 
-        // Apply index
-        if let Some(idx) = index {
-            elements = apply_index(elements, idx)?;
+    /// The elements of `kind` inside `parent`'s section.
+    ///
+    /// `direct` (`>`) stops at the next heading of any level, so it covers
+    /// the heading's own body; otherwise (`>>`) the section runs to the next
+    /// heading at the same level or above and includes every subsection.
+    /// Front matter belongs to the document rather than to any section, so
+    /// it is returned whatever the heading.
+    fn scoped_elements(
+        &self,
+        parent: &HeadingValue,
+        kind: &ElementKind,
+        direct: bool,
+    ) -> Vec<Value> {
+        let headings = &self.context.headings;
+        let parent_idx = parent.index;
+        let parent_level = parent.level;
+
+        let scope_start = parent.offset;
+        let scope_end = headings
+            .iter()
+            .skip(parent_idx + 1)
+            .find(|h| direct || h.level <= parent_level)
+            .map(|h| h.offset)
+            .unwrap_or(self.context.raw_content.len());
+
+        match kind {
+            ElementKind::Heading(level_filter) => {
+                // Walking the subtree with the lowest level seen so far: a
+                // heading is a direct child when nothing between it and the
+                // parent sits at a shallower level than it does.
+                let mut shallowest = u8::MAX;
+                let mut results = Vec::new();
+                for h in headings[parent_idx + 1..]
+                    .iter()
+                    .take_while(|h| h.level > parent_level)
+                {
+                    let is_child = h.level <= shallowest;
+                    shallowest = shallowest.min(h.level);
+                    if direct && !is_child {
+                        continue;
+                    }
+                    if level_filter.is_some_and(|level| h.level != level) {
+                        continue;
+                    }
+                    results.push(Value::Heading(h.clone()));
+                }
+                results
+            }
+            ElementKind::Code => {
+                // A block's start_line is its opening fence's row in the
+                // document, so the global list scopes by line. Re-parsing
+                // the section instead numbered its blocks from the
+                // section's own first line.
+                let raw = self.context.raw_content.as_bytes();
+                let line_at =
+                    |offset: usize| 1 + raw[..offset].iter().filter(|&&b| b == b'\n').count();
+                let first = line_at(scope_start);
+                let past = if scope_end >= raw.len() {
+                    usize::MAX
+                } else {
+                    line_at(scope_end)
+                };
+                self.context
+                    .code_blocks
+                    .iter()
+                    .filter(|code| (first..past).contains(&code.start_line))
+                    .cloned()
+                    .map(Value::Code)
+                    .collect()
+            }
+            // Links carry byte offsets, so scope by byte range.
+            ElementKind::Link => self
+                .context
+                .links
+                .iter()
+                .filter(|link| (scope_start..scope_end).contains(&link.offset))
+                .cloned()
+                .map(Value::Link)
+                .collect(),
+            ElementKind::FrontMatter => self.all_elements(kind),
+            // Images, tables, lists, paragraphs and blockquotes carry no
+            // source position, so the section is parsed on its own. None of
+            // them holds a line number for that to get wrong.
+            ElementKind::Image
+            | ElementKind::Table
+            | ElementKind::List
+            | ElementKind::Blockquote
+            | ElementKind::Paragraph => {
+                let section = extract_blocks(&self.context.raw_content[scope_start..scope_end]);
+                match kind {
+                    ElementKind::Image => section.images.into_iter().map(Value::Image).collect(),
+                    ElementKind::Table => section.tables.into_iter().map(Value::Table).collect(),
+                    ElementKind::List => section.lists.into_iter().map(Value::List).collect(),
+                    ElementKind::Blockquote => section
+                        .blockquotes
+                        .into_iter()
+                        .map(Value::Blockquote)
+                        .collect(),
+                    _ => section
+                        .paragraphs
+                        .into_iter()
+                        .map(Value::Paragraph)
+                        .collect(),
+                }
+            }
         }
-
-        Ok(elements)
     }
 
     fn apply_filter(
@@ -592,122 +707,10 @@ impl Engine {
         let parent_values = self.eval_expr(parent)?;
 
         let mut results = Vec::new();
-
-        for parent_val in parent_values {
-            // For headings, find children
-            if let Value::Heading(ref parent_heading) = parent_val {
-                // Get child element kind
-                let child_kind = match child {
-                    Expr::Element { kind, .. } => Some(kind.clone()),
-                    _ => None,
-                };
-
-                if let Some(kind) = child_kind {
-                    // Find headings that are children of this parent
-                    let parent_idx = parent_heading.index;
-                    let parent_level = parent_heading.level;
-
-                    // Byte bounds of this heading's scope:
-                    // - direct (`>`):     up to the next heading of ANY level
-                    //   (this heading's own body only).
-                    // - descendant (`>>`): up to the next heading of level
-                    //   <= parent (the whole subtree).
-                    let scope_start_offset = parent_heading.offset;
-                    let scope_end_offset = self
-                        .context
-                        .headings
-                        .iter()
-                        .skip(parent_idx + 1)
-                        .find(|h| {
-                            if direct {
-                                true
-                            } else {
-                                h.level <= parent_level
-                            }
-                        })
-                        .map(|h| h.offset)
-                        .unwrap_or(self.context.raw_content.len());
-
-                    match kind {
-                        ElementKind::Heading(level_filter) => {
-                            // Find child headings
-                            for (idx, h) in self.context.headings.iter().enumerate() {
-                                if idx <= parent_idx {
-                                    continue;
-                                }
-
-                                // Stop if we hit a heading at same or higher level
-                                if h.level <= parent_level {
-                                    break;
-                                }
-
-                                // Check level filter
-                                if let Some(target_level) = level_filter
-                                    && h.level != target_level
-                                {
-                                    if direct && h.level > target_level {
-                                        // Skip deeper headings in direct mode
-                                        continue;
-                                    }
-                                    if h.level != target_level {
-                                        continue;
-                                    }
-                                }
-
-                                // In direct mode, only include immediate children
-                                if direct {
-                                    // Find if there's an intermediate heading
-                                    let has_intermediate = self.context.headings
-                                        [parent_idx + 1..idx]
-                                        .iter()
-                                        .any(|intermediate| {
-                                            intermediate.level > parent_level
-                                                && intermediate.level < h.level
-                                        });
-                                    if has_intermediate {
-                                        continue;
-                                    }
-                                }
-
-                                results.push(Value::Heading(h.clone()));
-                            }
-                        }
-                        ElementKind::Code => {
-                            // A block's start_line is its opening fence's row in
-                            // the document, so the global list scopes by line.
-                            // Re-parsing the section instead numbered its blocks
-                            // from the section's own first line.
-                            let raw = self.context.raw_content.as_bytes();
-                            let line_at = |offset: usize| {
-                                1 + raw[..offset].iter().filter(|&&b| b == b'\n').count()
-                            };
-                            let first = line_at(scope_start_offset);
-                            let past = if scope_end_offset >= raw.len() {
-                                usize::MAX
-                            } else {
-                                line_at(scope_end_offset)
-                            };
-                            for code in &self.context.code_blocks {
-                                if (first..past).contains(&code.start_line) {
-                                    results.push(Value::Code(code.clone()));
-                                }
-                            }
-                        }
-                        ElementKind::Link => {
-                            // Links carry byte offsets, so scope by byte range.
-                            for link in &self.context.links {
-                                if link.offset >= scope_start_offset
-                                    && link.offset < scope_end_offset
-                                {
-                                    results.push(Value::Link(link.clone()));
-                                }
-                            }
-                        }
-                        // Images, tables, and lists carry no source positions in
-                        // the current model, so they cannot be scoped to a
-                        // heading yet. Left unimplemented intentionally.
-                        _ => {}
-                    }
+        if let Expr::Element { kind, .. } = child {
+            for parent_val in &parent_values {
+                if let Value::Heading(parent_heading) = parent_val {
+                    results.extend(self.scoped_elements(parent_heading, kind, direct));
                 }
             }
         }
@@ -871,7 +874,6 @@ fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
 #[derive(Default)]
 struct ExtractedBlocks {
     code_blocks: Vec<CodeValue>,
-    links: Vec<LinkValue>,
     images: Vec<ImageValue>,
     tables: Vec<TableValue>,
     lists: Vec<ListValue>,
@@ -904,13 +906,13 @@ fn collect_inline_images(inline: &[InlineElement], out: &mut ExtractedBlocks) {
     }
 }
 
-fn extract_blocks(doc: &Document) -> ExtractedBlocks {
+/// Extracts every block-level element from `content`, which is a whole
+/// document or, for scoping, one heading's section of it.
+fn extract_blocks(content: &str) -> ExtractedBlocks {
     use crate::parser::content::parse_content;
-    use crate::parser::links::extract_links;
     use crate::parser::output::Block;
 
-    let blocks = parse_content(&doc.content, 1);
-    let links = extract_links(&doc.content);
+    let blocks = parse_content(content, 1);
 
     let mut out = ExtractedBlocks::default();
 
@@ -1014,7 +1016,12 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
 
     walk(&blocks, &mut out, Images::Collect);
 
-    out.links = links
+    out
+}
+
+/// Every link in the document, with its byte offset for scoping.
+fn extract_doc_links(content: &str) -> Vec<LinkValue> {
+    crate::parser::links::extract_links(content)
         .into_iter()
         .map(|l| {
             use crate::parser::links::LinkTarget;
@@ -1038,9 +1045,7 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                 offset: l.offset,
             }
         })
-        .collect();
-
-    out
+        .collect()
 }
 
 /// Parse the document's YAML frontmatter into an ordered, sorted-key map of
@@ -1359,6 +1364,41 @@ mod tests {
         assert_eq!(lines(".h2[Install] >> .code"), [11, 17]);
         assert_eq!(lines(".h1 >> .code"), [3, 11, 17, 23]);
         assert_eq!(lines(".h2[Other] > .code"), [23]);
+    }
+
+    /// A selector piped from a heading selects within its section, as `>>`
+    /// does. It used to select from the whole document, so `.h2[0] | .code`
+    /// returned every code block.
+    #[test]
+    fn test_selector_piped_from_a_heading_is_scoped_to_its_section() {
+        let md = "# Doc\n\n```sh\na\n```\n\n## One\n\n```rust\nb\n```\n\n\
+                  ### Deep\n\n```py\nc\n```\n\n## Two\n\n```go\nd\n```\n";
+        assert_eq!(texts(md, ".h2[0] | .code | .lang"), ["rust", "py"]);
+        assert_eq!(texts(md, ".h2[1] | .code | .lang"), ["go"]);
+        assert_eq!(texts(md, ".h2[0] | .h"), ["Deep"]);
+        assert_eq!(texts(md, ".h3 | .h"), Vec::<String>::new());
+        // Each heading scopes its own selection.
+        assert_eq!(texts(md, ".h2 | .code | .lang"), ["rust", "py", "go"]);
+    }
+
+    /// `>` and `>>` returned nothing at all for these kinds, which carry no
+    /// source position. The section is parsed on its own instead.
+    #[test]
+    fn test_hierarchy_scopes_every_block_kind() {
+        let md = "# A\n\nintro\n\n## B\n\n| x | y |\n|---|---|\n| 1 | 2 |\n\n- one\n\n\
+                  > quoted\n\n![pic](p.png)\n\nbody\n\n### C\n\n- deep\n\n## D\n\nlast\n";
+        assert_eq!(eval(md, ".h2[B] > .table").len(), 1);
+        assert_eq!(texts(md, ".h2[B] > .list"), ["one"]);
+        assert_eq!(texts(md, ".h2[B] >> .list"), ["one", "deep"]);
+        assert_eq!(texts(md, ".h2[B] > .blockquote"), ["quoted"]);
+        assert_eq!(texts(md, ".h2[B] > .img"), ["pic"]);
+        assert_eq!(
+            texts(md, ".h2[B] > .para | select(.text == \"body\")"),
+            ["body"]
+        );
+        assert_eq!(texts(md, ".h1 > .para"), ["intro"]);
+        assert_eq!(eval(md, ".h2[D] > .table").len(), 0);
+        assert_eq!(texts(md, ".h2[B] | .list"), ["one", "deep"]);
     }
 
     #[test]
