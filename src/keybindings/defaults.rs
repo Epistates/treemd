@@ -125,6 +125,9 @@ fn add_normal_mode(kb: &mut Keybindings) {
 
     // Application
     bind(kb, Normal, "q", Quit);
+    // Raw mode turns Ctrl+C into an ordinary key, so without this it did
+    // nothing at all. Quit still asks first when there are unsaved edits.
+    bind(kb, Normal, "Ctrl+c", Quit);
     // Esc backs out (clears search/filter, shows quit hint) instead of
     // terminating the session — q is the deliberate quit key.
     bind(kb, Normal, "Escape", ExitMode);

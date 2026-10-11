@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The image viewer streams a GIF instead of decoding every frame up front.** A screen recording used to expand into every frame at full size before the viewer opened, around 1.7 GB for a 1200x800, 450-frame README recording. The viewer now holds one frame and decodes the next as playback reaches it; stepping back reopens the stream
 - **A slow mermaid diagram no longer freezes treemd.** Diagrams were laid out inside the frame, on the UI thread, and layout cannot be interrupted: a few kilobytes of densely connected nodes took a minute and a half, during which treemd took no input at all, Ctrl-C included, from a single block in a README. Diagrams are now laid out on a worker thread, with a placeholder in their place until they are ready, and a source over 32 KB is not laid out
 - **Large mermaid diagrams are drawn within a fixed budget.** A diagram was rasterized at the pane's full width however tall it was, so a fifty-node chain at a wide pane took over a gigabyte and several seconds, and again on every width change. It is now held to 16 megapixels and drawn narrower if it would exceed that
+- **Saving no longer resets a file's permissions.** A checkbox toggle or a table edit replaced the file with one readable only by its owner, so a `0644` note became `0600` after one save. The original permissions are kept, and the write is synced to disk before it replaces the file
+- **A save no longer overwrites a change made outside treemd.** The in-memory copy was written back whatever had happened to the file since it was loaded, so an edit made in another editor, while a table edit was pending, was silently undone. treemd now refuses the save and says the file changed on disk
+- **A config file with a typo is no longer replaced with defaults.** It failed to parse, treemd ran on defaults, and the first theme or width change saved those defaults over it, losing every setting in the file. A config that did not parse is now left alone for the session, and the warning says so
+- **The config file is written atomically, through a symlink.** It was written in place, so a crash mid-write left it truncated, and a config symlinked from a dotfiles repository is now updated where it lives rather than replaced by a copy
+- **Searching text with characters whose case changes their length no longer crashes.** Typing `İ` in outline or content search over a document containing `İstanbul` panicked, and with other queries the highlight landed on the wrong letters. Matching now reports positions in the original text
+- **A document read from stdin or a URL is not saved to a file named `<stdin>`.** Toggling a checkbox in one wrote that file into the working directory. It now says there is nowhere to save
+
+### Added
+
+- **`Ctrl+c` quits**, asking first when there are unsaved edits. Raw mode made it an ordinary key, bound to nothing
 
 ### Changed
 

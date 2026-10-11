@@ -91,6 +91,8 @@ pub mod query;
 pub mod keybindings;
 
 // Re-export commonly used types for convenience
+mod fsutil;
+
 pub use config::Config;
 pub use parser::{Document, Heading, HeadingNode, parse_file, parse_markdown};
 pub use tui::App;

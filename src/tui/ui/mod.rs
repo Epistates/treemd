@@ -2121,7 +2121,6 @@ fn apply_search_highlighting(
         return text;
     }
 
-    let query_lower = query.to_lowercase();
     let mut new_lines = Vec::new();
     let mut match_counter = 0usize;
 
@@ -2137,27 +2136,9 @@ fn apply_search_highlighting(
 
         // Join all spans to get the full line text for searching
         let full_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        let full_text_lower = full_text.to_lowercase();
 
         // Find all occurrences of the query in this line (non-overlapping)
-        let mut matches_in_line: Vec<(usize, usize)> = Vec::new();
-        let mut search_start = 0;
-        let query_len = query.len();
-
-        while let Some(rel_pos) = full_text_lower[search_start..].find(&query_lower) {
-            let byte_start = search_start + rel_pos;
-            let byte_end = byte_start + query_len;
-
-            // Verify we're on valid char boundaries
-            if full_text.is_char_boundary(byte_start) && full_text.is_char_boundary(byte_end) {
-                matches_in_line.push((byte_start, byte_end));
-            }
-
-            search_start = byte_end;
-            if search_start >= full_text_lower.len() {
-                break;
-            }
-        }
+        let matches_in_line = util::find_ignore_case(&full_text, query);
 
         if matches_in_line.is_empty() {
             // No matches in this line - keep original
