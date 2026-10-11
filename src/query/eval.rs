@@ -513,32 +513,18 @@ impl Engine {
         filter: &Filter,
     ) -> Result<Vec<Value>, QueryError> {
         match filter {
-            Filter::Text { pattern, exact, .. } => {
-                let pattern_lower = pattern.to_lowercase();
-                Ok(elements
-                    .into_iter()
-                    .filter(|v| match v {
-                        // A bracket filter on a code block selects by language,
-                        // not by body text — `.code[rust]` means "Rust code
-                        // blocks". Use `select(contains(...))` to search bodies.
-                        Value::Code(code) => code_matches_language(code, pattern),
-                        _ => {
-                            let text = v.to_text().to_lowercase();
-                            if *exact {
-                                text == pattern_lower
-                            } else {
-                                text.contains(&pattern_lower)
-                            }
-                        }
-                    })
-                    .collect())
-            }
+            Filter::Text { pattern, exact, .. } => Ok(elements
+                .into_iter()
+                .filter(|v| text_filter_matches(v, pattern, *exact))
+                .collect()),
+            // A link type only means something to a link. Everywhere else
+            // the word is an ordinary text filter, so `.h[external]` finds
+            // "External APIs" rather than nothing.
             Filter::Type { type_name, .. } => Ok(elements
                 .into_iter()
                 .filter(|v| match v {
                     Value::Link(link) => link.link_type.as_str() == type_name,
-                    Value::Code(code) => code_matches_language(code, type_name),
-                    _ => false,
+                    _ => text_filter_matches(v, type_name, false),
                 })
                 .collect()),
         }
@@ -1232,6 +1218,25 @@ fn apply_index(mut values: Vec<Value>, index: &IndexOp) -> Result<Vec<Value>, Qu
     }
 }
 
+/// Whether `value` passes a bracket text filter: case-insensitive, whole
+/// text when `exact` (a quoted pattern) and a substring otherwise.
+///
+/// A code block is matched by language instead, never its body, since
+/// `.code[rust]` means Rust code blocks. `select(contains(...))` searches
+/// bodies.
+fn text_filter_matches(value: &Value, pattern: &str, exact: bool) -> bool {
+    if let Value::Code(code) = value {
+        return code_matches_language(code, pattern);
+    }
+    let text = value.to_text().to_lowercase();
+    let pattern = pattern.to_lowercase();
+    if exact {
+        text == pattern
+    } else {
+        text.contains(&pattern)
+    }
+}
+
 /// Matches a code block against a language name from a bracket filter.
 ///
 /// The comparison is whole-string and case-insensitive, so `.code[java]` never
@@ -1512,6 +1517,22 @@ mod tests {
         if let Value::Heading(h) = &results[0] {
             assert_eq!(h.text, "World");
         }
+    }
+
+    /// A link type name filtered every non-link out, so `.h[external]` missed
+    /// "External APIs", and a keyword in brackets was a parse error.
+    #[test]
+    fn test_link_type_words_and_keywords_filter_text_outside_links() {
+        let md = "# External APIs\n\n## Anchor points\n\n## The End\n\n## If Needed\n\n\
+                  [x](https://x.example) [y](#y)\n";
+        assert_eq!(texts(md, ".h[external]"), ["External APIs"]);
+        assert_eq!(texts(md, ".h[anchor]"), ["Anchor points"]);
+        assert_eq!(texts(md, ".h[end]"), ["The End"]);
+        assert_eq!(texts(md, ".h[if]"), ["If Needed"]);
+        assert_eq!(eval(md, ".h[relative]").len(), 0);
+        // On links the word is still the link type.
+        assert_eq!(texts(md, ".link[external]"), ["x"]);
+        assert_eq!(texts(md, ".link[anchor]"), ["y"]);
     }
 
     #[test]

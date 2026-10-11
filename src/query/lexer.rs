@@ -104,6 +104,25 @@ impl TokenKind {
             TokenKind::Eof => "end of input",
         }
     }
+
+    /// The source text of a keyword token, for places where a keyword is
+    /// just a word, such as the `[end]` in `.h[end]`.
+    pub fn keyword(&self) -> Option<&'static str> {
+        Some(match self {
+            TokenKind::And => "and",
+            TokenKind::Or => "or",
+            TokenKind::Not => "not",
+            TokenKind::If => "if",
+            TokenKind::Then => "then",
+            TokenKind::Elif => "elif",
+            TokenKind::Else => "else",
+            TokenKind::End => "end",
+            TokenKind::True => "true",
+            TokenKind::False => "false",
+            TokenKind::Null => "null",
+            _ => return None,
+        })
+    }
 }
 
 /// A token with its source location.

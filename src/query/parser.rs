@@ -806,13 +806,19 @@ fn parse_filter_or_index(p: &mut Parser) -> Result<(FilterOrIndex, Span), QueryE
         ));
     }
 
-    // Identifier filter (fuzzy match or type filter)
-    if let TokenKind::Ident(name) = p.current_kind().clone() {
+    // Identifier filter (substring match, or a link type). A keyword is a
+    // word here like any other, so `.h[end]` finds "The End".
+    let word = match p.current_kind() {
+        TokenKind::Ident(name) => Some(name.clone()),
+        other => other.keyword().map(str::to_string),
+    };
+    if let Some(name) = word {
         p.advance();
         let end_span = p.current_span();
         p.expect(&TokenKind::RBracket)?;
 
-        // Check if it's a type filter for links
+        // A link type name filters links by type; on anything else the
+        // evaluator treats it as text.
         let filter = if matches!(
             name.as_str(),
             "anchor" | "external" | "relative" | "wikilink"
