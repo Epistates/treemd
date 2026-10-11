@@ -165,10 +165,11 @@ impl Engine {
 
             Expr::Element {
                 kind,
+                name,
                 filters,
                 index,
                 span,
-            } => self.eval_element(kind, filters, index.as_ref(), *span),
+            } => self.eval_element(kind, name, filters, index.as_ref(), *span),
 
             Expr::Property { name, span } => self.eval_property(name, *span),
 
@@ -210,10 +211,33 @@ impl Engine {
     fn eval_element(
         &mut self,
         kind: &ElementKind,
+        name: &str,
         filters: &[Filter],
         index: Option<&IndexOp>,
         _span: Span,
     ) -> Result<Vec<Value>, QueryError> {
+        // An element name is also a plausible key, so `.image` on front
+        // matter or `.p` on a constructed object reads that key when the
+        // input has it. The selector used to win everywhere, which turned
+        // `{p: 1} | .p` into every paragraph in the document. On the
+        // document itself the selector still wins, so `.h2` and `. | .code`
+        // select elements as they always have.
+        if !matches!(self.context.current, Value::Document(_))
+            && let Some(value) = self.context.current.get_property(name)
+        {
+            let mut values = match value {
+                Value::Array(items) if index.is_some() || !filters.is_empty() => items,
+                other => vec![other],
+            };
+            for filter in filters {
+                values = self.apply_filter(values, filter)?;
+            }
+            if let Some(idx) = index {
+                values = apply_index(values, idx)?;
+            }
+            return Ok(values);
+        }
+
         // Get all elements of the requested kind
         let mut elements: Vec<Value> = match kind {
             ElementKind::Heading(level) => self
@@ -1284,6 +1308,33 @@ mod tests {
         let query = parse(query).unwrap();
         let mut engine = Engine::new(&doc);
         engine.execute(&query).unwrap()
+    }
+
+    /// Each result's text, for comparing against a short expected list.
+    fn texts(md: &str, query: &str) -> Vec<String> {
+        eval(md, query).iter().map(Value::to_text).collect()
+    }
+
+    /// An element name after a pipe reads the key or property of that name
+    /// when the input has one. The selector used to win, so each of these
+    /// returned elements from the whole document instead.
+    #[test]
+    fn test_element_names_read_keys_on_inputs_that_have_them() {
+        let md =
+            "---\nimage: cover.png\n---\n# T\n\npara\n\n[l](http://x.example)\n\n![i](i.png)\n";
+        assert_eq!(texts(md, "{p: 1} | .p"), ["1"]);
+        assert_eq!(texts(md, ".h | {a: .text} | .a"), ["T"]);
+        assert_eq!(texts(md, ".fm | .image"), ["cover.png"]);
+        assert_eq!(texts(md, ".fm.image"), ["cover.png"]);
+        assert_eq!(texts(md, "{a: [1, 2]} | .a[1]"), ["2"]);
+
+        // On the document the selector still wins.
+        assert_eq!(texts(md, ".p")[0], "para");
+        assert_eq!(texts(md, ". | .img"), ["i"]);
+        assert_eq!(texts(md, ". | .headings"), ["T"]);
+        assert_eq!(texts(md, ". | .heading_count"), ["1"]);
+        // An object without the key still gets the selector.
+        assert_eq!(texts(md, "{x: 1} | .link"), ["l"]);
     }
 
     /// Code under a heading keeps its document line numbers. Scoping used to

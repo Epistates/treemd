@@ -43,6 +43,9 @@ pub enum Expr {
     /// Element selector: `.h2`, `.code`, `.link`
     Element {
         kind: ElementKind,
+        /// The selector as written (`image`, `fm`). On an input that has a
+        /// key or property by this name, `.name` reads it instead.
+        name: String,
         filters: Vec<Filter>,
         index: Option<IndexOp>,
         span: Span,

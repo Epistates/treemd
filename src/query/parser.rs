@@ -475,6 +475,7 @@ fn parse_postfix_expr(p: &mut Parser) -> Result<Expr, QueryError> {
             // For now, we handle this in evaluation
             if let Expr::Element {
                 kind,
+                name,
                 filters,
                 index: _,
                 span: elem_span,
@@ -482,6 +483,7 @@ fn parse_postfix_expr(p: &mut Parser) -> Result<Expr, QueryError> {
             {
                 expr = Expr::Element {
                     kind,
+                    name,
                     filters,
                     index: Some(index),
                     span: elem_span.merge(span),
@@ -575,6 +577,7 @@ fn parse_primary_expr(p: &mut Parser) -> Result<Expr, QueryError> {
                             // Index found - return element with index
                             return Ok(Expr::Element {
                                 kind,
+                                name,
                                 filters,
                                 index: Some(idx),
                                 span: span.merge(filter_span),
@@ -585,6 +588,7 @@ fn parse_primary_expr(p: &mut Parser) -> Result<Expr, QueryError> {
 
                 return Ok(Expr::Element {
                     kind,
+                    name,
                     filters,
                     index: None,
                     span: span.merge(name_span),
