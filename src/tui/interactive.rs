@@ -130,6 +130,10 @@ pub struct InteractiveState {
     /// test that holds the two together; without it the two drift silently and
     /// the viewport scrolls to the wrong place.
     pub total_lines: usize,
+    /// The line each top-level block was counted at, which places each
+    /// element relative to its own block once the renderer reports where the
+    /// block was really drawn.
+    pub block_lines: Vec<usize>,
 }
 
 /// Unique identifier for an element
@@ -222,6 +226,7 @@ impl InteractiveState {
             element_states: HashMap::new(),
             detail_mode: None,
             total_lines: 0,
+            block_lines: Vec::new(),
         }
     }
 
@@ -235,6 +240,7 @@ impl InteractiveState {
         mermaid_rows: &std::collections::HashMap<u64, usize>,
     ) {
         self.elements.clear();
+        self.block_lines.clear();
         let mut current_line = 0;
 
         // Resolve placeholder rows: use cached pixel-based value if available, else heuristic.
@@ -249,6 +255,7 @@ impl InteractiveState {
 
         for (block_idx, block) in blocks.iter().enumerate() {
             let start_line = current_line;
+            self.block_lines.push(current_line);
 
             match block {
                 Block::Details {

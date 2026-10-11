@@ -7,6 +7,7 @@ use layout::{DynamicLayout, Section};
 
 use crate::config::CodeFences;
 use crate::tui::app::{App, AppMode, Focus};
+use crate::tui::content_view::ContentView;
 use crate::tui::theme::Theme;
 use popups::{
     render_cell_edit_overlay, render_command_palette, render_file_create_confirm,
@@ -19,10 +20,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Wrap,
+    ScrollbarState,
 };
 use table::render_table;
-use util::{detect_checkbox_in_text, filter_content};
+use util::detect_checkbox_in_text;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     // Re-index interactive elements if mermaid image dimensions arrived last frame.
@@ -370,129 +371,47 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme.clone();
     let block_style = theme.border_style(app.focus == Focus::Content);
 
-    // Get content for selected section and determine title
-    let (content_text, title) = if let Some(heading_text) = app.selected_heading_text() {
-        let content = app
-            .selected_heading_index()
-            .and_then(|idx| app.document.extract_section_at_index(idx))
-            .unwrap_or_else(|| app.document.content.clone());
-
-        // Build title with various indicators
-        let raw_indicator = if app.show_raw_source { "[RAW] " } else { "" };
-        let title = if app.mode == AppMode::LinkFollow && !app.links_in_view.is_empty() {
-            format!(
-                " {}{} [Links: {}] ",
-                raw_indicator,
-                heading_text,
-                app.links_in_view.len()
-            )
-        } else {
-            format!(" {}{} ", raw_indicator, heading_text)
-        };
-
-        (content, title)
-    } else {
-        let raw_indicator = if app.show_raw_source { "[RAW] " } else { "" };
-        let title = if app.mode == AppMode::LinkFollow && !app.links_in_view.is_empty() {
-            format!(
-                " {}Content [Links: {}] ",
-                raw_indicator,
-                app.links_in_view.len()
-            )
-        } else {
-            format!(" {}Content ", raw_indicator)
-        };
-        (app.document.content.clone(), title)
-    };
-
-    // Apply content filtering (frontmatter, LaTeX) based on config
-    // Only filter when not showing raw source - raw view shows everything
-    let content_text = if !app.show_raw_source {
-        filter_content(
-            &content_text,
-            app.should_hide_frontmatter(),
-            app.should_hide_latex(),
-            app.should_latex_aggressive(),
+    let raw_indicator = if app.show_raw_source { "[RAW] " } else { "" };
+    let heading = app
+        .selected_heading_text()
+        .map_or_else(|| "Content".to_string(), str::to_string);
+    let title = if app.mode == AppMode::LinkFollow && !app.links_in_view.is_empty() {
+        format!(
+            " {}{} [Links: {}] ",
+            raw_indicator,
+            heading,
+            app.links_in_view.len()
         )
     } else {
-        content_text
+        format!(" {}{} ", raw_indicator, heading)
     };
 
-    // Check if we should render raw source or enhanced markdown
-    let mut rendered_text = if app.show_raw_source {
-        // Raw source view - show unprocessed markdown
-        render_raw_markdown(&content_text, &theme)
-    } else {
-        // Enhanced markdown rendering with syntax highlighting
-        // Pre-extract what we need before passing app as mutable to avoid borrow conflicts
-        let selected_element_id = if app.mode == AppMode::Interactive {
-            app.interactive_state.current_element().map(|elem| elem.id)
-        } else {
-            None
-        };
-        // Clone interactive state to avoid keeping a borrow when passing app as mutable
-        let interactive_state = app.interactive_state.clone();
-
-        // Calculate available width for tables (content area minus borders and padding)
-        let content_width = area.width.saturating_sub(2); // 2 for left/right borders
-
-        #[cfg(all(feature = "mermaid", unix))]
-        let mermaid_rows_ref = &app.mermaid_placeholder_rows;
-        #[cfg(not(all(feature = "mermaid", unix)))]
-        let mermaid_rows_ref = &std::collections::HashMap::new();
-
-        render_markdown_enhanced(
-            &content_text,
-            &app.highlighter,
-            &theme,
-            selected_element_id,
-            Some(&interactive_state), // Pass cloned copy to release borrow
-            Some(content_width),
-            mermaid_rows_ref,
-            app.code_fences,
-        )
-    };
-
-    // Apply search highlighting only for document/content search mode
-    // Outline search (s) only filters headings, it doesn't highlight content
-    if app.mode == AppMode::DocSearch && !app.doc_search.query.is_empty() {
-        rendered_text = apply_search_highlighting(
-            rendered_text,
-            &app.doc_search.query,
-            app.doc_search.current_idx,
-            app.doc_search.matches.len(),
-            &theme,
-        );
-    }
-
-    // Build paragraph with wrapping to get accurate visual line count
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(block_style)
-        .title(title);
-    let paragraph = Paragraph::new(rendered_text)
-        .block(block)
-        .style(theme.content_style())
-        .wrap(Wrap { trim: false });
-
-    // Use line_count() for accurate visual line count after wrapping
-    // (requires ratatui "unstable-rendered-line-info" feature)
+    // The section, wrapped to the pane: built only when something it depends
+    // on changed, so a frame that only scrolls slices rows out of it.
     let inner_width = area.width.saturating_sub(2); // subtract block borders
-    let visual_line_count = paragraph.line_count(inner_width);
-    if app.content_height != visual_line_count {
-        app.content_height = visual_line_count;
-    }
+    let view = content_view(app, &theme, inner_width);
+    app.content_height = view.rows.len();
+    app.apply_element_scroll();
 
     // Clamp scroll so we stop when last line reaches viewport bottom
     let max_scroll = app.max_content_scroll();
     if app.content_scroll > max_scroll {
         app.content_scroll = max_scroll;
     }
-    app.content_scroll_state =
-        ScrollbarState::new(max_scroll as usize).position(app.content_scroll as usize);
+    app.content_scroll_state = ScrollbarState::new(max_scroll).position(app.content_scroll);
 
-    // Apply scroll and render
-    let paragraph = paragraph.scroll((app.content_scroll, 0));
+    // Only the visible rows are drawn. They are already wrapped to the pane,
+    // so the paragraph does no wrapping of its own.
+    let visible = usize::from(area.height.saturating_sub(2));
+    let start = app.content_scroll.min(view.rows.len());
+    let end = (start + visible).min(view.rows.len());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(block_style)
+        .title(title);
+    let paragraph = Paragraph::new(view.rows[start..end].to_vec())
+        .block(block)
+        .style(theme.content_style());
     frame.render_widget(paragraph, area);
 
     // Render inline images (first image in content)
@@ -518,6 +437,109 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
         }),
         &mut app.content_scroll_state.clone(),
     );
+}
+
+/// Hash of anything with a `Hash` impl, for a cache key.
+fn key_of(parts: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    parts.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The current section as the content pane shows it, wrapped to `width`.
+///
+/// Three stages, each cached on everything it reads, so a frame only redoes
+/// the stages whose inputs changed: the displayed text (frontmatter and
+/// LaTeX filtering, a set of regexes over the whole section), the rendered
+/// lines (parsing, highlighting, tables), and the wrapped rows with any
+/// search highlighting. Re-running all three every frame took about a
+/// second on a 50k-line document, so every keypress and scroll step did.
+fn content_view(app: &mut App, theme: &Theme, width: u16) -> std::sync::Arc<ContentView> {
+    use crate::tui::app::AppMode;
+    use std::sync::Arc;
+
+    let displayed = app.displayed_section_content();
+
+    let selected_element_id = if app.mode == AppMode::Interactive {
+        app.interactive_state.current_element().map(|elem| elem.id)
+    } else {
+        None
+    };
+    #[cfg(all(feature = "mermaid", unix))]
+    let mermaid_rows = app.mermaid_placeholder_rows.clone();
+    #[cfg(not(all(feature = "mermaid", unix)))]
+    let mermaid_rows = std::collections::HashMap::new();
+    let mut mermaid_key: Vec<_> = mermaid_rows.iter().collect();
+    mermaid_key.sort_unstable();
+
+    let render_key = key_of((
+        displayed.as_str(),
+        width,
+        format!("{theme:?}"),
+        app.show_raw_source,
+        format!("{:?}", app.code_fences),
+        selected_element_id,
+        format!(
+            "{:?}{:?}",
+            app.interactive_state.element_states, app.interactive_state.detail_mode
+        ),
+        &mermaid_key,
+    ));
+    let rendered = match &app.content_cache.rendered {
+        Some((key, rendered)) if *key == render_key => Arc::clone(rendered),
+        _ => {
+            let rendered = Arc::new(if app.show_raw_source {
+                (render_raw_markdown(&displayed, theme).lines, Vec::new())
+            } else {
+                render_markdown_with_blocks(
+                    &displayed,
+                    &app.highlighter,
+                    theme,
+                    selected_element_id,
+                    Some(&app.interactive_state),
+                    Some(width),
+                    &mermaid_rows,
+                    app.code_fences,
+                )
+            });
+            app.content_cache.rendered = Some((render_key, Arc::clone(&rendered)));
+            rendered
+        }
+    };
+
+    // Search highlighting only for document/content search mode; outline
+    // search (s) only filters headings.
+    let searching = app.mode == AppMode::DocSearch && !app.doc_search.query.is_empty();
+    let view_key = key_of((
+        render_key,
+        searching.then_some((&app.doc_search.query, app.doc_search.current_idx)),
+    ));
+    if let Some((key, view)) = &app.content_cache.view
+        && *key == view_key
+    {
+        let view = Arc::clone(view);
+        app.content_view = Arc::clone(&view);
+        return view;
+    }
+
+    let (lines, block_lines) = rendered.as_ref().clone();
+    let lines = if searching {
+        apply_search_highlighting(
+            Text::from(lines),
+            &app.doc_search.query,
+            app.doc_search.current_idx,
+            app.doc_search.matches.len(),
+            theme,
+        )
+        .lines
+    } else {
+        lines
+    };
+    let view = Arc::new(ContentView::new(lines, width, block_lines));
+    app.content_cache.view = Some((view_key, Arc::clone(&view)));
+    app.content_view = Arc::clone(&view);
+    view
 }
 
 fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -563,7 +585,11 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
         .elements
         .iter()
         .filter_map(|element| match &element.element_type {
-            ElementType::Image { src, .. } => Some((element.id, element.line_range, src.clone())),
+            // Where the element was drawn, in screen rows, which is not where
+            // it was counted once anything above it wraps.
+            ElementType::Image { src, .. } => app
+                .element_rows(element)
+                .map(|rows| (element.id, rows, src.clone())),
             _ => None,
         })
         .collect();
@@ -578,7 +604,7 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         // Check if this image is visible in current scroll window
-        let scroll = app.content_scroll as usize;
+        let scroll = app.content_scroll;
         let viewport_height = app.content_viewport_height as usize;
         let viewport_end = scroll + viewport_height;
 
@@ -587,15 +613,12 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
             continue;
         }
 
-        // Calculate Y position: convert line number to screen coordinate
-        // Line positions are relative to the full document, need to account for scroll
-        let y_offset = if line_start >= scroll {
-            (line_start - scroll) as u16
-        } else {
-            0
-        };
-
-        let image_y = inner.y + y_offset;
+        // An image whose top has scrolled off is not drawn. Pinning it to the
+        // top of the pane at full height put it over the text below it.
+        if line_start < scroll {
+            continue;
+        }
+        let image_y = inner.y + (line_start - scroll) as u16;
 
         // Only render if there's space on screen
         if image_y >= inner.bottom() {
@@ -607,7 +630,9 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
             continue; // Not enough space for image
         }
 
-        let image_height = available_height.min(max_image_height);
+        // No taller than the rows reserved for it, or it covers what follows.
+        let reserved = u16::try_from(line_end - line_start).unwrap_or(u16::MAX);
+        let image_height = available_height.min(max_image_height).min(reserved);
 
         // Resolve image path and use cached protocol
         if let Ok(image_path) = app.resolve_image_path(&src) {
@@ -714,7 +739,9 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
             } = &elem.element_type
                 && language.as_deref() == Some("mermaid")
             {
-                return Some((elem.id, elem.line_range, content.clone()));
+                return app
+                    .element_rows(elem)
+                    .map(|rows| (elem.id, rows, content.clone()));
             }
             None
         })
@@ -727,7 +754,7 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
             continue;
         }
 
-        let scroll = app.content_scroll as usize;
+        let scroll = app.content_scroll;
         let viewport_height = app.content_viewport_height as usize;
         let viewport_end = scroll + viewport_height;
 
@@ -1124,7 +1151,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             }
             Focus::Content => {
                 // Show content scroll position
-                let scroll_pos = app.content_scroll as usize;
+                let scroll_pos = app.content_scroll;
                 let content_height = app.content_height;
                 let viewport = app.content_viewport_height as usize;
                 let bottom_line = (scroll_pos + viewport).min(content_height);
@@ -1384,6 +1411,7 @@ fn render_raw_markdown(content: &str, theme: &Theme) -> Text<'static> {
     Text::from(lines)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn render_markdown_enhanced(
     content: &str,
@@ -1392,15 +1420,43 @@ fn render_markdown_enhanced(
     selected_element_id: Option<crate::tui::interactive::ElementId>,
     interactive_state: Option<&crate::tui::interactive::InteractiveState>,
     available_width: Option<u16>,
-    _mermaid_placeholder_rows: &std::collections::HashMap<u64, usize>,
+    mermaid_placeholder_rows: &std::collections::HashMap<u64, usize>,
     fences: CodeFences,
 ) -> Text<'static> {
+    let (lines, _) = render_markdown_with_blocks(
+        content,
+        highlighter,
+        theme,
+        selected_element_id,
+        interactive_state,
+        available_width,
+        mermaid_placeholder_rows,
+        fences,
+    );
+    Text::from(lines)
+}
+
+/// [`render_markdown_enhanced`], also returning the line each top-level block
+/// starts on, which is what places interactive elements on screen.
+#[allow(clippy::too_many_arguments)]
+fn render_markdown_with_blocks(
+    content: &str,
+    highlighter: &SyntaxHighlighter,
+    theme: &Theme,
+    selected_element_id: Option<crate::tui::interactive::ElementId>,
+    interactive_state: Option<&crate::tui::interactive::InteractiveState>,
+    available_width: Option<u16>,
+    _mermaid_placeholder_rows: &std::collections::HashMap<u64, usize>,
+    fences: CodeFences,
+) -> (Vec<Line<'static>>, Vec<usize>) {
     let mut lines = Vec::new();
 
     // Parse content into structured blocks
     let blocks = parse_content(content, 0);
+    let mut block_lines = Vec::with_capacity(blocks.len());
 
     for (block_idx, block) in blocks.iter().enumerate() {
+        block_lines.push(lines.len());
         // Check if any element in this block is selected (block-level or inline)
         let is_block_selected = selected_element_id
             .map(|id| id.block_idx == block_idx)
@@ -2105,7 +2161,7 @@ fn render_markdown_enhanced(
         lines.push(Line::from(""));
     }
 
-    Text::from(lines)
+    (lines, block_lines)
 }
 
 /// Apply search highlighting to rendered text while preserving original span styles.
@@ -3036,9 +3092,8 @@ mod tests {
                     .sum();
                 assert_eq!(row, usize::from(width), "selected={selected}: {line:?}");
             }
-            let rendered = Paragraph::new(Text::from(lines))
-                .wrap(Wrap { trim: false })
-                .line_count(width);
+            // The rows the content pane wraps these lines into.
+            let rendered = ContentView::new(lines, width, Vec::new()).rows.len();
             assert_eq!(rendered, logical, "selected={selected}: block wrapped");
         }
     }
@@ -3500,5 +3555,160 @@ mod tests {
         assert_eq!(pointed(drawn_rows(md, select("Features"))), [0]);
         assert_eq!(pointed(drawn_rows(md, select("Interactive TUI"))), [1]);
         assert_eq!(pointed(drawn_rows(md, select("CLI Mode"))), [2]);
+    }
+}
+
+/// The content pane drawn the way a user sees it, through a test terminal,
+/// for the behaviors that only exist once a section is laid out on screen.
+#[cfg(test)]
+mod screen_tests {
+    use super::*;
+    use crate::tui::terminal_compat::ColorMode;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn app_with(md: &str) -> App {
+        App::new(
+            crate::parser::parse_markdown(md),
+            "t.md".into(),
+            std::path::PathBuf::from("<stdin>"),
+            crate::Config::default(),
+            ColorMode::Rgb,
+            false,
+        )
+    }
+
+    /// Draw a frame and return the screen, one string per row.
+    fn draw(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| render(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn long_paragraph(words: usize) -> String {
+        (0..words).map(|i| format!("word{i} ")).collect()
+    }
+
+    /// The selection was placed by counting a paragraph as one line, so a
+    /// link below a paragraph that wraps onto many rows was thought to be
+    /// on screen and never scrolled to.
+    #[test]
+    fn a_selection_below_a_wrapped_paragraph_is_scrolled_into_view() {
+        let md = format!(
+            "# T\n\n{}\n\n[target link](https://example.com)\n",
+            long_paragraph(400)
+        );
+        let mut app = app_with(&md);
+        draw(&mut app, 80, 20);
+        app.enter_interactive_mode();
+        app.scroll_to_interactive_element(app.content_viewport_height);
+        let screen = draw(&mut app, 80, 20).join("\n");
+        assert!(screen.contains("target link"), "{screen}");
+    }
+
+    /// With frontmatter hidden, the index parsed the unfiltered section while
+    /// the renderer drew the filtered one, so the pointer marked a different
+    /// link from the one Enter followed.
+    #[test]
+    fn with_frontmatter_hidden_the_pointer_marks_the_selected_link() {
+        let md = "---\ntitle: x\nother: y\n---\n\n[one](https://a.example)\n\n[two](https://b.example)\n";
+        let mut app = app_with(md);
+        draw(&mut app, 80, 20);
+        app.enter_interactive_mode();
+        let selected = match &app
+            .interactive_state
+            .current_element()
+            .unwrap()
+            .element_type
+        {
+            crate::tui::interactive::ElementType::Link { link, .. } => link.text.clone(),
+            other => panic!("expected a link, got {other:?}"),
+        };
+        let screen = draw(&mut app, 80, 20);
+        let pointed: Vec<_> = screen.iter().filter(|row| row.contains('▸')).collect();
+        assert_eq!(pointed.len(), 1, "{screen:#?}");
+        assert!(
+            pointed[0].contains(&selected),
+            "selected {selected:?}: {pointed:?}"
+        );
+    }
+
+    /// A frame that changes nothing reuses the laid-out section instead of
+    /// rendering and wrapping it again.
+    #[test]
+    fn an_unchanged_frame_reuses_the_layout() {
+        let mut app = app_with(&format!("# T\n\n{}\n", long_paragraph(50)));
+        draw(&mut app, 80, 20);
+        let first = std::sync::Arc::clone(&app.content_view);
+        app.content_scroll = 1;
+        draw(&mut app, 80, 20);
+        assert!(std::sync::Arc::ptr_eq(&first, &app.content_view));
+        // A different width is a different layout.
+        draw(&mut app, 60, 20);
+        assert!(!std::sync::Arc::ptr_eq(&first, &app.content_view));
+    }
+
+    /// The scroll offset was a u16, so nothing past row 65,535 could be
+    /// reached.
+    #[test]
+    fn content_past_row_65535_is_reachable() {
+        let body: String = (0..70_000).map(|i| format!("row {i}\n")).collect();
+        let mut app = app_with(&format!("# T\n\n```\n{body}```\n"));
+        draw(&mut app, 80, 20);
+        app.content_scroll = usize::MAX;
+        let screen = draw(&mut app, 80, 20).join("\n");
+        assert!(app.content_scroll > 65_535);
+        assert!(screen.contains("row 69999"), "{screen}");
+    }
+
+    /// Frame cost on a large section, first frame and then a scroll. Run with
+    /// `cargo test --release frame_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn frame_cost_on_a_large_document() {
+        let mut md = String::from("# Big\n\n");
+        for i in 0..3_500 {
+            md.push_str(&format!(
+                "Paragraph {i} with **bold**, `code` and a [link](https://x.example/{i}) and $x^2$.\n\n```rust\nfn f{i}() {{ let v = {i}; }}\n```\n\n"
+            ));
+        }
+        let mut app = app_with(&md);
+        let start = std::time::Instant::now();
+        draw(&mut app, 120, 40);
+        let first = start.elapsed();
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            app.content_scroll += 1;
+            draw(&mut app, 120, 40);
+        }
+        let scroll = start.elapsed() / 20;
+        println!(
+            "{} lines: first frame {first:?}, scroll frame {scroll:?}",
+            md.lines().count()
+        );
+    }
+
+    /// Search matched a plain-text conversion of the source and scrolled to
+    /// that line's number, so a match late in a wrapped paragraph stayed off
+    /// screen.
+    #[test]
+    fn search_scrolls_to_the_row_a_match_is_drawn_on() {
+        let md = format!("# T\n\n{} needle\n", long_paragraph(400));
+        let mut app = app_with(&md);
+        draw(&mut app, 80, 20);
+        app.enter_doc_search();
+        for c in "needle".chars() {
+            app.doc_search_input(c);
+        }
+        let screen = draw(&mut app, 80, 20).join("\n");
+        assert_eq!(app.doc_search.matches.len(), 1);
+        assert!(screen.contains("needle"), "{screen}");
     }
 }

@@ -2894,6 +2894,7 @@ dependencies = [
  "tempfile",
  "toml",
  "turbovault-parser",
+ "unicode-segmentation",
  "unicode-width",
  "ureq",
 ]
