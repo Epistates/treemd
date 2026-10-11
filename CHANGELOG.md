@@ -26,12 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`langs` and `types` list their keys in sorted order** rather than a different order on every run
 - **Terminal escape sequences in a document are shown, not sent, when the CLI prints to a terminal.** A heading or code block carrying `ESC ]0;…` or `ESC [2J` retitled the window or cleared the screen when listed with `-l`, `--tree`, `-s` or `-q`. They now print the way `cat -v` shows them, `^[]0;…`. Piped output is unchanged, byte for byte
 - **Whole numbers print as integers in JSON.** A count was `1.0` where an element's own fields print `1`. A large number in plain output printed as `9223372036854775807` rather than itself
+- **A panic in image or diagram rendering no longer breaks the terminal.** The image encoder and the mermaid renderer were each wrapped to turn a panic into an error, but the panic hook ran first and restored the terminal, so the TUI carried on in cooked mode on the main screen with the panic text printed over it. A panic in that work is now an error for that one image or diagram and nothing else
+- **An image path naming a FIFO, a terminal or a device no longer freezes treemd.** Opening one blocked until something wrote to it, on the UI thread with raw mode on, so Ctrl-C could not end the session. Only a regular file under 128 MB is opened
+- **A GIF declaring a huge canvas is refused before it is allocated.** The canvas size comes from the header, so a 62-byte file could take gigabytes the moment the document opened. A canvas over 16 megapixels is not drawn
+- **The image viewer streams a GIF instead of decoding every frame up front.** A screen recording used to expand into every frame at full size before the viewer opened, around 1.7 GB for a 1200x800, 450-frame README recording. The viewer now holds one frame and decodes the next as playback reaches it; stepping back reopens the stream
+- **Large mermaid diagrams are drawn within a fixed budget.** A diagram was rasterized at the pane's full width however tall it was, so a fifty-node chain at a wide pane took over a gigabyte and several seconds, and again on every width change. It is now held to 16 megapixels and drawn narrower if it would exceed that
 
 ### Changed
 
 - **A nested list is its own `.list` entry.** It used to be text in its parent item's `.content`, so `- outer` holding `- inner` reported one list whose item read `outer` plus the inner line. It now reports two lists of one item each. Anything reading `.content` for nested items needs updating
 - **turbovault-parser 2.1.0 to 3.2.0.** The 3.0.0 major is the MCP server's wire format and does not touch the parser API. The parser changes are all in 2.2.0: nested lists are real blocks ([turbovault#79](https://github.com/Epistates/turbovault/issues/79)), and the quoted continuation fix above
 - **ratatui-image 11.0.8 to 11.1.0**, and every other dependency to its latest compatible release. That moves wayland-scanner off quick-xml 0.39, so [RUSTSEC-2026-0194](https://rustsec.org/advisories/RUSTSEC-2026-0194) and [RUSTSEC-2026-0195](https://rustsec.org/advisories/RUSTSEC-2026-0195) no longer apply and the audit runs with no ignores
+- **GIFs in the Kitty graphics protocol are animated by treemd rather than by the terminal.** The native path sent every frame to replace frame one rather than add a frame, and sized the image from its screen position, so it only ever showed a stretched last frame; it also needed every frame decoded in memory up front. Playback now goes through ratatui-image like every other terminal. iTerm2 still animates the original file natively
+- **A small mermaid diagram is enlarged at most 2x** instead of being stretched to fill the pane, so a two-node diagram no longer takes up dozens of rows
 
 ## [0.9.1] - 2026-09-14
 

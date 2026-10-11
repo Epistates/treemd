@@ -4,7 +4,6 @@ mod help_text;
 mod image_cache;
 mod interactive;
 mod iterm_animation;
-mod kitty_animation;
 #[cfg(all(feature = "mermaid", unix))]
 mod mermaid;
 mod syntax;

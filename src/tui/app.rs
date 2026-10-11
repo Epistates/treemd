@@ -5,7 +5,6 @@ use crate::tui::help_text;
 use crate::tui::image_cache::{AsyncProtocol, GifAdvance, ImageWorker, StreamingGif};
 use crate::tui::interactive::{ElementType, InteractiveState};
 use crate::tui::iterm_animation;
-use crate::tui::kitty_animation::{self, KittyAnimation};
 use crate::tui::syntax::{CodeBlockBackground, SyntaxHighlighter};
 use crate::tui::terminal_compat::ColorMode;
 use crate::tui::theme::{Theme, ThemeName};
@@ -455,7 +454,11 @@ pub struct LinkPickerState {
 pub struct ImageModalState {
     pub path: Option<std::path::PathBuf>,
     pub(crate) state: Option<AsyncProtocol>,
-    pub gif_frames: Vec<crate::tui::image_cache::GifFrame>,
+    /// Decoder for a multi-frame GIF, positioned after `stream_index`. One
+    /// canvas rather than every frame, so a long recording stays small.
+    pub(crate) stream: Option<StreamingGif>,
+    pub(crate) stream_index: usize,
+    /// One entry per frame; a still image has one, of zero.
     pub frame_delays_ms: Vec<u32>,
     pub frame_index: usize,
     pub last_rendered_frame: Option<usize>,
@@ -639,10 +642,6 @@ pub struct App {
 
     // Image modal viewing state (path, current frame, GIF playback).
     pub image_modal: ImageModalState,
-
-    // Native Kitty animation (for flicker-free GIF playback)
-    pub kitty_animation: Option<KittyAnimation>,
-    pub use_kitty_animation: bool, // Whether to use native Kitty animation
 
     // Native iTerm2 GIF playback. The original file is transferred after the
     // Ratatui frame is flushed, so no large OSC payload enters a buffer cell.
@@ -888,9 +887,6 @@ impl App {
             // Image modal viewing state (path, GIF playback, etc.)
             image_modal: ImageModalState::default(),
 
-            // Native Kitty animation
-            kitty_animation: None,
-            use_kitty_animation: images_enabled && kitty_animation::is_kitty_terminal(),
             iterm_animation_target: None,
             iterm_animation_staged: None,
             iterm_animation_sent: None,
@@ -1211,24 +1207,11 @@ impl App {
     }
 
     pub(crate) fn image_modal_frame_count(&self) -> usize {
-        if self.image_modal.frame_delays_ms.is_empty() {
-            self.image_modal.gif_frames.len()
-        } else {
-            self.image_modal.frame_delays_ms.len()
-        }
+        self.image_modal.frame_delays_ms.len()
     }
 
     fn image_modal_frame_delay_ms(&self, index: usize) -> Option<u32> {
-        self.image_modal
-            .frame_delays_ms
-            .get(index)
-            .copied()
-            .or_else(|| {
-                self.image_modal
-                    .gif_frames
-                    .get(index)
-                    .map(|frame| frame.delay_ms)
-            })
+        self.image_modal.frame_delays_ms.get(index).copied()
     }
 
     /// Advance visible GIFs whose frame deadline has elapsed.
@@ -1399,68 +1382,49 @@ impl App {
             return;
         }
 
-        // Try to resolve and load the image
-        if let Ok(path) = self.resolve_image_path(image_src) {
-            // iTerm2 accepts and animates the original GIF. Retain only its
-            // delays and first frame instead of hundreds of full RGBA canvases.
-            if self.can_use_native_iterm_animation()
-                && let Ok(delays) =
-                    crate::tui::image_cache::ImageCache::extract_gif_frame_delays(&path)
-                && delays.len() > 1
-                && let Ok(first_frame) =
-                    crate::tui::image_cache::ImageCache::extract_first_frame(&path)
-                && let Some(picker) = &mut self.picker
-            {
-                let initial_protocol = picker.new_resize_protocol(first_frame.clone());
-                let Some(worker) = &self.image_worker else {
-                    return;
-                };
-                self.image_modal.path = Some(path);
-                self.image_modal.state = Some(worker.wrap(initial_protocol));
-                self.image_modal.gif_frames = vec![crate::tui::image_cache::GifFrame {
-                    image: first_frame,
-                    delay_ms: delays[0],
-                }];
-                self.image_modal.frame_delays_ms = delays;
-                self.image_modal.frame_index = 0;
-                self.image_modal.last_rendered_frame = Some(0);
-                self.image_modal.last_frame_update = Some(Instant::now());
-                return;
-            }
+        use crate::tui::image_cache::ImageCache;
 
-            // Load all frames (for GIF animation)
-            if let Ok(frames) = crate::tui::image_cache::ImageCache::extract_all_frames(&path)
-                && !frames.is_empty()
-                && let Some(picker) = &mut self.picker
-            {
-                // Create initial protocol for first frame only.
-                // Subsequent frames will be created on-demand during animation
-                // to avoid memory overhead of pre-computing all protocols.
-                let initial_protocol = picker.new_resize_protocol(frames[0].image.clone());
-                let Some(worker) = &self.image_worker else {
-                    return;
-                };
+        let Ok(path) = self.resolve_image_path(image_src) else {
+            return;
+        };
 
-                self.image_modal.path = Some(path);
-                self.image_modal.state = Some(worker.wrap(initial_protocol));
-                self.image_modal.frame_delays_ms =
-                    frames.iter().map(|frame| frame.delay_ms).collect();
-                self.image_modal.gif_frames = frames;
-                self.image_modal.frame_index = 0;
-                self.image_modal.last_rendered_frame = Some(0); // Mark first frame as rendered
-                self.image_modal.last_frame_update = Some(Instant::now());
-            }
-        }
+        // A GIF keeps its delays and a streaming decoder, never every frame:
+        // a screen recording expands to gigabytes of RGBA. Frames are decoded
+        // as playback reaches them, and iTerm2 is sent the original file.
+        let delays = ImageCache::extract_gif_frame_delays(&path)
+            .ok()
+            .filter(|delays| delays.len() > 1);
+        let (first_frame, stream, delays) = match delays {
+            Some(delays) => match StreamingGif::open(&path) {
+                Ok((stream, first)) => (first, Some(stream), delays),
+                Err(_) => return,
+            },
+            None => match ImageCache::extract_first_frame(&path) {
+                Ok(still) => (still, None, vec![0]),
+                Err(_) => return,
+            },
+        };
+
+        let (Some(picker), Some(worker)) = (&mut self.picker, &self.image_worker) else {
+            return;
+        };
+        let initial_protocol = picker.new_resize_protocol(first_frame);
+        self.image_modal.path = Some(path);
+        self.image_modal.state = Some(worker.wrap(initial_protocol));
+        self.image_modal.stream = stream;
+        self.image_modal.stream_index = 0;
+        self.image_modal.frame_delays_ms = delays;
+        self.image_modal.frame_index = 0;
+        self.image_modal.last_rendered_frame = Some(0);
+        self.image_modal.last_frame_update = Some(Instant::now());
     }
 
     /// Close the image modal
     pub fn close_image_modal(&mut self) {
-        // Delete Kitty animation if active
-        self.stop_kitty_animation();
-
         self.image_modal.path = None;
         self.image_modal.state = None;
-        self.image_modal.gif_frames.clear();
+        self.image_modal.stream = None;
+        self.image_modal.stream_index = 0;
         self.image_modal.frame_delays_ms.clear();
         self.image_modal.frame_index = 0;
         self.image_modal.last_rendered_frame = None;
@@ -1474,8 +1438,6 @@ impl App {
         if len == 0 {
             return;
         }
-        // Stop Kitty animation - it doesn't support frame stepping, so fall back to software
-        self.stop_kitty_animation();
         // Pause animation when manually stepping
         self.image_modal.animation_paused = true;
         self.image_modal.frame_index = (self.image_modal.frame_index + len - 1) % len;
@@ -1488,38 +1450,16 @@ impl App {
         if len == 0 {
             return;
         }
-        // Stop Kitty animation - it doesn't support frame stepping, so fall back to software
-        self.stop_kitty_animation();
         // Pause animation when manually stepping
         self.image_modal.animation_paused = true;
         self.image_modal.frame_index = (self.image_modal.frame_index + 1) % len;
         self.replace_current_modal_frame();
     }
 
-    /// Stop and delete Kitty animation, falling back to software rendering.
-    /// Called when manual frame control is needed (stepping).
-    fn stop_kitty_animation(&mut self) {
-        if let Some(ref anim) = self.kitty_animation {
-            let mut stdout = std::io::stdout();
-            let _ = kitty_animation::delete_animation(&mut stdout, anim);
-        }
-        self.kitty_animation = None;
-    }
-
     /// Toggle animation play/pause
     pub fn modal_toggle_animation(&mut self) {
         let was_native_iterm = self.has_native_iterm_modal_animation();
         self.image_modal.animation_paused = !self.image_modal.animation_paused;
-
-        // Control Kitty animation if active
-        if let Some(ref anim) = self.kitty_animation {
-            let mut stdout = std::io::stdout();
-            if self.image_modal.animation_paused {
-                let _ = kitty_animation::pause_animation(&mut stdout, anim);
-            } else {
-                let _ = kitty_animation::resume_animation(&mut stdout, anim);
-            }
-        }
 
         if self.image_modal.animation_paused && was_native_iterm {
             // The terminal-owned animation is cleared on the next update.
@@ -1536,21 +1476,37 @@ impl App {
         self.image_modal.path.is_some()
     }
 
+    /// The modal's frame at `frame_index`, from its streaming decoder.
+    ///
+    /// Playback asks for the frame after the last one, which is one decode.
+    /// Stepping back, or resuming after a step, reopens the stream and walks
+    /// to the frame once, after which playback is sequential again.
+    fn modal_frame(&mut self) -> Option<image::DynamicImage> {
+        let modal = &mut self.image_modal;
+        let target = modal.frame_index;
+        let len = modal.frame_delays_ms.len().max(1);
+        let next = (modal.stream_index + 1) % len;
+
+        if target != next || modal.stream.is_none() {
+            let (stream, first) = StreamingGif::open(modal.path.as_ref()?).ok()?;
+            modal.stream = Some(stream);
+            modal.stream_index = 0;
+            if target == 0 {
+                return Some(first);
+            }
+        }
+
+        let stream = modal.stream.as_mut()?;
+        let mut frame = None;
+        while modal.stream_index != target {
+            frame = Some(stream.next_frame_looping().ok()?);
+            modal.stream_index = (modal.stream_index + 1) % len;
+        }
+        frame
+    }
+
     fn replace_current_modal_frame(&mut self) {
-        let image = self
-            .image_modal
-            .gif_frames
-            .get(self.image_modal.frame_index)
-            .map(|frame| frame.image.clone())
-            .or_else(|| {
-                let path = self.image_modal.path.as_ref()?;
-                crate::tui::image_cache::ImageCache::extract_gif_frame(
-                    path,
-                    self.image_modal.frame_index,
-                )
-                .ok()
-            });
-        let Some(image) = image else {
+        let Some(image) = self.modal_frame() else {
             return;
         };
         let Some(picker) = self.picker.as_ref() else {
@@ -1568,7 +1524,6 @@ impl App {
         if !self.is_image_modal_open()
             || self.image_modal.animation_paused
             || self.image_modal_frame_count() <= 1
-            || self.has_kitty_animation()
         {
             return false;
         }
@@ -1665,58 +1620,13 @@ impl App {
             .is_some_and(ImageWorker::has_pending)
     }
 
-    /// Start Kitty native animation for GIF playback.
-    /// Called from render when we know the exact coordinates.
-    /// Returns true if animation was started successfully.
-    pub fn start_kitty_animation(&mut self, col: u16, row: u16) -> bool {
-        // Only start if:
-        // 1. Use Kitty animation is enabled
-        // 2. We have multiple frames (GIF)
-        // 3. Animation hasn't started yet
-        if !self.use_kitty_animation
-            || self.image_modal_frame_count() <= 1
-            || self.kitty_animation.is_some()
-        {
-            return false;
-        }
-
-        // Prepare frames for Kitty animation
-        let frames: Vec<(image::DynamicImage, u32)> = self
-            .image_modal
-            .gif_frames
-            .iter()
-            .map(|f| (f.image.clone(), f.delay_ms))
-            .collect();
-
-        // Transmit animation to Kitty terminal
-        let mut stdout = std::io::stdout();
-        match kitty_animation::transmit_animation(&mut stdout, &frames, col, row) {
-            Ok(Some(anim)) => {
-                self.kitty_animation = Some(anim);
-                true
-            }
-            Ok(None) => false,
-            Err(_) => {
-                // Fall back to software animation
-                self.use_kitty_animation = false;
-                false
-            }
-        }
-    }
-
-    /// Check if Kitty animation is active
-    pub fn has_kitty_animation(&self) -> bool {
-        self.kitty_animation.is_some()
-    }
-
     /// Get time until next GIF frame should be displayed.
     /// Returns None if not animating, Some(Duration) otherwise.
     /// Used by the event loop to optimize poll timeout for smooth animation.
     pub fn time_until_next_frame(&self) -> Option<std::time::Duration> {
         // iTerm2 handles pixels internally, but the UI still follows the GIF's
         // frame delays so its progress counter remains useful.
-        let modal_deadline = if self.kitty_animation.is_some()
-            || !self.is_image_modal_open()
+        let modal_deadline = if !self.is_image_modal_open()
             || self.image_modal_frame_count() <= 1
             || self.image_modal.animation_paused
         {
@@ -6453,5 +6363,76 @@ sub b content
             .unwrap();
         assert!(sub_b.contains("sub b content"));
         assert!(!sub_b.contains("sub a content"));
+    }
+}
+
+#[cfg(test)]
+mod image_modal_tests {
+    use super::*;
+
+    /// A three-frame GIF whose frames are red, green and blue.
+    fn three_frame_gif() -> tempfile::NamedTempFile {
+        use std::borrow::Cow;
+
+        let mut file = tempfile::NamedTempFile::new().expect("temporary gif");
+        let palette = [255, 0, 0, 0, 255, 0, 0, 0, 255];
+        let mut encoder =
+            gif::Encoder::new(file.as_file_mut(), 1, 1, &palette).expect("gif encoder");
+        for color in 0..3u8 {
+            let frame = gif::Frame {
+                width: 1,
+                height: 1,
+                delay: 2,
+                buffer: Cow::Owned(vec![color]),
+                ..gif::Frame::default()
+            };
+            encoder.write_frame(&frame).expect("frame");
+        }
+        drop(encoder);
+        file
+    }
+
+    fn red(image: &image::DynamicImage) -> u8 {
+        image.to_rgba8().get_pixel(0, 0).0[0]
+    }
+    fn green(image: &image::DynamicImage) -> u8 {
+        image.to_rgba8().get_pixel(0, 0).0[1]
+    }
+    fn blue(image: &image::DynamicImage) -> u8 {
+        image.to_rgba8().get_pixel(0, 0).0[2]
+    }
+
+    /// The viewer streams a GIF rather than holding every frame, so each
+    /// frame it shows has to be the one its index names, whether playback got
+    /// there by advancing, by stepping back, or by wrapping past the end.
+    #[test]
+    fn the_modal_frame_follows_its_index_in_any_order() {
+        let gif = three_frame_gif();
+        let doc = crate::parser::parse_markdown("# t\n");
+        let mut app = App::new(
+            doc,
+            "t.md".into(),
+            gif.path().with_file_name("t.md"),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+        let (stream, _) = StreamingGif::open(gif.path()).expect("stream");
+        app.image_modal.path = Some(gif.path().to_path_buf());
+        app.image_modal.stream = Some(stream);
+        app.image_modal.stream_index = 0;
+        app.image_modal.frame_delays_ms = vec![20, 20, 20];
+
+        let mut show = |index: usize| {
+            app.image_modal.frame_index = index;
+            app.modal_frame().expect("frame")
+        };
+        assert_eq!(green(&show(1)), 255, "advance");
+        assert_eq!(blue(&show(2)), 255, "advance");
+        assert_eq!(red(&show(0)), 255, "wrap past the end");
+        assert_eq!(green(&show(1)), 255, "advance after wrapping");
+        assert_eq!(red(&show(0)), 255, "step back");
+        assert_eq!(blue(&show(2)), 255, "jump forward");
+        assert_eq!(blue(&show(2)), 255, "the same frame again");
     }
 }
