@@ -59,13 +59,13 @@ impl ImageWorker {
             .name("treemd-image-resize".to_string())
             .spawn(move || {
                 while let Ok(mut job) = request_rx.recv() {
-                    let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let error = crate::tui::tty::catch_isolated(|| {
                         job.protocol.resize_encode(&job.resize, job.size);
                         job.protocol
                             .last_encoding_result()
                             .and_then(Result::err)
                             .map(|error| error.to_string())
-                    }))
+                    })
                     .unwrap_or_else(|_| Some("image encoder panicked".to_string()));
                     if result_tx
                         .send(ResizeResult {
