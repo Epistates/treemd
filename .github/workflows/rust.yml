@@ -98,6 +98,31 @@ jobs:
       - name: Verify crates.io package
         run: cargo package --locked
 
+  # The musl build is the one Alpine users get (#42), and it was only ever
+  # built at release time, after the tag was already pushed. Build it the
+  # way the release does, with cross, and run it on Alpine itself.
+  musl:
+    name: musl on Alpine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --rev 8633ec65ab914015c2444c732568b414bd3c47cf --locked
+      - name: Build
+        run: cross build --locked --target x86_64-unknown-linux-musl
+      # The checkout is mounted read-only: the container only runs the binary.
+      - name: Smoke test on Alpine
+        run: >-
+          docker run --rm -v "$PWD:/src:ro" -w /src alpine:3
+          sh scripts/smoke-test.sh target/x86_64-unknown-linux-musl/debug/treemd
+
   # Advisories (the RustSec database cargo-audit reads), licenses, banned
   # dependency specs and sources, all configured in deny.toml. The action
   # runs a prebuilt cargo-deny fixed by the pinned SHA, so nothing is
