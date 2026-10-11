@@ -71,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`Ctrl+c` quits**, asking first when there are unsaved edits. Raw mode made it an ordinary key, bound to nothing
 - **`Ctrl+z` suspends to the shell**, and `fg` brings treemd back as it was. Raw mode made it an ordinary key as well. In interactive mode it is still undo
+- **`.children` and `.parent` on a heading.** Both were documented and reported "Property not found". `.children` is the array of headings directly under it, the same as `.h1 > .h`, and `.parent` is the nearest heading above it at a shallower level, or `null`
 
 ### Changed
 

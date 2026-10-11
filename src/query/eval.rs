@@ -533,6 +533,26 @@ impl Engine {
     fn eval_property(&mut self, name: &str, span: Span) -> Result<Vec<Value>, QueryError> {
         let current = &self.context.current;
 
+        // A heading's place in the outline needs the document's other
+        // headings, which the heading value itself does not hold.
+        if let Value::Heading(heading) = current {
+            match name {
+                "children" => {
+                    let children = self.scoped_elements(heading, &ElementKind::Heading(None), true);
+                    return Ok(vec![Value::Array(children)]);
+                }
+                "parent" => {
+                    let parent = self.context.headings[..heading.index]
+                        .iter()
+                        .rev()
+                        .find(|h| h.level < heading.level)
+                        .map_or(Value::Null, |h| Value::Heading(h.clone()));
+                    return Ok(vec![parent]);
+                }
+                _ => {}
+            }
+        }
+
         if let Some(value) = current.get_property(name) {
             Ok(vec![value])
         } else {
