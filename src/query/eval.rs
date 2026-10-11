@@ -198,10 +198,11 @@ impl Engine {
                 else_branch,
                 ..
             } => {
+                // With no `else` the input passes through unchanged.
                 self.yields_stream(then_branch, input)
                     || else_branch
                         .as_deref()
-                        .is_some_and(|e| self.yields_stream(e, input))
+                        .map_or(input, |e| self.yields_stream(e, input))
             }
             Expr::Function { name, args, .. } => match name.as_str() {
                 "_pipe" => args
@@ -908,7 +909,10 @@ impl Engine {
         } else if let Some(else_expr) = else_branch {
             self.eval_expr(else_expr)
         } else {
-            Ok(vec![Value::Null])
+            // No `else` passes the input through, as in jq 1.7, so
+            // `if .level == 1 then upper end` leaves other headings alone
+            // rather than turning them into null.
+            Ok(vec![self.context.current.clone()])
         }
     }
 }
