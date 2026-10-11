@@ -293,6 +293,26 @@ mod tests {
         assert_eq!(rows, ["日本", "語日", "本語"]);
     }
 
+    proptest::proptest! {
+        /// No row is wider than the pane unless it is one grapheme too wide
+        /// to fit anywhere, and the rows put back together are the line.
+        #[test]
+        fn wrapping_fits_the_width_and_loses_nothing(
+            line in "[a-z \u{65e5}\u{672c}\u{1f600}-]{0,120}",
+            width in 1u16..40,
+        ) {
+            let view = ContentView::new(vec![Line::from(line.clone())], width, vec![0]);
+            for row in &view.rows {
+                proptest::prop_assert!(
+                    row.width() <= usize::from(width) || text(row).graphemes(true).count() == 1
+                );
+            }
+            let joined: String = view.rows.iter().map(text).collect();
+            proptest::prop_assert_eq!(joined, line);
+            proptest::prop_assert_eq!(view.line_rows, vec![0, view.rows.len()]);
+        }
+    }
+
     /// An element is placed from its own block's drawn start, so a block
     /// counted one line short does not shift the next block's elements.
     #[test]

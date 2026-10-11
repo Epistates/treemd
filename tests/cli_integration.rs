@@ -43,22 +43,31 @@ Deep section.
 End of doc.
 ";
 
-/// Write the fixture to a tempfile and return its path.
-/// Caller is responsible for cleanup (we leak — test process exits anyway).
-fn fixture_file() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "treemd-it-{}-{}",
-        std::process::id(),
-        // Add a tiny salt so concurrent tests don't collide on the same fixture.
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let path = dir.join("doc.md");
-    std::fs::write(&path, FIXTURE).expect("write fixture");
-    path
+/// A document written to its own temporary directory, removed on drop.
+struct TempDoc {
+    _dir: tempfile::TempDir,
+    path: PathBuf,
+}
+
+impl std::ops::Deref for TempDoc {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+/// Write `contents` to `doc.md` in a fresh temporary directory.
+fn temp_doc(contents: &str) -> TempDoc {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().join("doc.md");
+    std::fs::write(&path, contents).expect("write fixture");
+    TempDoc { _dir: dir, path }
+}
+
+/// The shared fixture in a temporary file.
+fn fixture_file() -> TempDoc {
+    temp_doc(FIXTURE)
 }
 
 /// Run treemd with args, return (stdout, stderr, exit code).
@@ -603,10 +612,7 @@ fn at_line_on_heading_line_returns_that_heading() {
 #[test]
 fn at_line_before_first_heading_exits_nonzero() {
     // First heading is on line 5; line 2 has no heading at or before it.
-    let dir = std::env::temp_dir().join(format!("treemd-it-noheading-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("doc.md");
-    std::fs::write(&path, "lorem\nipsum\ndolor\nsit\n# Hello\nbody\n").unwrap();
+    let path = temp_doc("lorem\nipsum\ndolor\nsit\n# Hello\nbody\n");
     let (_, stderr, code) = run(&["--at-line", "2", path.to_str().unwrap()]);
     assert_ne!(code, 0);
     assert!(stderr.contains("No heading"));
@@ -628,14 +634,7 @@ fn at_line_zero_is_rejected() {
 
 #[test]
 fn section_with_inline_markdown_in_heading() {
-    let dir = std::env::temp_dir().join(format!("treemd-it-fmt-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("doc.md");
-    std::fs::write(
-        &path,
-        "# Top\n\n## **Bold** Section\nbody-of-bold\n\n## Next\nbody-of-next\n",
-    )
-    .unwrap();
+    let path = temp_doc("# Top\n\n## **Bold** Section\nbody-of-bold\n\n## Next\nbody-of-next\n");
 
     let (stdout, stderr, code) = run(&["-s", "Bold Section", path.to_str().unwrap()]);
     assert_eq!(code, 0, "stderr: {stderr}");
