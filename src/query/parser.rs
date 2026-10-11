@@ -401,6 +401,36 @@ fn parse_unary_expr(p: &mut Parser) -> Result<Expr, QueryError> {
 fn parse_unary_expr_inner(p: &mut Parser) -> Result<Expr, QueryError> {
     let start_span = p.current_span();
 
+    // `not` with nothing after it to negate is jq's `not` filter, applied
+    // to the input, as in `.draft | not`. Parsing it as the prefix operator
+    // demanded an operand and failed at the end of the stage.
+    if p.check(&TokenKind::Not)
+        && matches!(
+            p.tokens.get(p.pos + 1).map(|t| &t.kind),
+            None | Some(
+                TokenKind::Eof
+                    | TokenKind::Pipe
+                    | TokenKind::Comma
+                    | TokenKind::RParen
+                    | TokenKind::RBracket
+                    | TokenKind::RBrace
+                    | TokenKind::And
+                    | TokenKind::Or
+                    | TokenKind::Then
+                    | TokenKind::Elif
+                    | TokenKind::Else
+                    | TokenKind::End
+            )
+        )
+    {
+        p.advance();
+        return Ok(Expr::Function {
+            name: "not".to_string(),
+            args: Vec::new(),
+            span: start_span,
+        });
+    }
+
     if p.matches(&[TokenKind::Not]) {
         let expr = parse_unary_expr(p)?;
         let end_span = expr.span();

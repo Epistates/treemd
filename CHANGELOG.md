@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`==` no longer treats different types as equal.** Values of different types were compared by their text, so `1 == "1"` and `null == ""` were true. As in jq they are now false, and arrays, objects and elements are equal when they hold the same values
 - **An `if` without `else` passes its input through.** It returned null when the condition was false, so `.h | .text | if . == "A" then "first" end` printed a blank line for every other heading. It now returns the input unchanged, as jq does
 - **`nth` with an index out of range returns nothing.** An index further back than the start gave the first element, and `nth(-1e300)` overflowed, which crashed a debug build
+- **`not` works as a pipe stage.** `.draft | not` was a parse error, because `not` always expected something after it to negate. It now negates its input, as in jq, and `not .draft` still works
 
 ### Security
 
