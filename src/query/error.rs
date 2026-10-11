@@ -6,6 +6,7 @@
 use super::ast::Span;
 use super::lexer::TokenKind;
 use std::fmt;
+use unicode_width::UnicodeWidthStr;
 
 /// Query error with source location and suggestions.
 #[derive(Debug)]
@@ -65,11 +66,13 @@ impl QueryError {
             let line = inner.source.lines().next().unwrap_or(&inner.source);
             output.push_str(&format!("1 | {}\n", line));
 
-            // Underline the error span
-            let start = inner.span.start.min(line.len());
-            let end = inner.span.end.min(line.len()).max(start + 1);
-            let padding = " ".repeat(start + 4); // "1 | " = 4 chars
-            let underline = "^".repeat(end - start);
+            // Underline the error span. Spans are byte offsets, but the caret
+            // has to line up in terminal columns, so a query holding `é` or
+            // `日本` is measured by display width rather than by bytes.
+            let start = char_floor(line, inner.span.start);
+            let end = char_floor(line, inner.span.end).max(start);
+            let padding = " ".repeat(line[..start].width() + 4); // "1 | " = 4 chars
+            let underline = "^".repeat(line[start..end].width().max(1));
             output.push_str(&format!(
                 "{}{}  {}\n",
                 padding,
@@ -104,6 +107,15 @@ impl QueryError {
 
         output
     }
+}
+
+/// The largest char boundary in `s` at or below `offset`, clamped to `s`.
+fn char_floor(s: &str, offset: usize) -> usize {
+    let mut i = offset.min(s.len());
+    while !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 impl fmt::Display for QueryError {
@@ -341,6 +353,21 @@ impl fmt::Display for QueryErrorKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The caret was placed by byte offset, and the lexer advanced one byte
+    /// per character, so after any non-ASCII text it pointed at the wrong
+    /// column.
+    #[test]
+    fn caret_lines_up_after_non_ascii_text() {
+        for (query, column) in [(r#""é" !"#, 8), (r#""日本" !"#, 11), (".h !", 7)] {
+            let formatted = crate::query::parse(query).unwrap_err().format();
+            let caret = formatted
+                .lines()
+                .find(|l| l.trim_start().starts_with('^'))
+                .unwrap_or_else(|| panic!("no caret line in {formatted}"));
+            assert_eq!(caret.find('^'), Some(column), "{query:?}\n{formatted}");
+        }
+    }
 
     #[test]
     fn test_error_formatting() {
