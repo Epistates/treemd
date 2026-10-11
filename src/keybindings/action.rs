@@ -157,6 +157,8 @@ pub enum Action {
     Quit,
     /// Redraw the screen
     Redraw,
+    /// Suspend to the shell, as Ctrl+Z does in other programs (`fg` returns)
+    Suspend,
 
     // === Jump to Heading by Number ===
     JumpToHeading1,
@@ -307,6 +309,7 @@ impl Action {
             // Application
             Action::Quit => "Quit",
             Action::Redraw => "Redraw screen",
+            Action::Suspend => "Suspend to the shell",
 
             // Jump to heading
             Action::JumpToHeading1 => "Jump to heading 1",
@@ -427,7 +430,7 @@ impl Action {
             | Action::DiscardAndQuit
             | Action::DiscardAndContinue => "Dialog",
 
-            Action::Quit | Action::Redraw => "Application",
+            Action::Quit | Action::Redraw | Action::Suspend => "Application",
 
             Action::JumpToHeading1
             | Action::JumpToHeading2

@@ -31,6 +31,35 @@ use std::io::stdout;
 use std::path::Path;
 use std::time::Duration;
 
+/// Hand the terminal back: leave the alternate screen, drop raw mode, and
+/// release the mouse, so whatever runs next (an editor, the shell) gets a
+/// normal terminal. A program inheriting mouse-reporting mode misbehaves.
+fn release_terminal(mouse_captured: bool) -> Result<()> {
+    use crossterm::event::{DisableBracketedPaste, DisableMouseCapture};
+
+    let _ = stdout().execute(DisableBracketedPaste);
+    stdout().execute(LeaveAlternateScreen)?;
+    if mouse_captured {
+        let _ = stdout().execute(DisableMouseCapture);
+    }
+    tty::suspend_raw_mode()?;
+    Ok(())
+}
+
+/// Take the terminal back after [`release_terminal`] and repaint everything.
+fn reclaim_terminal(terminal: &mut DefaultTerminal, mouse_captured: bool) -> Result<()> {
+    use crossterm::event::{EnableBracketedPaste, EnableMouseCapture};
+
+    stdout().execute(EnterAlternateScreen)?;
+    let _ = stdout().execute(EnableBracketedPaste);
+    if mouse_captured {
+        let _ = stdout().execute(EnableMouseCapture);
+    }
+    tty::resume_raw_mode()?;
+    terminal.clear()?;
+    Ok(())
+}
+
 /// Suspend the TUI, run an external editor, then restore the TUI.
 ///
 /// If line is provided and the editor supports it, the file will be opened at that line.
@@ -42,19 +71,7 @@ fn run_editor(
     editor_config: &EditorConfig,
     mouse_captured: bool,
 ) -> Result<()> {
-    use crossterm::event::{
-        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    };
-
-    // Leave alternate screen, disable raw mode and release the mouse so the
-    // editor gets full terminal control (a child editor inheriting
-    // mouse-reporting mode behaves erratically)
-    let _ = stdout().execute(DisableBracketedPaste);
-    stdout().execute(LeaveAlternateScreen)?;
-    if mouse_captured {
-        let _ = stdout().execute(DisableMouseCapture);
-    }
-    tty::suspend_raw_mode()?;
+    release_terminal(mouse_captured)?;
 
     // Build editor command with config
     let mut builder = Editor::builder()
@@ -67,16 +84,22 @@ fn run_editor(
 
     let result = builder.open();
 
-    // Restore terminal state
-    stdout().execute(EnterAlternateScreen)?;
-    let _ = stdout().execute(EnableBracketedPaste);
-    if mouse_captured {
-        let _ = stdout().execute(EnableMouseCapture);
-    }
-    tty::resume_raw_mode()?;
-    terminal.clear()?;
-
+    reclaim_terminal(terminal, mouse_captured)?;
     result.map_err(|e| color_eyre::eyre::eyre!("{}", e))
+}
+
+/// Stop the process the way Ctrl+Z stops any other program, and pick up
+/// where it left off when the shell resumes it. Raw mode turns Ctrl+Z into an
+/// ordinary key, so the terminal never sends the signal itself.
+#[cfg(unix)]
+fn suspend_to_shell(terminal: &mut DefaultTerminal, mouse_captured: bool) -> Result<()> {
+    release_terminal(mouse_captured)?;
+    // SAFETY: raising a signal on our own process has no memory-safety
+    // preconditions; SIGTSTP stops it here until SIGCONT.
+    unsafe {
+        libc::raise(libc::SIGTSTP);
+    }
+    reclaim_terminal(terminal, mouse_captured)
 }
 
 /// Run the TUI application.
@@ -106,9 +129,22 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         let _ = watcher.watch(&app.current_file_path);
     }
 
+    // SIGTERM and SIGHUP (a closed terminal) end the session through the
+    // normal exit path, which restores the terminal. Left at their default
+    // they killed the process with raw mode, the alternate screen and mouse
+    // reporting still on, so the shell received mouse escapes as input.
+    let terminate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    #[cfg(unix)]
+    for signal in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGHUP] {
+        let _ = signal_hook::flag::register(signal, std::sync::Arc::clone(&terminate));
+    }
+
     let mut needs_redraw = true;
 
     loop {
+        if terminate.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(());
+        }
         if app.sync_native_animation_activation() {
             // Direct terminal images outlive Ratatui buffer cells. Clear once
             // when their target changes so a deselected or moved GIF cannot
@@ -400,6 +436,17 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 }
                                 ActionResult::Redraw => {
                                     terminal.clear()?;
+                                }
+                                ActionResult::Suspend => {
+                                    #[cfg(unix)]
+                                    suspend_to_shell(terminal, app.mouse_capture)?;
+                                    #[cfg(not(unix))]
+                                    {
+                                        app.status_message = Some(
+                                            "Suspending is not supported on this platform"
+                                                .to_string(),
+                                        );
+                                    }
                                 }
                                 ActionResult::Continue => {}
                             }

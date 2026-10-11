@@ -102,6 +102,8 @@ opensesame = { version = "0.1.1", features = ["serde"] }
 # Unix system calls for TTY handling
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# SIGTERM / SIGHUP as flags, so the TUI exits through its own cleanup
+signal-hook = "0.3"
 
 # Mermaid diagram rendering (pure Rust, no external tools)
 # NOTE: pre-1.0 crate in early development; semver pins to >=0.3.0, <0.4.0

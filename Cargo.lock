@@ -2888,6 +2888,7 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
+ "signal-hook",
  "strum",
  "supports-color",
  "syntect",

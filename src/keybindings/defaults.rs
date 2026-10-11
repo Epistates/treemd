@@ -132,6 +132,8 @@ fn add_normal_mode(kb: &mut Keybindings) {
     // terminating the session — q is the deliberate quit key.
     bind(kb, Normal, "Escape", ExitMode);
     bind(kb, Normal, "Ctrl+l", Redraw);
+    // Raw mode turns Ctrl+Z into an ordinary key as well.
+    bind(kb, Normal, "Ctrl+z", Suspend);
 
     // Note: digits 1-9 act as a vim-style count prefix in Normal mode (e.g.
     // `5j`) and are consumed before keybinding dispatch, so the
@@ -534,6 +536,32 @@ mod tests {
                 make_key_event(KeyCode::Char('?'), KeyModifiers::NONE)
             ),
             Some(Action::ToggleHelp)
+        );
+    }
+
+    /// Raw mode makes Ctrl+C and Ctrl+Z ordinary keys, so they do only what
+    /// the keymap says. In Normal mode that is quit and suspend; in the
+    /// interactive modes Ctrl+Z is still undo.
+    #[test]
+    fn test_ctrl_c_quits_and_ctrl_z_suspends_only_in_normal_mode() {
+        let mut kb = default_keybindings();
+        let ctrl = |c| make_key_event(KeyCode::Char(c), KeyModifiers::CONTROL);
+
+        assert_eq!(
+            kb.dispatch(KeybindingMode::Normal, ctrl('c')),
+            Some(Action::Quit)
+        );
+        assert_eq!(
+            kb.dispatch(KeybindingMode::Normal, ctrl('z')),
+            Some(Action::Suspend)
+        );
+        assert_eq!(
+            kb.dispatch(KeybindingMode::Interactive, ctrl('z')),
+            Some(Action::UndoEdit)
+        );
+        assert_eq!(
+            kb.dispatch(KeybindingMode::InteractiveTable, ctrl('z')),
+            Some(Action::UndoEdit)
         );
     }
 
