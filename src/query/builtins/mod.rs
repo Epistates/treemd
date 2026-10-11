@@ -74,16 +74,16 @@ pub fn register_all(registry: &mut Registry) {
     registry.register_function("limit", reorder(Function::new(fn_limit, 1..=1)));
     registry.register_function("skip", reorder(Function::new(fn_skip, 1..=1)));
     registry.register_function("nth", reduce(Function::new(fn_nth, 1..=1)));
-    registry.register_function("any", reduce(Function::new(fn_any, 1..=1)));
-    registry.register_function("all", reduce(Function::new(fn_all, 1..=1)));
+    registry.register_function("any", reduce(Function::new(fn_special_form, 1..=1)));
+    registry.register_function("all", reduce(Function::new(fn_special_form, 1..=1)));
     registry.register_function("min", reduce(Function::new(fn_min, 0..=0)));
     registry.register_function("max", reduce(Function::new(fn_max, 0..=0)));
     registry.register_function("add", reduce(Function::new(fn_add, 0..=0)));
     registry.register_function("not", Function::new(fn_not, 0..=0));
     registry.register_function("null", Function::new(fn_null, 0..=0));
     registry.register_function("debug", Function::new(fn_debug, 0..=0));
-    registry.register_function("group_by", reduce(Function::new(fn_group_by, 1..=1)));
-    registry.register_function("sort_by", reorder(Function::new(fn_sort_by, 1..=1)));
+    registry.register_function("group_by", reduce(Function::new(fn_special_form, 1..=1)));
+    registry.register_function("sort_by", reorder(Function::new(fn_special_form, 1..=1)));
 
     // Aliases - comprehensive for discoverability
     // Length/count
@@ -647,32 +647,6 @@ fn fn_nth(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> 
     }
 }
 
-// NOTE: `any`/`all`/`sort_by`/`group_by` are intercepted as special forms in
-// `Engine::eval_function` so their predicate/key argument is evaluated *per
-// element* (the registry path evaluates arguments only once). These registry
-// entries exist solely so calling them with the wrong number of arguments
-// produces an arity error; with the correct single argument they never reach
-// these bodies. The fallbacks below cover only the degenerate
-// already-truthy-input case.
-
-fn fn_any(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let input = args.first().unwrap_or(&Value::Null);
-    let result = match input {
-        Value::Array(a) => a.iter().any(|v| v.is_truthy()),
-        other => other.is_truthy(),
-    };
-    Ok(vec![Value::Bool(result)])
-}
-
-fn fn_all(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let input = args.first().unwrap_or(&Value::Null);
-    let result = match input {
-        Value::Array(a) => a.iter().all(|v| v.is_truthy()),
-        other => other.is_truthy(),
-    };
-    Ok(vec![Value::Bool(result)])
-}
-
 fn fn_min(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
     match input {
@@ -767,63 +741,14 @@ fn fn_debug(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
     Ok(vec![input.clone()])
 }
 
-fn fn_group_by(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let input = args.first().unwrap_or(&Value::Null);
-    let key_name = args
-        .get(1)
-        .map(|v| v.to_text())
-        .unwrap_or_else(|| "key".to_string());
-
-    match input {
-        Value::Array(a) => {
-            let mut groups: indexmap::IndexMap<String, Vec<Value>> = indexmap::IndexMap::new();
-            for item in a {
-                let key = match item {
-                    Value::Object(o) => o.get(&key_name).map(|v| v.to_text()).unwrap_or_default(),
-                    Value::Heading(h) => format!("h{}", h.level),
-                    Value::Code(c) => c.language.clone().unwrap_or_else(|| "none".to_string()),
-                    _ => item.to_text(),
-                };
-                groups.entry(key).or_default().push(item.clone());
-            }
-
-            let result: indexmap::IndexMap<String, Value> = groups
-                .into_iter()
-                .map(|(k, v)| (k, Value::Array(v)))
-                .collect();
-            Ok(vec![Value::Object(result)])
-        }
-        _ => Ok(vec![input.clone()]),
-    }
-}
-
-fn fn_sort_by(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let input = args.first().unwrap_or(&Value::Null);
-    let key_name = args
-        .get(1)
-        .map(|v| v.to_text())
-        .unwrap_or_else(|| "key".to_string());
-
-    match input {
-        Value::Array(a) => {
-            let mut sorted = a.clone();
-            sorted.sort_by(|a, b| {
-                let a_key = match a {
-                    Value::Object(o) => o.get(&key_name).map(|v| v.to_text()).unwrap_or_default(),
-                    Value::Heading(h) if key_name == "level" => h.level.to_string(),
-                    Value::Heading(h) if key_name == "text" => h.text.clone(),
-                    _ => a.to_text(),
-                };
-                let b_key = match b {
-                    Value::Object(o) => o.get(&key_name).map(|v| v.to_text()).unwrap_or_default(),
-                    Value::Heading(h) if key_name == "level" => h.level.to_string(),
-                    Value::Heading(h) if key_name == "text" => h.text.clone(),
-                    _ => b.to_text(),
-                };
-                a_key.cmp(&b_key)
-            });
-            Ok(vec![Value::Array(sorted)])
-        }
-        _ => Ok(vec![input.clone()]),
-    }
+/// Body for `any`, `all`, `sort_by` and `group_by`.
+///
+/// `Engine::eval_function` evaluates these itself, because their argument
+/// is an expression to run against each element rather than a value to
+/// compute once. They are registered so that arity errors, suggestions and
+/// stream collection treat them like any other function; with one argument
+/// the engine never calls this, and with any other count the arity check
+/// rejects the call first.
+fn fn_special_form(_args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
+    Ok(Vec::new())
 }

@@ -690,7 +690,18 @@ impl Engine {
 
     /// Evaluate `key_expr` against `element` (with `current` bound to it) and
     /// return its first result value. Restores `current` afterward.
+    ///
+    /// A string literal names a property, so `group_by("level")` means
+    /// `group_by(.level)`. Evaluated as an expression it would be the same
+    /// string for every element, and everything landed in one group.
     fn eval_key(&mut self, element: &Value, key_expr: &Expr) -> Result<Value, QueryError> {
+        if let Expr::Literal {
+            value: Literal::String(name),
+            ..
+        } = key_expr
+        {
+            return Ok(element.get_property(name).unwrap_or(Value::Null));
+        }
         let saved = std::mem::replace(&mut self.context.current, element.clone());
         let result = self.eval_expr(key_expr);
         self.context.current = saved;
