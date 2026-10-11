@@ -247,7 +247,66 @@ fn matches_invalid_regex_errors() {
 fn count_counts_codepoints_not_bytes() {
     // "ccé" is 3 codepoints but 4 bytes.
     let md = "# A\n\nccé\n";
-    assert_eq!(run(md, ".h1.content | count"), vec!["3".to_string()]);
+    assert_eq!(run(md, ".h1[0].content | count"), vec!["3".to_string()]);
+}
+
+// ---------------------------------------------------------------------------
+// Collection functions see a piped stream whole
+// ---------------------------------------------------------------------------
+
+/// Each of these ran once per piped value: `.h | count` printed `1` per
+/// heading and `.h | sort_by(.level)` sorted one heading at a time.
+#[test]
+fn collection_functions_collect_a_piped_stream() {
+    let md = "# A\n### C\n## B\n## B\n";
+    assert_eq!(run(md, ".h | count"), vec!["4"]);
+    assert_eq!(run(md, ".h | length"), vec!["4"]);
+    assert_eq!(run(md, ".h | text | first"), vec!["A"]);
+    assert_eq!(run(md, ".h | text | last"), vec!["B"]);
+    assert_eq!(run(md, ".h | nth(1) | text"), vec!["C"]);
+    assert_eq!(run(md, ".h | text | join(\", \")"), vec!["A, C, B, B"]);
+    assert_eq!(run(md, ".h | all(.level <= 3)"), vec!["true"]);
+    assert_eq!(run(md, ".h | any(.level == 3)"), vec!["true"]);
+    assert_eq!(run(md, ".h | .level | min"), vec!["1"]);
+    assert_eq!(run(md, ".h | .level | max"), vec!["3"]);
+    assert_eq!(run(md, ".h | .level | add"), vec!["8"]);
+    assert_eq!(run(md, ".h | group_by(.level) | keys"), vec!["1\n3\n2"]);
+
+    // Ordering functions hand the stream back as a stream.
+    assert_eq!(
+        run(md, ".h | sort_by(.level) | .text"),
+        vec!["A", "B", "B", "C"]
+    );
+    assert_eq!(run(md, ".h | text | unique"), vec!["A", "C", "B"]);
+    assert_eq!(run(md, ".h | text | reverse"), vec!["B", "B", "C", "A"]);
+    assert_eq!(run(md, ".h | limit(2) | .text"), vec!["A", "C"]);
+    assert_eq!(run(md, ".h | skip(3) | .text"), vec!["B"]);
+
+    // `levels` counts what it is given.
+    assert_eq!(run(md, ".h2 | levels | keys"), vec!["h2"]);
+    assert_eq!(run(md, ".h2 | levels | .h2"), vec!["2"]);
+    assert_eq!(run(md, "levels | keys"), vec!["h1\nh2\nh3"]);
+}
+
+/// A stream of one is still a stream, so the result does not depend on how
+/// many matches a document happens to have.
+#[test]
+fn a_one_value_stream_is_still_collected() {
+    let md = "# Only\n";
+    assert_eq!(run(md, ".h | count"), vec!["1"]);
+    assert_eq!(run(md, ".h | text | first"), vec!["Only"]);
+    // An empty stream is collected too, and a single value is not.
+    assert_eq!(run(md, ".h2 | count"), vec!["0"]);
+    assert_eq!(run(md, ".h1[0].text | count"), vec!["4"]);
+    assert_eq!(run(md, "[.h] | count"), vec!["1"]);
+}
+
+/// A collecting function inside a nested pipe sees that pipe's stream.
+#[test]
+fn nested_pipes_collect_their_own_stream() {
+    let md = "# A\n\n```rs\nx\n```\n\n# B\n";
+    assert_eq!(run(md, ".h | select(.code | count > 0) | .text"), vec!["A"]);
+    assert_eq!(run(md, "{n: (.h | count)} | .n"), vec!["2"]);
 }
 
 // ---------------------------------------------------------------------------

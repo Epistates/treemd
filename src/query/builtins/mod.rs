@@ -5,19 +5,29 @@
 use super::ast::Span;
 use super::error::{QueryError, QueryErrorKind};
 use super::eval::EvalContext;
-use super::registry::{Function, Registry};
+use super::registry::{Function, Registry, StreamMode};
 use super::value::Value;
+
+/// A function that sees a piped stream whole and returns one value.
+fn reduce(func: Function) -> Function {
+    func.with_stream(StreamMode::Reduce)
+}
+
+/// A function that sees a piped stream whole and returns it as a stream.
+fn reorder(func: Function) -> Function {
+    func.with_stream(StreamMode::Reorder)
+}
 
 /// Register all built-in functions.
 pub fn register_all(registry: &mut Registry) {
     // Collection functions
-    registry.register_function("count", Function::new(fn_count, 0..=0));
-    registry.register_function("length", Function::new(fn_count, 0..=0));
-    registry.register_function("first", Function::new(fn_first, 0..=0));
-    registry.register_function("last", Function::new(fn_last, 0..=0));
-    registry.register_function("reverse", Function::new(fn_reverse, 0..=0));
-    registry.register_function("sort", Function::new(fn_sort, 0..=0));
-    registry.register_function("unique", Function::new(fn_unique, 0..=0));
+    registry.register_function("count", reduce(Function::new(fn_count, 0..=0)));
+    registry.register_function("length", reduce(Function::new(fn_count, 0..=0)));
+    registry.register_function("first", reduce(Function::new(fn_first, 0..=0)));
+    registry.register_function("last", reduce(Function::new(fn_last, 0..=0)));
+    registry.register_function("reverse", reorder(Function::new(fn_reverse, 0..=0)));
+    registry.register_function("sort", reorder(Function::new(fn_sort, 0..=0)));
+    registry.register_function("unique", reorder(Function::new(fn_unique, 0..=0)));
     registry.register_function("flatten", Function::new(fn_flatten, 0..=0));
     registry.register_function("keys", Function::new(fn_keys, 0..=0));
     registry.register_function("values", Function::new(fn_values, 0..=0));
@@ -29,7 +39,7 @@ pub fn register_all(registry: &mut Registry) {
     registry.register_function("lower", Function::new(fn_lower, 0..=0));
     registry.register_function("trim", Function::new(fn_trim, 0..=0));
     registry.register_function("split", Function::new(fn_split, 1..=1));
-    registry.register_function("join", Function::new(fn_join, 1..=1));
+    registry.register_function("join", reduce(Function::new(fn_join, 1..=1)));
     registry.register_function("replace", Function::new(fn_replace, 2..=2));
     registry.register_function("lines", Function::new(fn_lines, 0..=0));
     registry.register_function("words", Function::new(fn_words, 0..=0));
@@ -55,25 +65,25 @@ pub fn register_all(registry: &mut Registry) {
     registry.register_function("lang", Function::new(fn_lang, 0..=0));
 
     // Aggregation functions
-    registry.register_function("stats", Function::new(fn_stats, 0..=0));
-    registry.register_function("levels", Function::new(fn_levels, 0..=0));
-    registry.register_function("langs", Function::new(fn_langs, 0..=0));
-    registry.register_function("types", Function::new(fn_types, 0..=0));
+    registry.register_function("stats", reduce(Function::new(fn_stats, 0..=0)));
+    registry.register_function("levels", reduce(Function::new(fn_levels, 0..=0)));
+    registry.register_function("langs", reduce(Function::new(fn_langs, 0..=0)));
+    registry.register_function("types", reduce(Function::new(fn_types, 0..=0)));
 
     // Utility functions
-    registry.register_function("limit", Function::new(fn_limit, 1..=1));
-    registry.register_function("skip", Function::new(fn_skip, 1..=1));
-    registry.register_function("nth", Function::new(fn_nth, 1..=1));
-    registry.register_function("any", Function::new(fn_any, 1..=1).with_takes_input(true));
-    registry.register_function("all", Function::new(fn_all, 1..=1).with_takes_input(true));
-    registry.register_function("min", Function::new(fn_min, 0..=0));
-    registry.register_function("max", Function::new(fn_max, 0..=0));
-    registry.register_function("add", Function::new(fn_add, 0..=0));
+    registry.register_function("limit", reorder(Function::new(fn_limit, 1..=1)));
+    registry.register_function("skip", reorder(Function::new(fn_skip, 1..=1)));
+    registry.register_function("nth", reduce(Function::new(fn_nth, 1..=1)));
+    registry.register_function("any", reduce(Function::new(fn_any, 1..=1)));
+    registry.register_function("all", reduce(Function::new(fn_all, 1..=1)));
+    registry.register_function("min", reduce(Function::new(fn_min, 0..=0)));
+    registry.register_function("max", reduce(Function::new(fn_max, 0..=0)));
+    registry.register_function("add", reduce(Function::new(fn_add, 0..=0)));
     registry.register_function("not", Function::new(fn_not, 0..=0));
     registry.register_function("null", Function::new(fn_null, 0..=0));
     registry.register_function("debug", Function::new(fn_debug, 0..=0));
-    registry.register_function("group_by", Function::new(fn_group_by, 1..=1));
-    registry.register_function("sort_by", Function::new(fn_sort_by, 1..=1));
+    registry.register_function("group_by", reduce(Function::new(fn_group_by, 1..=1)));
+    registry.register_function("sort_by", reorder(Function::new(fn_sort_by, 1..=1)));
 
     // Aliases - comprehensive for discoverability
     // Length/count
@@ -472,11 +482,33 @@ fn fn_stats(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
     Ok(vec![Value::Object(obj)])
 }
 
+/// What `levels`, `langs` and `types` count: the matching elements of the
+/// input when it is an array, such as the collected stream in `.h2 |
+/// levels`, and the whole document's otherwise (`. | levels`, or `levels`
+/// on its own).
+fn counted<'a, T>(
+    input: Option<&'a Value>,
+    pick: impl Fn(&'a Value) -> Option<T>,
+    document: impl Iterator<Item = T>,
+) -> Vec<T> {
+    match input {
+        Some(Value::Array(items)) => items.iter().filter_map(pick).collect(),
+        _ => document.collect(),
+    }
+}
+
 fn fn_levels(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let _ = args;
+    let levels = counted(
+        args.first(),
+        |v| match v {
+            Value::Heading(h) => Some(h.level),
+            _ => None,
+        },
+        ctx.headings.iter().map(|h| h.level),
+    );
     let mut counts = std::collections::HashMap::new();
-    for h in &ctx.headings {
-        *counts.entry(h.level).or_insert(0) += 1;
+    for level in levels {
+        *counts.entry(level).or_insert(0) += 1;
     }
 
     let mut obj = indexmap::IndexMap::new();
@@ -489,12 +521,20 @@ fn fn_levels(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError
 }
 
 fn fn_langs(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let _ = args;
+    let langs = counted(
+        args.first(),
+        |v| match v {
+            Value::Code(c) => Some(c.language.as_deref()),
+            _ => None,
+        },
+        ctx.code_blocks.iter().map(|c| c.language.as_deref()),
+    );
     // Sorted, so the same document always prints the same object.
     let mut counts = std::collections::BTreeMap::new();
-    for code in &ctx.code_blocks {
-        let lang = code.language.as_deref().unwrap_or("none");
-        *counts.entry(lang.to_string()).or_insert(0) += 1;
+    for lang in langs {
+        *counts
+            .entry(lang.unwrap_or("none").to_string())
+            .or_insert(0) += 1;
     }
 
     let mut obj = indexmap::IndexMap::new();
@@ -505,13 +545,18 @@ fn fn_langs(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
 }
 
 fn fn_types(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let _ = args;
+    let types = counted(
+        args.first(),
+        |v| match v {
+            Value::Link(l) => Some(l.link_type.as_str()),
+            _ => None,
+        },
+        ctx.links.iter().map(|l| l.link_type.as_str()),
+    );
     // Sorted, so the same document always prints the same object.
     let mut counts = std::collections::BTreeMap::new();
-    for link in &ctx.links {
-        *counts
-            .entry(link.link_type.as_str().to_string())
-            .or_insert(0) += 1;
+    for typ in types {
+        *counts.entry(typ.to_string()).or_insert(0) += 1;
     }
 
     let mut obj = indexmap::IndexMap::new();

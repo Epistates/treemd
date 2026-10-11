@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::ast::*;
 use super::error::{QueryError, QueryErrorKind};
-use super::registry::Registry;
+use super::registry::{Registry, StreamMode};
 use super::value::*;
 use crate::parser::Document;
 use crate::parser::output::InlineElement;
@@ -113,35 +113,111 @@ impl Engine {
     }
 
     fn eval_piped(&mut self, piped: &PipedExpr) -> Result<Vec<Value>, QueryError> {
-        // Start with the document as input
-        let mut current = vec![Value::Document(self.context.document.clone())];
+        let document = Value::Document(self.context.document.clone());
+        self.eval_stages(&piped.stages, document)
+    }
 
-        // Preserve and restore the outer `current` so a top-level pipe doesn't
-        // leak its per-stage value into sibling expressions.
+    /// Run pipeline `stages` left to right, starting from `input`.
+    ///
+    /// Each stage normally runs once per value from the stage before. A
+    /// collection function (see [`StreamMode`]) after a stage that yields a
+    /// stream runs once on the whole stream instead, so `.h | count` counts
+    /// headings rather than printing `1` per heading. That holds for an
+    /// empty stream too, which is how `.h[Missing] | count` gives `0`.
+    ///
+    /// `current` is saved and restored around the pipeline so a stage's
+    /// value does not leak into the surrounding expression (in
+    /// `{a: (.text | upper), b: .level}`, `.level` must still see the
+    /// heading).
+    fn eval_stages(&mut self, stages: &[Expr], input: Value) -> Result<Vec<Value>, QueryError> {
         let saved = self.context.current.clone();
+        let result = self.run_stages(stages, input);
+        self.context.current = saved;
+        result
+    }
 
-        for stage in &piped.stages {
-            let mut next = Vec::new();
-            for input in current {
-                self.context.current = input;
-                match self.eval_expr(stage) {
-                    Ok(vals) => next.extend(vals),
-                    Err(e) => {
-                        self.context.current = saved;
-                        return Err(e);
-                    }
+    fn run_stages(&mut self, stages: &[Expr], input: Value) -> Result<Vec<Value>, QueryError> {
+        let mut current = vec![input];
+        let mut is_stream = false;
+
+        for stage in stages {
+            let mode = self.stream_mode(stage);
+            let collect = is_stream && mode != StreamMode::PerValue;
+
+            current = if collect {
+                self.context.current = Value::Array(current);
+                let out = self.eval_expr(stage)?;
+                match (mode, <[Value; 1]>::try_from(out)) {
+                    (StreamMode::Reorder, Ok([Value::Array(items)])) => items,
+                    (_, Ok(single)) => single.into(),
+                    (_, Err(out)) => out,
                 }
-            }
-            current = next;
+            } else {
+                let mut next = Vec::new();
+                for value in current {
+                    self.context.current = value;
+                    next.extend(self.eval_expr(stage)?);
+                }
+                next
+            };
 
-            // Short-circuit if no results
-            if current.is_empty() {
-                break;
-            }
+            is_stream = self.yields_stream(stage, is_stream);
         }
 
-        self.context.current = saved;
         Ok(current)
+    }
+
+    /// How the function a pipeline stage calls treats a piped stream.
+    fn stream_mode(&self, stage: &Expr) -> StreamMode {
+        match stage {
+            Expr::Function { name, .. } if !is_internal_form(name) => self
+                .registry
+                .get_function(name)
+                .map(|f| f.stream)
+                .unwrap_or_default(),
+            _ => StreamMode::PerValue,
+        }
+    }
+
+    /// Whether `expr`, given an input that is (`input`) or is not a stream,
+    /// can yield more than one value per pipeline.
+    ///
+    /// Decided from the query rather than from how many values came back,
+    /// so that `.h | text | first` is the first heading's text even in a
+    /// document with one heading, rather than that text's first character.
+    fn yields_stream(&self, expr: &Expr, input: bool) -> bool {
+        match expr {
+            Expr::Element { kind, index, .. } => match (kind, index) {
+                (ElementKind::FrontMatter, _) | (_, Some(IndexOp::Single(_))) => input,
+                _ => true,
+            },
+            Expr::Hierarchy { .. } => true,
+            Expr::Group { expr, .. } => self.yields_stream(expr, input),
+            Expr::Conditional {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.yields_stream(then_branch, input)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|e| self.yields_stream(e, input))
+            }
+            Expr::Function { name, args, .. } => match name.as_str() {
+                "_pipe" => args
+                    .iter()
+                    .fold(input, |s, stage| self.yields_stream(stage, s)),
+                "_index" => match args.get(1).map(decode_index_arg) {
+                    Some(IndexOp::Single(_)) => self.yields_stream(&args[0], input),
+                    _ => true,
+                },
+                _ => match self.stream_mode(expr) {
+                    StreamMode::PerValue | StreamMode::Reorder => input,
+                    StreamMode::Reduce => false,
+                },
+            },
+            _ => input,
+        }
     }
 
     fn eval_expr(&mut self, expr: &Expr) -> Result<Vec<Value>, QueryError> {
@@ -494,31 +570,8 @@ impl Engine {
         // Handle special built-in functions
         match name {
             "_pipe" => {
-                // Internal pipe handling. Save/restore `current` so the pipe's
-                // per-stage value doesn't leak into the surrounding expression
-                // (e.g. `{a: (.text | upper), b: .level}` must still see the
-                // heading for `.level`).
-                let saved = self.context.current.clone();
-                let mut current = vec![self.context.current.clone()];
-                for arg in args {
-                    let mut next = Vec::new();
-                    for input in current {
-                        self.context.current = input;
-                        match self.eval_expr(arg) {
-                            Ok(vals) => next.extend(vals),
-                            Err(e) => {
-                                self.context.current = saved;
-                                return Err(e);
-                            }
-                        }
-                    }
-                    current = next;
-                    if current.is_empty() {
-                        break;
-                    }
-                }
-                self.context.current = saved;
-                return Ok(current);
+                let input = self.context.current.clone();
+                return self.eval_stages(args, input);
             }
             "_index" if args.len() >= 2 => {
                 return self.eval_index(&args[0], &args[1]);
@@ -1101,6 +1154,12 @@ fn literal_to_value(lit: &Literal) -> Value {
 
 /// Decode the parser's encoded `_index` argument expression back into an
 /// [`IndexOp`]. See [`Engine::eval_index`] for the encoding.
+/// The function names the parser uses for its own pipe and postfix index
+/// forms. They are not registry functions.
+fn is_internal_form(name: &str) -> bool {
+    matches!(name, "_pipe" | "_index")
+}
+
 fn decode_index_arg(arg: &Expr) -> IndexOp {
     match arg {
         Expr::Literal {
