@@ -1000,6 +1000,16 @@ impl App {
     fn init_picker() -> Option<ratatui_image::picker::Picker> {
         use ratatui_image::picker::Picker;
 
+        // ratatui-image 11 reads the probe's answer on a thread it leaves
+        // blocked on stdin when the terminal never answers, and from then on
+        // that thread swallows every key, `q` included. Ask first with a
+        // query crossterm times out without leaving a reader behind, and
+        // keeps any keys it reads for the event loop. Fixed upstream in
+        // ratatui-image 12, which polls instead.
+        if crossterm::cursor::position().is_err() {
+            return Some(Picker::halfblocks());
+        }
+
         let mut picker = match Picker::from_query_stdio() {
             Ok(picker) => {
                 let font_size = picker.font_size();
