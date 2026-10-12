@@ -62,7 +62,7 @@ regex = "1.13"
 
 # TUI framework
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
-crossterm = "0.29"
+crossterm = { version = "0.29", features = ["use-dev-tty"] }
 color-eyre = "0.6"
 
 # Image rendering in TUI
