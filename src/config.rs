@@ -341,8 +341,14 @@ impl Config {
     /// Get the XDG-style config file path (~/.config/treemd/config.toml)
     /// This is preferred on macOS for CLI tools and cross-platform dotfiles
     #[cfg(target_os = "macos")]
+    /// `$XDG_CONFIG_HOME/treemd/config.toml` when that is set to an absolute
+    /// path, as the XDG spec has it, else `~/.config/treemd/config.toml`.
     fn xdg_config_path() -> Option<PathBuf> {
-        dirs::home_dir().map(|p| p.join(".config").join("treemd").join("config.toml"))
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| dirs::home_dir().map(|home| home.join(".config")))?;
+        Some(base.join("treemd").join("config.toml"))
     }
 
     /// Get the platform-specific config file path

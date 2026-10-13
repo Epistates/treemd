@@ -66,6 +66,13 @@ impl From<io::Error> for InputError {
     }
 }
 
+/// Whether `spec` names a remote document rather than a path: an http(s)
+/// URL, scheme in any case as URLs allow, or `github:owner/repo`.
+pub fn is_remote_spec(spec: &str) -> bool {
+    let lower = spec.get(..8).unwrap_or(spec).to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://") || spec.starts_with("github:")
+}
+
 /// Check if stdin is being piped (not a TTY)
 pub fn is_stdin_piped() -> bool {
     !io::stdin().is_terminal()

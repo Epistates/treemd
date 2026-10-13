@@ -6680,10 +6680,7 @@ impl App {
     /// Whether the document came from a URL or `github:` rather than this
     /// machine; its placeholder path is the address it was fetched from.
     fn is_remote_document(&self) -> bool {
-        let path = self.current_file_path.to_string_lossy();
-        ["http://", "https://", "github:"]
-            .iter()
-            .any(|scheme| path.starts_with(scheme))
+        crate::input::is_remote_spec(&self.current_file_path.to_string_lossy())
     }
 
     /// Resolve an image path relative to the current markdown file.

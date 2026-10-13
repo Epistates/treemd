@@ -109,9 +109,7 @@ fn main() -> Result<()> {
         .file
         .first()
         .map(|p| p.to_string_lossy().to_string())
-        .filter(|s| {
-            s.starts_with("http://") || s.starts_with("https://") || s.starts_with("github:")
-        });
+        .filter(|s| treemd::input::is_remote_spec(s));
 
     // Determine input source - check for remote and file picker cases first
     let (input_source, needs_file_picker, file_picker_dir) = if let Some(ref spec) = remote_spec {
@@ -129,9 +127,9 @@ fn main() -> Result<()> {
             )
         };
         let cli_mode = !launches_tui(&args);
-        if cli_mode && args.file.len() > 1 {
+        if args.file.len() > 1 {
             eprintln!(
-                "warning: only the first file is read; {} more ignored",
+                "warning: only the first file is opened; {} more ignored",
                 args.file.len() - 1
             );
         }
@@ -192,7 +190,7 @@ fn main() -> Result<()> {
             Some(path) => match treemd::input::determine_input_source(Some(path.as_path())) {
                 Ok(source) => (source, false, None),
                 Err(e) => {
-                    eprintln!("Error reading input: {}", e);
+                    eprintln!("Error reading {}: {}", path.display(), e);
                     process::exit(1);
                 }
             },
@@ -341,7 +339,15 @@ fn main() -> Result<()> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("stdin")
                 .to_string();
-            let path = file.canonicalize().unwrap_or_else(|_| file.clone());
+            // A URL or `github:` spec is kept as given: canonicalized, it
+            // resolved against a directory named `http:` in the working
+            // directory, if there was one, and the fetched page was then
+            // treated as a local file, its links and images included.
+            let path = if remote_spec.is_some() {
+                file.clone()
+            } else {
+                file.canonicalize().unwrap_or_else(|_| file.clone())
+            };
             (name, path)
         } else {
             // Stdin input or directory
@@ -577,10 +583,7 @@ fn print_headings(
                 .expect("JSON serialization of document output should not fail");
             println!("{}", json);
         }
-        OutputFormat::Tree => {
-            eprintln!("Use --tree for tree output");
-            process::exit(1);
-        }
+        OutputFormat::Tree => print_tree(doc, format, headings, line_numbers),
     }
 }
 
