@@ -6590,6 +6590,15 @@ impl App {
             return Err("Not a file on disk, so there is nowhere to save".to_string());
         }
         let on_disk = std::fs::read(&path).map_err(|e| format!("Failed to read file: {e}"))?;
+        // Its lone `\r` line endings were read as `\n`, and writing that
+        // back would change every line ending in the file.
+        if crate::parser::has_lone_cr(&on_disk) {
+            return Err(format!(
+                "{} ends its lines with a bare CR (classic Mac); \
+                 treemd shows it but does not save edits to it",
+                self.filename
+            ));
+        }
         if content_hash(&on_disk) != self.disk_hash {
             return Err(format!(
                 "{} changed on disk since it was opened; not saving over it. \
@@ -7244,6 +7253,25 @@ mod save_tests {
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "# t\n- [ ] a\n- [ ] added elsewhere\n"
+        );
+    }
+
+    /// A file with bare CR line endings is shown with them read as `\n`.
+    /// Saving that would change every line ending, so it is refused with
+    /// the reason, rather than as a change made on disk.
+    #[test]
+    fn a_file_with_bare_cr_line_endings_is_shown_but_not_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().canonicalize().unwrap().join("note.md");
+        std::fs::write(&path, "# t\r- [ ] a\r## u\r").unwrap();
+        let mut app = app_for(&path);
+        assert_eq!(app.document.headings.len(), 2);
+
+        let error = app.write_document("# t\n- [x] a\n## u\n").unwrap_err();
+        assert!(error.contains("bare CR"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# t\r- [ ] a\r## u\r"
         );
     }
 
