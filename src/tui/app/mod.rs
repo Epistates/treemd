@@ -102,6 +102,14 @@ pub enum AppMode {
     FilePicker,            // File picker modal for switching files
 }
 
+/// A popup shown in front of the current mode. It takes the keys until it
+/// closes, and only one is open at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    Help,
+    ThemePicker,
+}
+
 /// Type of pending navigation when user has unsaved changes
 #[derive(Debug, Clone)]
 pub enum PendingNavigation {
@@ -148,7 +156,8 @@ pub struct App {
     pub content_scroll_state: ScrollbarState,
     pub content_height: usize,
     pub content_viewport_height: u16, // Actual viewport height for scroll calculations
-    pub show_help: bool,
+    /// The popup in front of the current mode, if any.
+    pub overlay: Option<Overlay>,
     pub help_scroll: u16,
     /// The help popup's last scroll position and page height, in rows, as
     /// laid out by the frame that drew it.
@@ -178,7 +187,6 @@ pub struct App {
     pub filter_by_todos: bool, // Filter outline to show only headings with open todos
     pub current_theme: ThemeName,
     pub theme: Theme,
-    pub show_theme_picker: bool,
     pub theme_picker_selected: usize,
     pub theme_picker_original: Option<ThemeName>, // Original theme before picker opened (for cancel)
     previous_selection: Option<Option<usize>>,    // Heading index for change detection
@@ -448,7 +456,7 @@ impl App {
             content_scroll_state: ScrollbarState::new(content_lines),
             content_height: content_lines,
             content_viewport_height: 20, // Default, will be updated by UI on first render
-            show_help: false,
+            overlay: None,
             help_scroll: 0,
             help_max_scroll: u16::MAX,
             help_page: 1,
@@ -472,7 +480,6 @@ impl App {
             filter_by_todos: false,
             current_theme,
             theme,
-            show_theme_picker: false,
             theme_picker_selected: 0,
             theme_picker_original: None,
             previous_selection: None,
@@ -913,9 +920,11 @@ impl App {
     }
 
     pub fn toggle_help(&mut self) {
-        self.show_help = !self.show_help;
-        if self.show_help {
+        if self.overlay == Some(Overlay::Help) {
+            self.overlay = None;
+        } else {
             self.help_scroll = 0; // Reset scroll when opening help
+            self.overlay = Some(Overlay::Help);
         }
     }
 
@@ -1138,12 +1147,12 @@ impl App {
     }
 
     pub fn toggle_theme_picker(&mut self) {
-        if self.show_theme_picker {
+        if self.overlay == Some(Overlay::ThemePicker) {
             // Closing picker - restore original theme if set (user pressed Esc)
             if let Some(original) = self.theme_picker_original.take() {
                 self.apply_theme_preview(original);
             }
-            self.show_theme_picker = false;
+            self.overlay = None;
         } else {
             // Opening picker - store current theme and set selection
             self.theme_picker_original = Some(self.current_theme);
@@ -1157,7 +1166,7 @@ impl App {
                 ThemeName::TokyoNight => 6,
                 ThemeName::CatppuccinMocha => 7,
             };
-            self.show_theme_picker = true;
+            self.overlay = Some(Overlay::ThemePicker);
         }
     }
 
@@ -1205,7 +1214,7 @@ impl App {
     pub fn apply_selected_theme(&mut self) {
         // Theme is already applied via preview, just save to config and close
         self.theme_picker_original = None; // Clear so toggle doesn't restore
-        self.show_theme_picker = false;
+        self.overlay = None;
 
         // Save to config (silently ignore errors)
         let _ = self.config.set_theme(self.current_theme);
@@ -1373,7 +1382,7 @@ mod heading_identity_tests {
     fn last_in_help_scrolls_help() {
         let mut app = app();
         app.select_outline_index(0);
-        app.show_help = true;
+        app.overlay = Some(Overlay::Help);
         app.help_max_scroll = 40;
         app.execute_action(Action::Last);
         assert_eq!(app.help_scroll, 40);

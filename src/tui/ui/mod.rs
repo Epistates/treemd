@@ -6,7 +6,7 @@ pub mod util;
 use layout::{DynamicLayout, Section};
 
 use crate::config::CodeFences;
-use crate::tui::app::{App, AppMode, Focus};
+use crate::tui::app::{App, AppMode, Focus, Overlay};
 use crate::tui::content_view::ContentView;
 use crate::tui::theme::Theme;
 use popups::{
@@ -99,14 +99,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Render keybinding hints footer
     render_footer(frame, app, main_layout.require(Section::Footer));
 
-    // Render help popup if shown
-    if app.show_help {
-        render_help_popup(frame, app, area);
-    }
-
-    // Render theme picker if shown
-    if app.show_theme_picker {
-        render_theme_picker(frame, app, area);
+    // Render the popup in front, if any
+    match app.overlay {
+        Some(Overlay::Help) => render_help_popup(frame, app, area),
+        Some(Overlay::ThemePicker) => render_theme_picker(frame, app, area),
+        None => {}
     }
 
     // Render cell edit overlay if in cell edit mode
