@@ -472,7 +472,17 @@ color_mode = "auto"    # "auto", "rgb", or "256"
 hide_frontmatter = true  # Hide YAML frontmatter (---\n...\n---) in content view
 hide_latex = true        # Hide LaTeX math expressions ($...$, $$...$$, \begin{...})
 code_fences = "full"     # "full", "label", or "none" (see below)
+slug_style = "treemd"    # "treemd" or "github" (see below)
 ```
+
+### Heading Anchors
+
+`slug_style` decides how a heading becomes an anchor: the one `Y` copies, the
+`id` and `slug` in `-l -o json`, and `.slug` and `slugify` in queries.
+`treemd`, the default, drops `_` and gives repeated headings the same anchor.
+`github` makes them the way github.com does: `snake_case` keeps its `_`, and
+the second `## Setup` is `#setup-1`. Following a link finds the heading with
+either kind of anchor, whichever is set.
 
 ### Code Block Appearance
 

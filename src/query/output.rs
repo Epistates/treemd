@@ -258,6 +258,7 @@ mod tests {
             content: String::new(),
             raw_md: "## Test".to_string(),
             index: 0,
+            slug: "test".to_string(),
         });
 
         let output = format(&[heading], OutputFormat::Plain);

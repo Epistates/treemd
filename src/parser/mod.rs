@@ -13,7 +13,8 @@ pub mod links;
 pub mod output;
 pub mod utils;
 
-pub use builder::build_json_output;
+pub use builder::{build_json_output, build_json_output_with};
+pub use content::SlugStyle;
 pub use document::{Document, Heading, HeadingNode};
 pub use links::{Link, LinkTarget, extract_links};
 pub use output::{Block, DocumentOutput, InlineElement, Section};

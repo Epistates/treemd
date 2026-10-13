@@ -9,8 +9,8 @@ use super::ast::*;
 use super::error::{QueryError, QueryErrorKind};
 use super::registry::{Registry, StreamMode};
 use super::value::*;
-use crate::parser::Document;
 use crate::parser::output::InlineElement;
+use crate::parser::{Document, SlugStyle};
 
 /// Evaluation context passed to functions.
 pub struct EvalContext {
@@ -38,12 +38,15 @@ pub struct EvalContext {
     pub document: DocumentValue,
     /// Raw document content
     pub raw_content: String,
+    /// How headings' `.slug` and `slugify` make slugs
+    pub slug_style: SlugStyle,
 }
 
 impl EvalContext {
     /// Create a new context from a document.
     pub fn from_document(doc: &Document) -> Self {
-        let headings = extract_headings(doc);
+        let slug_style = SlugStyle::default();
+        let headings = extract_headings(doc, slug_style);
         // Past a byte order mark, which otherwise sits in front of the first
         // block and keeps a leading table, quote or list from being one.
         let body = doc.content.strip_prefix('\u{feff}').unwrap_or(&doc.content);
@@ -73,6 +76,7 @@ impl EvalContext {
             frontmatter,
             document,
             raw_content: doc.content.clone(),
+            slug_style,
         }
     }
 }
@@ -105,6 +109,30 @@ impl Engine {
             context,
             depth: 0,
         }
+    }
+
+    /// Make headings' `.slug`, and `slugify`, in `style` rather than the
+    /// default, as the `slug_style` setting asks.
+    ///
+    /// ```
+    /// use treemd::{parse_markdown, parser::SlugStyle, query};
+    ///
+    /// let doc = parse_markdown("# Setup\n# Setup\n");
+    /// let q = query::parse(".h | .slug").unwrap();
+    /// let slugs = query::engine(&doc).with_slug_style(SlugStyle::Github).execute(&q).unwrap();
+    /// assert_eq!(slugs[1].to_text(), "setup-1");
+    /// ```
+    pub fn with_slug_style(mut self, style: SlugStyle) -> Self {
+        let texts = self.context.headings.iter().map(|h| h.text.as_str());
+        for (slug, heading) in style
+            .slugs(texts)
+            .into_iter()
+            .zip(&mut self.context.headings)
+        {
+            heading.slug = slug;
+        }
+        self.context.slug_style = style;
+        self
     }
 
     /// Execute a query and return results.
@@ -983,12 +1011,13 @@ impl Engine {
 
 // Helper functions
 
-fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
+fn extract_headings(doc: &Document, slug_style: SlugStyle) -> Vec<HeadingValue> {
     let lines = doc.heading_lines();
     doc.headings
         .iter()
+        .zip(doc.heading_slugs(slug_style))
         .enumerate()
-        .map(|(idx, h)| {
+        .map(|(idx, (h, slug))| {
             let line = lines[idx];
 
             // Body bounds shared with the document extractor: handles CRLF,
@@ -1007,6 +1036,7 @@ fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
                 content,
                 raw_md,
                 index: idx,
+                slug,
             }
         })
         .collect()

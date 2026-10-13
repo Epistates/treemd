@@ -291,7 +291,7 @@ parentheses** is not implemented. `(.h1, .h2) | text` fails with
 | `.line` | number | The heading's own line (1-indexed), as `-l -n` reports it |
 | `.content` | string | Section body: everything under the heading, subsections included, up to the next heading at the same or a shallower level |
 | `.md` | string | Raw markdown of the section, heading line and subsections included |
-| `.slug` | string | URL-friendly slug |
+| `.slug` | string | The heading's anchor, in the config's `slug_style`. With `github`, a repeated heading is numbered (`setup-1`) |
 | `.children` | array | Headings directly under this one |
 | `.parent` | heading or null | Nearest heading above at a shallower level |
 
@@ -413,7 +413,7 @@ The `select(condition)` function filters elements:
 | `split(s)` | Split string into an array | `.h \| text \| split(" ")` |
 | `join(s)` | Join values with `s` | `.h \| text \| join(", ")` |
 | `replace(a, b)` | Replace every `a` with `b` | `.h \| text \| replace("-", " ")` |
-| `slugify` | URL-friendly slug | `.h \| text \| slugify` |
+| `slugify` | URL-friendly slug, in the config's `slug_style` (with no numbering for repeats; use `.slug` for that) | `.h \| text \| slugify` |
 
 ### Content Functions
 

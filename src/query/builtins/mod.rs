@@ -330,11 +330,10 @@ fn fn_chars(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
     Ok(vec![Value::Number(count as f64)])
 }
 
-fn fn_slugify(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
+fn fn_slugify(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    // Delegate to the canonical (turbovault) slugify for consistency with
-    // heading slugs everywhere else.
-    let slug = crate::parser::content::slugify(&input.to_text());
+    // The same style as heading slugs, `.slug`, so the two agree.
+    let slug = ctx.slug_style.slug(&input.to_text());
     Ok(vec![Value::String(slug)])
 }
 

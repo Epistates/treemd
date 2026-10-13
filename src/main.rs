@@ -581,7 +581,8 @@ fn print_headings(
         }
         OutputFormat::Json => {
             // Use new nested JSON output with markdown intelligence
-            let json_output = parser::build_json_output(doc, None);
+            let slug_style = treemd::Config::load().content.slug_style;
+            let json_output = parser::build_json_output_with(doc, None, slug_style);
             let json = serde_json::to_string_pretty(&json_output)
                 .expect("JSON serialization of document output should not fail");
             println!("{}", json);
@@ -699,7 +700,11 @@ fn handle_query_mode(
         eprintln!("{}", e);
         process::exit(3);
     });
-    match query::engine(doc).execute(&parsed) {
+    let slug_style = treemd::Config::load().content.slug_style;
+    match query::engine(doc)
+        .with_slug_style(slug_style)
+        .execute(&parsed)
+    {
         Ok(results) => {
             // No results prints nothing, like jq, except as JSON, which is
             // always one array so a consumer can parse it the same way

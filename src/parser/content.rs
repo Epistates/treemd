@@ -74,6 +74,55 @@ pub fn slugify(text: &str) -> String {
     turbovault_parser::slugify(text)
 }
 
+/// How heading text becomes an anchor slug.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SlugStyle {
+    /// treemd's own, [`slugify`]: drops `_` and other punctuation, and
+    /// headings with the same text share a slug.
+    #[default]
+    Treemd,
+    /// GitHub's: keeps `_`, and a repeated heading is numbered, so the
+    /// second "Setup" is `setup-1`, as on github.com.
+    Github,
+}
+
+impl SlugStyle {
+    /// The slug of `text` alone, with no numbering for repeats.
+    ///
+    /// ```
+    /// use treemd::parser::content::SlugStyle;
+    ///
+    /// assert_eq!(SlugStyle::Treemd.slug("snake_case"), "snakecase");
+    /// assert_eq!(SlugStyle::Github.slug("snake_case"), "snake_case");
+    /// ```
+    pub fn slug(self, text: &str) -> String {
+        match self {
+            SlugStyle::Treemd => slugify(text),
+            SlugStyle::Github => github_slugger::slug(text),
+        }
+    }
+
+    /// The slug of each of `texts`, in order, numbering repeats when the
+    /// style does.
+    ///
+    /// ```
+    /// use treemd::parser::content::SlugStyle;
+    ///
+    /// assert_eq!(SlugStyle::Github.slugs(["Setup", "Setup"]), ["setup", "setup-1"]);
+    /// assert_eq!(SlugStyle::Treemd.slugs(["Setup", "Setup"]), ["setup", "setup"]);
+    /// ```
+    pub fn slugs<'a>(self, texts: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+        match self {
+            SlugStyle::Treemd => texts.into_iter().map(slugify).collect(),
+            SlugStyle::Github => {
+                let mut slugger = github_slugger::Slugger::default();
+                texts.into_iter().map(|text| slugger.slug(text)).collect()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
