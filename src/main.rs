@@ -428,10 +428,27 @@ fn fetch_remote(spec: &str) -> Result<String, String> {
         let mut response = request
             .call()
             .map_err(|e| format!("Failed to fetch {}: {}", url, e))?;
-        response
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| format!("Failed to read response from {}: {}", url, e))
+        // ureq's limit counts the bytes received, before decompression, so
+        // a 40 KB gzip body expanding to gigabytes passed it. The text is
+        // held to the same size after decoding.
+        const MAX_FETCH_BYTES: u64 = 10 * 1024 * 1024;
+        let mut text = String::new();
+        std::io::Read::read_to_string(
+            &mut std::io::Read::take(
+                response
+                    .body_mut()
+                    .with_config()
+                    .limit(MAX_FETCH_BYTES)
+                    .reader(),
+                MAX_FETCH_BYTES + 1,
+            ),
+            &mut text,
+        )
+        .map_err(|e| format!("Failed to read response from {}: {}", url, e))?;
+        if text.len() as u64 > MAX_FETCH_BYTES {
+            return Err(format!("{url} is larger than the 10 MB limit"));
+        }
+        Ok(text)
     };
 
     let Some(repo) = spec.strip_prefix("github:") else {
