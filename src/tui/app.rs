@@ -1,7 +1,9 @@
 use crate::config::Config;
 use crate::keybindings::{Action, KeybindingMode, Keybindings};
 use crate::parser::{Document, HeadingNode, Link, extract_links};
-use crate::tui::image_cache::{AsyncProtocol, ImageWorker, StreamingGif};
+use crate::tui::image_cache::{
+    AsyncProtocol, DecodedStill, FileStamp, ImageWorker, StreamingGif, file_stamp,
+};
 use crate::tui::interactive::{ElementType, InteractiveState};
 use crate::tui::iterm_animation;
 use crate::tui::syntax::{CodeBlockBackground, SyntaxHighlighter};
@@ -39,15 +41,6 @@ fn heading_keys(document: &Document) -> Vec<HeadingKey> {
             key
         })
         .collect()
-}
-
-/// A file's modified time and length, to tell whether it changed since it
-/// was read. `None` when it cannot be read.
-type FileStamp = Option<(std::time::SystemTime, u64)>;
-
-fn file_stamp(path: &std::path::Path) -> FileStamp {
-    let meta = std::fs::metadata(path).ok()?;
-    Some((meta.modified().ok()?, meta.len()))
 }
 
 /// Special marker for the document overview entry (shows entire file content)
@@ -746,6 +739,11 @@ pub struct App {
     /// Images that failed to decode, and the file as it was then, so a bad
     /// image is not decoded again on every section change.
     image_failures: std::collections::HashMap<PathBuf, FileStamp>,
+    /// Images queued on the worker to decode, and the file as it was when
+    /// asked, so each is asked for once.
+    pub(crate) image_decoding: std::collections::HashMap<PathBuf, FileStamp>,
+    /// The images the current section shows, which eviction leaves alone.
+    image_section: HashSet<PathBuf>,
 
     // Streaming inline GIF state, keyed with the corresponding protocol cache.
     // Unlike the modal viewer this retains only the compositing canvas, keeping
@@ -1021,6 +1019,8 @@ impl App {
             image_protocol_cache: IndexMap::new(),
             image_stamps: std::collections::HashMap::new(),
             image_failures: std::collections::HashMap::new(),
+            image_decoding: std::collections::HashMap::new(),
+            image_section: HashSet::new(),
 
             // Image modal viewing state (path, GIF playback, etc.)
             image_modal: ImageModalState::default(),
@@ -1169,95 +1169,113 @@ impl App {
 
     /// Populate the image protocol cache from indexed interactive elements.
     ///
-    /// Decodes any new images and creates stateful protocols, keeping
-    /// previously cached images so navigation back and forth doesn't re-decode.
+    /// Queues any new images to be decoded on the image worker, keeping
+    /// previously cached images so navigation back and forth doesn't
+    /// re-decode. Decoded images arrive in [`Self::process_image_results`].
     /// Bounded by `IMAGE_CACHE_LIMIT`; least-recently-used entries are evicted.
     pub fn populate_image_cache(&mut self) {
-        const IMAGE_CACHE_LIMIT: usize = 32;
-        use std::collections::HashSet as ImgSet;
-
         if self.picker.is_none() || !self.images_enabled {
             return;
         }
 
-        // Collect unique image src strings from indexed elements
-        let mut seen = ImgSet::new();
-        let srcs: Vec<String> = self
+        // Unique image paths, in the order the section shows them.
+        let mut seen = HashSet::new();
+        let paths: Vec<PathBuf> = self
             .interactive_state
             .elements
             .iter()
-            .filter_map(|elem| {
-                if let ElementType::Image { src, .. } = &elem.element_type {
-                    if seen.insert(src.clone()) {
-                        Some(src.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+            .filter_map(|elem| match &elem.element_type {
+                ElementType::Image { src, .. } => self.resolve_image_path(src).ok(),
+                _ => None,
             })
+            .filter(|path| seen.insert(path.clone()))
             .collect();
 
-        let paths: Vec<PathBuf> = srcs
-            .iter()
-            .filter_map(|src| self.resolve_image_path(src).ok())
-            .collect();
-        let in_section: ImgSet<&PathBuf> = paths.iter().collect();
-
-        // Decode any newly-seen images. Existing cache entries are preserved.
-        for path in &paths {
-            let stamp = file_stamp(path);
-            if self.image_failures.get(path) == Some(&stamp) {
-                continue;
+        // Queued decodes for the section left behind are not wanted any
+        // more; skipped, they leave the worker to this section's images.
+        let section: HashSet<PathBuf> = paths.iter().cloned().collect();
+        if section != self.image_section {
+            if let Some(worker) = &self.image_worker {
+                worker.supersede_decodes();
             }
+            self.image_section = section;
+        }
 
-            // Touch existing entries so index 0 remains the least recently used.
-            if self.image_stamps.get(path) == Some(&stamp)
-                && let Some(protocol) = self.image_protocol_cache.shift_remove(path)
-            {
-                self.image_protocol_cache.insert(path.clone(), protocol);
-                continue;
-            }
-            // Inline, a GIF is a still of its first frame; it plays in the
-            // image viewer.
-            let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(path)
-            else {
-                self.image_failures.insert(path.clone(), stamp);
-                continue;
-            };
-            self.image_failures.remove(path);
-            let img_data = crate::tui::image_cache::fit_for_inline(img_data);
+        for path in paths {
+            self.request_image(path);
+        }
+    }
 
-            let picker = match self.picker.as_mut() {
-                Some(p) => p,
-                None => continue,
-            };
+    /// Make sure `path` is cached as the file now on disk, or on its way.
+    fn request_image(&mut self, path: PathBuf) {
+        let stamp = file_stamp(&path);
+        if self.image_failures.get(&path) == Some(&stamp)
+            || self.image_decoding.get(&path) == Some(&stamp)
+        {
+            return;
+        }
+        // Touch existing entries so index 0 remains the least recently used.
+        if self.image_stamps.get(&path) == Some(&stamp)
+            && let Some(protocol) = self.image_protocol_cache.shift_remove(&path)
+        {
+            self.image_protocol_cache.insert(path, protocol);
+            return;
+        }
+        if let Some(worker) = &self.image_worker {
+            worker.request_decode(path.clone(), stamp);
+            self.image_decoding.insert(path, stamp);
+        }
+    }
 
-            let protocol = picker.new_resize_protocol(img_data);
-            let Some(worker) = &self.image_worker else {
-                continue;
-            };
-            self.image_protocol_cache
-                .insert(path.clone(), worker.wrap(protocol));
-            self.image_stamps.insert(path.clone(), stamp);
+    /// Cache an image the worker decoded, or note why it was not.
+    fn receive_decoded_image(&mut self, decoded: DecodedStill) {
+        const IMAGE_CACHE_LIMIT: usize = 32;
 
-            // Evict the least recently used entry when over capacity, but
-            // never one this section shows. The oldest entry used to go
-            // whatever it was, so a section with more than the limit evicted
-            // its own first images as it decoded the last, and they were
-            // never drawn.
-            while self.image_protocol_cache.len() > IMAGE_CACHE_LIMIT {
-                let Some(oldest) = self
-                    .image_protocol_cache
-                    .keys()
-                    .position(|cached| !in_section.contains(cached))
-                else {
-                    break;
-                };
-                if let Some((evicted, _)) = self.image_protocol_cache.shift_remove_index(oldest) {
-                    self.image_stamps.remove(&evicted);
+        let DecodedStill { path, stamp, image } = decoded;
+        // Asked for again since, for a newer file; that answer is to come.
+        if self.image_decoding.get(&path) != Some(&stamp) {
+            return;
+        }
+        self.image_decoding.remove(&path);
+
+        let image = match image {
+            // Skipped for a section that was left. Ask again if this one
+            // shows it too.
+            None => {
+                if self.image_section.contains(&path) {
+                    self.request_image(path);
                 }
+                return;
+            }
+            Some(Err(_)) => {
+                self.image_failures.insert(path, stamp);
+                return;
+            }
+            Some(Ok(image)) => image,
+        };
+        self.image_failures.remove(&path);
+        let (Some(picker), Some(worker)) = (self.picker.as_mut(), &self.image_worker) else {
+            return;
+        };
+        let protocol = worker.wrap(picker.new_resize_protocol(image));
+        self.image_protocol_cache.shift_remove(&path);
+        self.image_protocol_cache.insert(path.clone(), protocol);
+        self.image_stamps.insert(path, stamp);
+
+        // Evict the least recently used entry when over capacity, but never
+        // one this section shows. The oldest entry used to go whatever it
+        // was, so a section with more than the limit evicted its own first
+        // images as it decoded the last, and they were never drawn.
+        while self.image_protocol_cache.len() > IMAGE_CACHE_LIMIT {
+            let Some(oldest) = self
+                .image_protocol_cache
+                .keys()
+                .position(|cached| !self.image_section.contains(cached))
+            else {
+                break;
+            };
+            if let Some((evicted, _)) = self.image_protocol_cache.shift_remove_index(oldest) {
+                self.image_stamps.remove(&evicted);
             }
         }
     }
@@ -1782,8 +1800,17 @@ impl App {
         let Some(worker) = &self.image_worker else {
             return diagrams_arrived;
         };
+        let decoded = worker.drain_decoded();
+        let images_arrived = !decoded.is_empty();
+        for still in decoded {
+            self.receive_decoded_image(still);
+        }
+
+        let Some(worker) = &self.image_worker else {
+            return diagrams_arrived;
+        };
         let results = worker.drain();
-        let had_results = diagrams_arrived || !results.is_empty();
+        let had_results = diagrams_arrived || images_arrived || !results.is_empty();
 
         for result in results {
             let mut result = Some(result);
@@ -7113,8 +7140,59 @@ mod image_modal_tests {
         app.images_enabled = true;
         app.select_outline_index(0);
         app.enter_interactive_mode();
+        settle_images(&mut app);
 
         assert_eq!(app.image_protocol_cache.len(), 40);
+    }
+
+    /// Wait for the image worker to finish what it was asked to decode.
+    fn settle_images(app: &mut App) {
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while !app.image_decoding.is_empty() {
+            assert!(Instant::now() < deadline, "images never decoded");
+            app.process_image_results();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Images are decoded on the image worker, so entering a section with
+    /// images returns before any is read; they arrive with the results. A
+    /// file that is not an image is remembered as failed.
+    #[test]
+    fn images_decode_off_the_ui_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]))
+            .save(root.join("ok.png"))
+            .unwrap();
+        std::fs::write(root.join("bad.png"), "not a png").unwrap();
+        let markdown = "# A\n\n![ok](ok.png)\n\n![bad](bad.png)\n\n# B\n\ntext\n";
+        let path = root.join("doc.md");
+        std::fs::write(&path, markdown).unwrap();
+
+        let mut app = App::new(
+            crate::parser::parse_markdown(markdown),
+            "doc.md".into(),
+            path,
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+        app.picker = Some(ratatui_image::picker::Picker::halfblocks());
+        app.image_worker = Some(ImageWorker::new());
+        app.images_enabled = true;
+        app.select_outline_index(0);
+        app.enter_interactive_mode();
+
+        assert_eq!(app.image_decoding.len(), 2);
+        assert!(app.has_pending_image_work());
+        settle_images(&mut app);
+        assert!(app.image_protocol_cache.contains_key(&root.join("ok.png")));
+        assert!(app.image_failures.contains_key(&root.join("bad.png")));
+
+        // Asked again, neither is decoded twice.
+        app.populate_image_cache();
+        assert!(app.image_decoding.is_empty());
     }
 
     /// A three-frame GIF whose frames are red, green and blue.

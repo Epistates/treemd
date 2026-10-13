@@ -632,10 +632,6 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
 
         // Resolve image path and use cached protocol
         if let Ok(image_path) = app.resolve_image_path(&src) {
-            if !app.image_protocol_cache.contains_key(&image_path) {
-                continue;
-            }
-
             // Check if this image is selected
             let is_selected = selected_image_id == Some(element_id);
 
@@ -651,6 +647,17 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
                 vertical: 1,
                 horizontal: 1,
             });
+
+            if !app.image_protocol_cache.contains_key(&image_path) {
+                // Still being read from disk on the image worker.
+                if app.image_decoding.contains_key(&image_path) {
+                    let loading = Paragraph::new("Loading image…")
+                        .alignment(ratatui::layout::Alignment::Center)
+                        .style(Style::default().fg(theme.blockquote_fg));
+                    frame.render_widget(loading, render_area);
+                }
+                continue;
+            }
 
             // If selected, render a selection border around the image
             if is_selected {
