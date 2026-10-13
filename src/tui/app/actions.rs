@@ -9,12 +9,11 @@ impl App {
         if self.is_image_modal_open() {
             return KeybindingMode::ImageViewer;
         }
-        // Check modal states first
-        if self.show_help {
-            return KeybindingMode::Help;
-        }
-        if self.show_theme_picker {
-            return KeybindingMode::ThemePicker;
+        // Then a popup in front of the mode
+        match self.overlay {
+            Some(Overlay::Help) => return KeybindingMode::Help,
+            Some(Overlay::ThemePicker) => return KeybindingMode::ThemePicker,
+            None => {}
         }
 
         // Then check app mode
@@ -143,7 +142,7 @@ impl App {
             // one; and PageUp and PageDown did nothing in interactive mode.
             First => {
                 self.clear_count();
-                if self.show_help {
+                if self.overlay == Some(Overlay::Help) {
                     self.help_scroll = 0;
                 } else if self.mode == AppMode::Interactive {
                     self.select_interactive_end(false);
@@ -155,7 +154,7 @@ impl App {
             }
             Last => {
                 self.clear_count();
-                if self.show_help {
+                if self.overlay == Some(Overlay::Help) {
                     self.help_scroll = self.help_max_scroll;
                 } else if self.mode == AppMode::Interactive {
                     self.select_interactive_end(true);
@@ -167,7 +166,7 @@ impl App {
             }
             PageDown => {
                 self.clear_count();
-                if self.show_help {
+                if self.overlay == Some(Overlay::Help) {
                     self.scroll_help_page_down();
                 } else if self.mode == AppMode::Interactive {
                     self.scroll_page_down_interactive();
@@ -180,7 +179,7 @@ impl App {
             }
             PageUp => {
                 self.clear_count();
-                if self.show_help {
+                if self.overlay == Some(Overlay::Help) {
                     self.scroll_help_page_up();
                 } else if self.mode == AppMode::Interactive {
                     self.scroll_page_up_interactive();
