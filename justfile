@@ -44,6 +44,19 @@ check:
 lint:
     cargo clippy --all-targets --all-features --locked -- -D warnings
 
+# Run clippy on the minimal build, where feature-gated code drops out and
+# leaves unused imports behind
+lint-minimal:
+    cargo clippy --all-targets --no-default-features --locked -- -D warnings
+
+# Build the docs with warnings as errors
+doc-check:
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --locked
+
+# Run the doc examples, which `--all-targets` skips
+test-doc:
+    cargo test --doc --all-features --locked
+
 # Format code with rustfmt
 fmt:
     cargo fmt
@@ -82,8 +95,13 @@ deny:
 outdated:
     cargo outdated
 
-# Full CI check: format, lint, test, dependencies, build
-ci: fmt-check lint test test-minimal deny release
+# Everything that has to pass before a commit: format, both lints, docs and
+# every test
+gate: fmt-check lint lint-minimal doc-check test test-minimal test-doc
+    @echo "GATE-OK"
+
+# Full CI check: the gate, dependencies, and a release build
+ci: gate deny release
     @echo "All CI checks passed."
 
 # Quick test of link following feature
