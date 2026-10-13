@@ -105,18 +105,6 @@ impl App {
         self.update_link_filter();
     }
 
-    /// Add a character to the link search query
-    pub fn link_search_push(&mut self, c: char) {
-        self.link_picker.query.push(c);
-        self.update_link_filter();
-    }
-
-    /// Remove the last character from the link search query
-    pub fn link_search_pop(&mut self) {
-        self.link_picker.query.pop();
-        self.update_link_filter();
-    }
-
     /// Update the filtered link indices based on the search query
     pub(super) fn update_link_filter(&mut self) {
         let query = self.link_picker.query.to_lowercase();

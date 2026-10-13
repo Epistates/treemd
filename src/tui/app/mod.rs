@@ -154,6 +154,29 @@ fn content_hash(bytes: &[u8]) -> u64 {
 }
 
 /// A high-level edit applied to whichever text-input field is active.
+/// A one-line text field that typed keys can go to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TextInput {
+    OutlineSearch,
+    DocSearch,
+    LinkSearch,
+    FileSearch,
+    CommandPalette,
+    CellEdit,
+}
+
+impl TextInput {
+    /// The longest value the field takes, in bytes. A search re-runs on
+    /// every change, so its query is kept short.
+    fn max_len(self) -> usize {
+        match self {
+            TextInput::CommandPalette => 32,
+            TextInput::CellEdit => usize::MAX,
+            _ => 256,
+        }
+    }
+}
+
 /// Keys are translated to edits in one place so every input field gets the
 /// same editing behavior (and modifier chords never insert literal chars).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -707,108 +730,75 @@ impl App {
         }
     }
 
-    /// Route a text edit to whichever input field is currently active
-    /// (outline search, doc search, link search, file search, command
-    /// palette, cell edit). Returns true if an active field consumed it.
+    /// The text field that typed keys go to in the current keybinding
+    /// mode, if it has one. Typing, pasting and Backspace all ask here, so
+    /// none of them can reach a field the keys are not read for.
+    pub(crate) fn text_input(&self) -> Option<TextInput> {
+        Some(match self.current_keybinding_mode() {
+            KeybindingMode::Search => TextInput::OutlineSearch,
+            KeybindingMode::DocSearch if self.doc_search.active => TextInput::DocSearch,
+            KeybindingMode::LinkSearch => TextInput::LinkSearch,
+            KeybindingMode::FileSearch => TextInput::FileSearch,
+            KeybindingMode::CommandPalette => TextInput::CommandPalette,
+            KeybindingMode::CellEdit => TextInput::CellEdit,
+            _ => return None,
+        })
+    }
+
+    fn text_input_value(&mut self, input: TextInput) -> &mut String {
+        match input {
+            TextInput::OutlineSearch => &mut self.search_query,
+            TextInput::DocSearch => &mut self.doc_search.query,
+            TextInput::LinkSearch => &mut self.link_picker.query,
+            TextInput::FileSearch => &mut self.file_picker.query,
+            TextInput::CommandPalette => &mut self.command_palette.query,
+            TextInput::CellEdit => &mut self.cell_edit_value,
+        }
+    }
+
+    /// Bring what depends on `input`'s text up to date: the filtered
+    /// outline, the matches, or the filtered links, files or commands.
+    fn text_input_changed(&mut self, input: TextInput) {
+        match input {
+            TextInput::OutlineSearch => self.filter_outline(),
+            TextInput::DocSearch => self.update_doc_search_matches(),
+            TextInput::LinkSearch => self.update_link_filter(),
+            TextInput::FileSearch => self.update_file_filter(),
+            TextInput::CommandPalette => self.filter_commands(),
+            TextInput::CellEdit => {}
+        }
+    }
+
+    /// Append `text` to `input`'s value, up to its length limit. Control
+    /// characters other than tab are not text and are dropped.
+    fn push_text_input(&mut self, input: TextInput, text: impl IntoIterator<Item = char>) {
+        let limit = input.max_len();
+        let value = self.text_input_value(input);
+        for c in text {
+            if c.is_control() && c != '\t' {
+                continue;
+            }
+            if value.len() + c.len_utf8() > limit {
+                break;
+            }
+            value.push(c);
+        }
+    }
+
+    /// Route a text edit to the field the keys are read for (outline
+    /// search, doc search, link search, file search, command palette, cell
+    /// edit). Returns true if a field consumed it.
     pub fn apply_text_input_edit(&mut self, edit: TextInputEdit) -> bool {
-        use TextInputEdit::*;
-
-        // The image viewer is in front of any search that opened it.
-        if self.is_image_modal_open() {
+        let Some(input) = self.text_input() else {
             return false;
+        };
+        match edit {
+            TextInputEdit::Insert(c) => self.push_text_input(input, [c]),
+            TextInputEdit::Clear => self.text_input_value(input).clear(),
+            TextInputEdit::DeleteWord => Self::delete_last_word(self.text_input_value(input)),
         }
-
-        // Outline search
-        if self.outline_search == OutlineSearch::Typing {
-            match edit {
-                Insert(c) => self.search_input(c),
-                Clear => {
-                    self.search_query.clear();
-                    self.filter_outline();
-                }
-                DeleteWord => {
-                    Self::delete_last_word(&mut self.search_query);
-                    self.filter_outline();
-                }
-            }
-            return true;
-        }
-
-        // Doc search
-        if self.mode == AppMode::DocSearch && self.doc_search.active {
-            match edit {
-                Insert(c) => self.doc_search_input(c),
-                Clear => {
-                    self.doc_search.query.clear();
-                    self.update_doc_search_matches();
-                }
-                DeleteWord => {
-                    Self::delete_last_word(&mut self.doc_search.query);
-                    self.update_doc_search_matches();
-                }
-            }
-            return true;
-        }
-
-        // Link search
-        if self.mode == AppMode::LinkFollow && self.link_picker.active {
-            match edit {
-                Insert(c) => self.link_search_push(c),
-                Clear => {
-                    self.link_picker.query.clear();
-                    self.update_link_filter();
-                }
-                DeleteWord => {
-                    Self::delete_last_word(&mut self.link_picker.query);
-                    self.update_link_filter();
-                }
-            }
-            return true;
-        }
-
-        // File search
-        if self.mode == AppMode::FilePicker && self.file_picker.active {
-            match edit {
-                Insert(c) => self.file_search_push(c),
-                Clear => {
-                    self.file_picker.query.clear();
-                    self.update_file_filter();
-                }
-                DeleteWord => {
-                    Self::delete_last_word(&mut self.file_picker.query);
-                    self.update_file_filter();
-                }
-            }
-            return true;
-        }
-
-        // Command palette
-        if self.mode == AppMode::CommandPalette {
-            match edit {
-                Insert(c) => self.command_palette_input(c),
-                Clear => {
-                    self.command_palette.query.clear();
-                    self.filter_commands();
-                }
-                DeleteWord => {
-                    Self::delete_last_word(&mut self.command_palette.query);
-                    self.filter_commands();
-                }
-            }
-            return true;
-        }
-
-        // Cell edit
-        if self.mode == AppMode::CellEdit {
-            match edit {
-                Insert(c) => self.cell_edit_value.push(c),
-                Clear => self.cell_edit_value.clear(),
-                DeleteWord => Self::delete_last_word(&mut self.cell_edit_value),
-            }
-            return true;
-        }
-
-        false
+        self.text_input_changed(input);
+        true
     }
 
     /// Insert a bracketed paste into the active single-line input.
@@ -816,48 +806,41 @@ impl App {
     /// Newlines and tabs become spaces and other control characters are
     /// dropped, so pasted terminal escape sequences can never become commands.
     /// Filters are recomputed once for the complete paste rather than once per
-    /// character.
+    /// character. The field's length limit holds for a paste as for typing;
+    /// a paste could make a query of any length.
     pub fn apply_text_input_paste(&mut self, pasted: &str) -> bool {
-        let text: String = pasted
-            .chars()
-            .filter_map(|character| match character {
-                '\r' | '\n' | '\t' => Some(' '),
-                character if character.is_control() => None,
-                character => Some(character),
-            })
-            .collect();
+        let Some(input) = self.text_input() else {
+            return false;
+        };
+        let text = pasted.chars().map(|character| match character {
+            '\r' | '\n' | '\t' => ' ',
+            character => character,
+        });
+        self.push_text_input(input, text);
+        self.text_input_changed(input);
+        true
+    }
 
-        if self.outline_search == OutlineSearch::Typing {
-            self.search_query.push_str(&text);
-            self.filter_outline();
-            return true;
+    /// Backspace in a text field.
+    pub(super) fn text_input_backspace(&mut self) {
+        match self.text_input() {
+            // In the file picker, Backspace on an empty query goes up a
+            // directory.
+            Some(TextInput::FileSearch) if self.file_picker.query.is_empty() => {
+                self.file_picker_parent_dir();
+            }
+            Some(input) => {
+                self.text_input_value(input).pop();
+                self.text_input_changed(input);
+            }
+            // An applied document search still takes Backspace, which edits
+            // its query, as it always has.
+            None if self.mode == AppMode::DocSearch => {
+                self.doc_search.query.pop();
+                self.update_doc_search_matches();
+            }
+            None => {}
         }
-        if self.mode == AppMode::DocSearch && self.doc_search.active {
-            self.doc_search.query.push_str(&text);
-            self.update_doc_search_matches();
-            return true;
-        }
-        if self.mode == AppMode::LinkFollow && self.link_picker.active {
-            self.link_picker.query.push_str(&text);
-            self.update_link_filter();
-            return true;
-        }
-        if self.mode == AppMode::FilePicker && self.file_picker.active {
-            self.file_picker.query.push_str(&text);
-            self.update_file_filter();
-            return true;
-        }
-        if self.mode == AppMode::CommandPalette {
-            self.command_palette.query.push_str(&text);
-            self.filter_commands();
-            return true;
-        }
-        if self.mode == AppMode::CellEdit {
-            self.cell_edit_value.push_str(&text);
-            return true;
-        }
-
-        false
     }
 
     /// Accumulate a digit into the vim-style count prefix
@@ -970,9 +953,6 @@ impl App {
         let page_size = self.help_page.saturating_sub(1).max(1);
         self.help_scroll = self.help_scroll.saturating_sub(page_size);
     }
-
-    /// Maximum search query length to prevent performance issues
-    const MAX_SEARCH_LEN: usize = 256;
 
     // ========== Document Search Methods ==========
 

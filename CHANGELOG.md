@@ -135,6 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`-e` / `--exit-status`** makes a query that matches nothing exit 1, so a script can tell an empty result from a match. Without it an empty result still exits 0, as jq does
 - **`Ctrl+c` quits**, asking first when there are unsaved edits. Raw mode made it an ordinary key, bound to nothing
 - **`Ctrl+z` suspends to the shell**, and `fg` brings treemd back as it was. Raw mode made it an ordinary key as well. In interactive mode it is still undo
+- **A paste into a search or the command palette is held to the field's length**, as typing already was, so a long paste could not become a query that is re-run on every key
 - **The image viewer's keys can be rebound**, under `[keybindings.ImageViewer]`, with the actions `PreviousFrame`, `NextFrame` and `TogglePlayback`. They were wired into the event loop past the keymap, which is also why `Ctrl+c` did nothing in the viewer; it closes it now, as `Esc` and `q` do
 - **GitHub's heading anchors, as an option.** `slug_style = "github"` under `[content]` makes the anchor `Y` copies, the `id` and `slug` in `-l -o json`, and `.slug` and `slugify` in queries the way github.com does: `_` is kept, and a repeated heading is numbered, so the second `## Setup` is `setup-1`. treemd's own anchors stay the default, under which repeated headings share an `id`
 - **Keys with a dash or a space can be read**: `.fm["draft-of"]`, `.fm."draft-of"` and `.["key"]`. `.fm["key"]` matched nothing, and the other two were parse errors
@@ -168,6 +169,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- **`app.rs` is split by concern, and what has the keyboard is decided in one place.** The 7,800-line file is now `src/tui/app/`, with key dispatch, the outline, search, the palette, link navigation, the file picker, editing, interactive mode and images each in a module of their own. Help and the theme picker are one `overlay`, the outline search is one `OutlineSearch` state instead of two flags, and typing, pasting and Backspace all ask the keybinding mode which field they go to, rather than each checking the flags again
 - **Property tests over generated input.** `tests/properties.rs` parses generated documents built from the constructs that have broken before and runs generated queries against them, neither of which may panic. The content pane's wrapping is held to never exceeding the pane or losing text, and a table edit to changing one line and undoing exactly. That last one found the pipe-less header bug above. `PROPTEST_CASES` sets how long they search
 - **The integration tests clean up after themselves.** Each run left a temporary directory per test behind
 - **The Linux glibc binaries run on glibc 2.28 and newer.** They were built on the newest Ubuntu runner and needed its glibc, 2.39, so the 0.9.1 downloads failed with "GLIBC_2.39 not found" on Debian 12, Ubuntu 22.04 and RHEL 9. Both are now built with cargo-zigbuild against glibc 2.28, a release fails if either uses a newer glibc symbol, and the x86_64 one is run in Debian 10 before it ships

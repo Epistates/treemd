@@ -103,26 +103,6 @@ impl App {
         }
     }
 
-    pub fn search_input(&mut self, c: char) {
-        // Limit search query length
-        if self.search_query.len() >= Self::MAX_SEARCH_LEN {
-            return;
-        }
-
-        // Filter control characters (except common ones)
-        if c.is_control() && c != '\t' {
-            return;
-        }
-
-        self.search_query.push(c);
-        self.filter_outline();
-    }
-
-    pub fn search_backspace(&mut self) {
-        self.search_query.pop();
-        self.filter_outline();
-    }
-
     pub fn filter_outline(&mut self) {
         // Save current selection
         let current_idx = self.selected_heading_index();
@@ -197,26 +177,6 @@ impl App {
         self.doc_search.query.clear();
         self.doc_search.matches.clear();
         self.doc_search.current_idx = None;
-    }
-
-    /// Add a character to the document search query
-    pub fn doc_search_input(&mut self, c: char) {
-        // Limit search query length
-        if self.doc_search.query.len() >= Self::MAX_SEARCH_LEN {
-            return;
-        }
-        // Filter control characters
-        if c.is_control() && c != '\t' {
-            return;
-        }
-        self.doc_search.query.push(c);
-        self.update_doc_search_matches();
-    }
-
-    /// Remove the last character from the document search query
-    pub fn doc_search_backspace(&mut self) {
-        self.doc_search.query.pop();
-        self.update_doc_search_matches();
     }
 
     /// Update search matches based on current query (supports fuzzy and exact matching)
@@ -449,5 +409,20 @@ mod tests {
         app.execute_action(Action::ExitMode);
         assert_eq!(app.outline_search, OutlineSearch::Off);
         assert_eq!(outline(&app), ["Alpha", "Beta", "Alphabet", "Gamma"]);
+    }
+
+    /// Typing stopped at the search's length limit, but a paste did not,
+    /// so a query of any length could be pasted and re-run on every key.
+    #[test]
+    fn a_paste_is_held_to_the_fields_limit() {
+        let mut app = app();
+        app.execute_action(Action::EnterSearchMode);
+        assert!(app.apply_text_input_paste(&"a".repeat(1000)));
+        assert_eq!(app.search_query.len(), 256);
+
+        // Nothing is typed into a search while help is in front of it.
+        app.toggle_help();
+        assert_eq!(app.text_input(), None);
+        assert!(!app.apply_text_input_paste("b"));
     }
 }

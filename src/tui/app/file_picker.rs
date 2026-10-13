@@ -125,18 +125,6 @@ impl App {
         self.file_picker.filtered_file_indices.len() + self.file_picker.filtered_dir_indices.len()
     }
 
-    /// Push character to file search query
-    pub fn file_search_push(&mut self, c: char) {
-        self.file_picker.query.push(c);
-        self.update_file_filter();
-    }
-
-    /// Pop character from file search query
-    pub fn file_search_pop(&mut self) {
-        self.file_picker.query.pop();
-        self.update_file_filter();
-    }
-
     /// Navigate to parent directory in file picker
     pub fn file_picker_parent_dir(&mut self) {
         let current_dir = self.effective_picker_dir();
