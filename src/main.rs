@@ -368,13 +368,8 @@ fn main() -> Result<()> {
         }
         let result = treemd::tui::run(&mut terminal, app);
 
-        // Cleanup terminal state
-        use crossterm::event::{DisableBracketedPaste, DisableMouseCapture};
-        use crossterm::terminal::LeaveAlternateScreen;
-        stdout().execute(DisableBracketedPaste).ok();
-        stdout().execute(DisableMouseCapture).ok();
-        stdout().execute(LeaveAlternateScreen).ok();
-        treemd::tui::tty::disable_raw_mode().ok();
+        // Cleanup terminal state, the same way a panic or a signal does
+        treemd::tui::tty::restore();
 
         return result;
     }
