@@ -21,6 +21,33 @@ pub use utils::{parse_inline_html, strip_markdown_inline};
 
 use std::path::Path;
 
+/// The byte range of the YAML frontmatter block at the start of `content`:
+/// from its opening `---` line through the closing line, which has to be
+/// exactly `---` or `...`. A byte order mark may come first. `None` when
+/// the document does not open with one.
+///
+/// Only the start of a document holds frontmatter. A `---` line later on is
+/// a rule, and a block of `key: value` lines between two rules is content.
+pub fn frontmatter_range(content: &str) -> Option<std::ops::Range<usize>> {
+    let start = if content.starts_with('\u{feff}') {
+        3
+    } else {
+        0
+    };
+    let mut lines = content[start..].split_inclusive('\n');
+    if lines.next()?.trim_end() != "---" {
+        return None;
+    }
+    let mut end = start + content[start..].find('\n')? + 1;
+    for line in lines {
+        end += line.len();
+        if matches!(line.trim_end(), "---" | "...") {
+            return Some(start..end);
+        }
+    }
+    None
+}
+
 /// Parse a markdown file and extract its structure.
 ///
 /// # Arguments

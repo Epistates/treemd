@@ -348,22 +348,10 @@ pub fn build_highlighted_line(
 /// with a `---` rule is content, which stripping it used to drop up to the
 /// next rule.
 pub fn strip_frontmatter(content: &str) -> String {
-    let body = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let mut lines = body.split_inclusive('\n');
-    let Some(first) = lines.next() else {
-        return content.to_string();
-    };
-    if first.trim_end() != "---" {
-        return content.to_string();
+    match crate::parser::frontmatter_range(content) {
+        Some(range) => content[range.end..].to_string(),
+        None => content.to_string(),
     }
-    let mut consumed = first.len();
-    for line in lines {
-        consumed += line.len();
-        if matches!(line.trim_end(), "---" | "...") {
-            return body[consumed..].to_string();
-        }
-    }
-    content.to_string()
 }
 
 /// Strip LaTeX math expressions and commands from content.

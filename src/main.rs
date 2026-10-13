@@ -646,13 +646,12 @@ fn extract_section(doc: &Document, section_name: &str) {
     // String search is wrong when the heading source has inline markdown
     // (e.g. `## **Bold** Section`) since heading.text is the stripped form.
     let start = heading.offset;
-    let level = heading.level;
-    let end = doc
+    let index = doc
         .headings
         .iter()
-        .find(|h| h.offset > start && h.level <= level)
-        .map(|h| h.offset)
-        .unwrap_or(doc.content.len());
+        .position(|h| h.offset == start)
+        .expect("a found heading is one of the document's");
+    let end = doc.section_end(index);
 
     println!("{}", cli::terminal::display(doc.content[start..end].trim()));
 }
@@ -825,7 +824,8 @@ AGGREGATION FUNCTIONS
 
 OPERATORS
     ==, !=              Equality; values of different types are never equal
-    <, <=, >, >=        Comparison of numbers or of strings
+    <, <=, >, >=        Comparison; across types, jq's order: null <
+                        booleans < numbers < strings < arrays < objects
     and, or, not        Logic
     +, -, *, /, %       Arithmetic; + also joins strings and arrays,
                         "ab" * 3 repeats a string
