@@ -431,8 +431,11 @@ fn parse_unary_expr_inner(p: &mut Parser) -> Result<Expr, QueryError> {
         });
     }
 
+    // Prefix `not` takes a whole comparison, as Python's does, so
+    // `not .level == 2` is `not (.level == 2)`. Binding tightest, it read as
+    // `(not .level) == 2`, which is never true.
     if p.matches(&[TokenKind::Not]) {
-        let expr = parse_unary_expr(p)?;
+        let expr = parse_equality_expr(p)?;
         let end_span = expr.span();
         return Ok(Expr::Unary {
             op: UnaryOp::Not,
@@ -490,7 +493,7 @@ fn parse_postfix_expr(p: &mut Parser) -> Result<Expr, QueryError> {
             // `expr | .name`. (`_pipe` is the evaluator's piping special form,
             // and it save/restores `current` around each stage.)
             let start_span = expr.span();
-            let (name, name_span) = parse_identifier(p)?;
+            let (name, name_span) = parse_key(p)?;
 
             let property = Expr::Property {
                 name,
@@ -498,8 +501,34 @@ fn parse_postfix_expr(p: &mut Parser) -> Result<Expr, QueryError> {
             };
             expr = _pipe(expr, property, start_span.merge(name_span));
         } else if p.check(&TokenKind::LBracket) {
-            // Index or filter: [0], [-1], [0:3], []
-            let (index, span) = parse_index_or_filter(p)?;
+            // Index: [0], [-1], [0:3], [], or a key: ["my-key"]
+            let (filter_or_index, span) = parse_filter_or_index(p)?;
+            let index = match filter_or_index {
+                FilterOrIndex::Index(index) => index,
+                // `.["key"]` reads a key, as `.key` does. Brackets are how a
+                // key with a dash or a space is written: `.fm["draft-of"]`.
+                FilterOrIndex::Filter(Filter::Text {
+                    pattern,
+                    exact: true,
+                    ..
+                }) => {
+                    let start_span = expr.span();
+                    let property = Expr::Property {
+                        name: pattern,
+                        span: start_span.merge(span),
+                    };
+                    expr = _pipe(expr, property, start_span.merge(span));
+                    continue;
+                }
+                FilterOrIndex::Filter(_) => {
+                    return Err(QueryError::new(
+                        QueryErrorKind::InvalidFilter("expected index or key".to_string()),
+                        span,
+                        p.source.to_string(),
+                    )
+                    .with_help("quote a key to read it: [\"name\"]"));
+                }
+            };
 
             // Apply index to current expression
             // For now, we handle this in evaluation
@@ -580,15 +609,28 @@ fn parse_primary_expr(p: &mut Parser) -> Result<Expr, QueryError> {
         // next: `. == "x"`, `. + 1`, and `.[]` (the postfix loop takes the
         // brackets). Only the end of the query and a few closers were
         // accepted before, so `select(. == "x")` was a parse error.
+        //
+        // A quoted name is always a key, as in jq: `."my-key"`.
+        if let TokenKind::String(name) = p.current_kind().clone() {
+            let name_span = p.current_span();
+            p.advance();
+            return Ok(Expr::Property {
+                name,
+                span: span.merge(name_span),
+            });
+        }
         if let TokenKind::Ident(name) = p.current_kind().clone() {
             let name_span = p.current_span();
             p.advance();
 
             // Check if it's an element type
             if let Some(kind) = ElementKind::from_str(&name) {
-                // Parse optional filters
+                // Parse optional filters. Front matter is one value with
+                // keys, which no text filter would select among, so its
+                // brackets go to the postfix loop: `.fm["my-key"]` reads
+                // that key.
                 let mut filters = Vec::new();
-                while p.check(&TokenKind::LBracket) {
+                while kind != ElementKind::FrontMatter && p.check(&TokenKind::LBracket) {
                     let (filter_or_index, filter_span) = parse_filter_or_index(p)?;
 
                     match filter_or_index {
@@ -736,15 +778,16 @@ fn parse_primary_expr(p: &mut Parser) -> Result<Expr, QueryError> {
     ))
 }
 
-fn parse_identifier(p: &mut Parser) -> Result<(String, Span), QueryError> {
+/// The name after a `.`: an identifier, or a quoted key (`.fm."my-key"`).
+fn parse_key(p: &mut Parser) -> Result<(String, Span), QueryError> {
     let span = p.current_span();
-    if let TokenKind::Ident(name) = p.current_kind().clone() {
+    if let TokenKind::Ident(name) | TokenKind::String(name) = p.current_kind().clone() {
         p.advance();
         Ok((name, span))
     } else {
         Err(QueryError::new(
             QueryErrorKind::UnexpectedToken {
-                expected: vec!["identifier"],
+                expected: vec!["identifier", "string"],
                 found: p.current_kind().clone(),
             },
             span,
@@ -885,18 +928,6 @@ fn parse_filter_or_index(p: &mut Parser) -> Result<(FilterOrIndex, Span), QueryE
         p.current_span(),
         p.source.to_string(),
     ))
-}
-
-fn parse_index_or_filter(p: &mut Parser) -> Result<(IndexOp, Span), QueryError> {
-    let (filter_or_index, span) = parse_filter_or_index(p)?;
-    match filter_or_index {
-        FilterOrIndex::Index(idx) => Ok((idx, span)),
-        FilterOrIndex::Filter(_) => Err(QueryError::new(
-            QueryErrorKind::InvalidFilter("expected index, got filter".to_string()),
-            span,
-            p.source.to_string(),
-        )),
-    }
 }
 
 fn parse_function_args(p: &mut Parser) -> Result<Vec<Expr>, QueryError> {

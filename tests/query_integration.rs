@@ -166,9 +166,138 @@ fn nth_out_of_range_is_empty() {
     assert!(run(md, "\"abc\" | nth(-1e300)").is_empty());
 }
 
+/// Each result as compact JSON, for results that are arrays or objects.
+fn json(md: &str, q: &str) -> Vec<String> {
+    let doc = parse_markdown(md);
+    query::execute(&doc, q)
+        .unwrap_or_else(|e| panic!("query {q:?} failed: {e}"))
+        .iter()
+        .map(|v| v.to_json().to_string())
+        .collect()
+}
+
+/// A slice of an array is an array, as in jq. It was a stream of the
+/// items, so `.fm.tags[1:] | count` counted 1.
 #[test]
 fn array_slice() {
-    assert_eq!(run("# X\n", "[10,20,30][0:2]"), vec!["10", "20"]);
+    let md = "---\ntags: [a, b, c]\n---\n# X\n## Y\n## Z\n";
+    assert_eq!(json(md, "[10,20,30][0:2]"), ["[10,20]"]);
+    assert_eq!(json(md, "[1, 2, 3] | .[1:]"), ["[2,3]"]);
+    assert_eq!(json(md, ".fm.tags[1:]"), [r#"["b","c"]"#]);
+    assert_eq!(run(md, ".fm.tags[1:] | count"), ["2"]);
+    // Past either end of an array is null.
+    assert_eq!(json(md, "[1, 2, 3] | .[7]"), ["null"]);
+    assert_eq!(json(md, "[1, 2, 3] | .[-9]"), ["null"]);
+    // Strings slice by character.
+    assert_eq!(run(md, r#""trée" | .[1:3]"#), ["ré"]);
+    // Selector results stay a stream.
+    assert_eq!(run(md, ".h2[0:2] | count"), ["2"]);
+    assert_eq!(run(md, "(.h | select(.level == 2))[0:1] | .text"), ["Y"]);
+}
+
+/// Arithmetic follows jq. Mismatched types used to give `null`, or for
+/// `+` the two values' text run together (`{} + 1` was `{}1`), so a typo
+/// passed as a result.
+#[test]
+fn arithmetic_follows_jq() {
+    let md = "# X\n";
+    for q in [
+        r#""a" - 1"#,
+        r#""a" + 1"#,
+        "{} + 1",
+        "[1] * 2",
+        r#""10" / 2"#,
+        r#"-"a""#,
+        "true % 2",
+        ".h | .text + 1",
+    ] {
+        run_err(md, q);
+    }
+    assert_eq!(json(md, "{a: 1, b: 1} + {b: 2}"), [r#"{"a":1,"b":2}"#]);
+    assert_eq!(json(md, "[1, 2, 3, 2] - [2]"), ["[1,3]"]);
+    assert_eq!(json(md, r#""a,b" / ",""#), [r#"["a","b"]"#]);
+    assert_eq!(json(md, r#""ab" | split("")"#), [r#"["a","b"]"#]);
+    assert_eq!(json(md, r#""" | split(",")"#), ["[]"]);
+    assert_eq!(run(md, "1 + null"), ["1"]);
+    assert_eq!(run(md, "null + null"), [""]);
+    assert_eq!(run(md, "5.9 % 3"), ["2"]);
+    assert_eq!(run(md, "-7 % 3"), ["-1"]);
+    run_err(md, "1 % 0.5");
+    assert_eq!(
+        run(md, r#".h | .text + " " + (.level | tostring)"#),
+        ["X 1"]
+    );
+}
+
+/// A key that is not there is null, as in jq, so a default works. It was an
+/// error, which `//` could not catch.
+#[test]
+fn a_missing_key_is_null() {
+    let md = "---\ntitle: T\n---\n# X\n";
+    assert_eq!(run(md, ".fm.draft // false"), ["false"]);
+    assert_eq!(run(md, "{a: 1} | .b // 2"), ["2"]);
+    assert_eq!(run(md, ".h1[0].parent.text // \"top\""), ["top"]);
+    // An element's properties are fixed; a typo is still an error.
+    run_err(md, ".h | .txt");
+}
+
+/// Keys with a dash or a space had no syntax: `.fm["k"]` matched nothing,
+/// and `.["k"]` and `."k"` were parse errors.
+#[test]
+fn quoted_keys() {
+    let md = "---\ndraft-of: 3\nmy key: 4\n---\n# X\n";
+    assert_eq!(run(md, r#".fm["draft-of"]"#), ["3"]);
+    assert_eq!(run(md, r#".fm."draft-of""#), ["3"]);
+    assert_eq!(run(md, r#".fm | .["my key"]"#), ["4"]);
+    assert_eq!(run(md, r#".fm | ."my key""#), ["4"]);
+    assert_eq!(run(md, r#"{"a-b": 1} | .["a-b"]"#), ["1"]);
+    // A quoted name is a key even when it spells a selector.
+    assert_eq!(run(md, r#"{h2: 5} | ."h2""#), ["5"]);
+    // On a selector a quoted filter still matches whole text.
+    assert_eq!(run(md, r#".h["X"] | .text"#), ["X"]);
+}
+
+/// A bare filter runs to the `]`. Lexed as tokens, `c++` was a parse error,
+/// `c#` an unexpected character, and `-d` lost its `-`.
+#[test]
+fn bare_filters_take_the_text_as_written() {
+    let md = "# Getting Started\n## d-pad\n## dial\n\n```c++\na\n```\n\n```c#\nb\n```\n\n\
+              ```objective-c\nc\n```\n";
+    assert_eq!(run(md, ".code[c++] | .text"), ["a"]);
+    assert_eq!(run(md, ".code[c#] | .text"), ["b"]);
+    assert_eq!(run(md, ".code[objective-c] | .text"), ["c"]);
+    assert_eq!(run(md, ".h[Getting Started] | .text"), ["Getting Started"]);
+    assert_eq!(run(md, ".h[-pad] | .text"), ["d-pad"]);
+    // Indexes, slices and single words are read as before.
+    assert_eq!(run(md, ".h2[ 1 ] | .text"), ["dial"]);
+    assert_eq!(run(md, ".h2[-1:] | .text"), ["dial"]);
+    assert_eq!(run(md, ".h2[d][0] | .text"), ["d-pad"]);
+    // An array literal is not a filter.
+    assert_eq!(json(md, "[.h2[] | .text]"), [r#"["d-pad","dial"]"#]);
+}
+
+/// `not .level == 2` was `(not .level) == 2`, which is never true.
+#[test]
+fn prefix_not_takes_a_comparison() {
+    let md = "# A\n## B\n### C\n";
+    assert_eq!(run(md, ".h | select(not .level == 2) | .text"), ["A", "C"]);
+    assert_eq!(
+        run(md, ".h | select(not .level == 2 and .level > 1) | .text"),
+        ["C"]
+    );
+    assert_eq!(run(md, "not false or false"), ["true"]);
+}
+
+/// A stage that starts with a reducing function reduces, so these give one
+/// answer. They gave one per heading.
+#[test]
+fn a_stage_led_by_count_reduces() {
+    let md = "# A\n## B\n## C\n";
+    assert_eq!(run(md, ".h | count > 2"), ["true"]);
+    assert_eq!(run(md, ".h | count + 1"), ["4"]);
+    assert_eq!(run(md, ".h2 | count == 2"), ["true"]);
+    // `null | length` is 0, as in jq.
+    assert_eq!(run(md, ".h1[0] | .parent | length"), ["0"]);
 }
 
 // ---------------------------------------------------------------------------

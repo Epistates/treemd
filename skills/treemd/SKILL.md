@@ -74,7 +74,7 @@ Attach `-o` to `--list` or `--tree` only (not `-s`):
 
 - `-o plain`: Human-readable text (default)
 - `-o json`: JSON for scripting/parsing. The shape differs by mode: `--list -o json` emits a nested document object (`.document.metadata` plus a recursive `.document.sections[]` tree carrying each section's content and blocks), while `--tree -o json` emits a flat array of `{"level", "text"}` objects.
-- `-o tree`: Box-drawing tree structure (`--tree` only; using it with `--list` prints `Use --tree for tree output` and exits `1`)
+- `-o tree`: Box-drawing tree structure (`--list -o tree` prints the same tree as `--tree`)
 
 For tql (`-q`) queries, use `--query-output` instead of `-o`. Available formats:
 
@@ -205,8 +205,10 @@ treemd -q 'levels' --query-output json FILE.md | jq '.[0].h1'
 ## Error Handling
 
 - **Missing section**: `treemd -s "NonExistent" FILE.md` exits with code `1` and prints `Section 'NonExistent' not found` to stderr. Check for non-zero exit code to detect missing sections.
-- **Invalid tql syntax**: Exits with a non-zero code and an error message on stderr.
-- **Unsupported `--query-output` value**: Exits with error "Unknown output format"; use supported values only (`plain`, `json`, `json-pretty`, `jsonl`, `md`, `tree`).
+- **Invalid tql syntax**: Exits `3` with an error message on stderr.
+- **A query that fails while running** (such as `"a" - 1`, a type error): Exits `5`.
+- **No results with `-e`**: Exits `1`. Without `-e`, an empty result exits `0`.
+- **Unsupported `--query-output` value**: Exits `2` with "Unknown output format"; use supported values only (`plain`, `json`, `json-pretty`, `jsonl`, `md`, `tree`).
 
 ## Notes
 

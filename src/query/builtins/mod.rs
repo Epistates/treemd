@@ -110,6 +110,7 @@ pub fn register_all(registry: &mut Registry) {
     // jq compatibility
     registry.register_alias("ascii_downcase", "lower");
     registry.register_alias("ascii_upcase", "upper");
+    registry.register_alias("tostring", "text");
 
     // Content extraction
     registry.register_alias("markdown", "md");
@@ -125,6 +126,8 @@ pub fn register_all(registry: &mut Registry) {
 fn fn_count(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
     let count = match input {
+        // As in jq: `.parent | length` on a top-level heading is 0, not 1.
+        Value::Null => 0,
         Value::Array(a) => a.len(),
         // jq counts Unicode codepoints, not bytes.
         Value::String(s) => s.chars().count(),
@@ -289,12 +292,7 @@ fn fn_trim(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
 fn fn_split(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
     let sep = args.get(1).map(|v| v.to_text()).unwrap_or_default();
-    let parts: Vec<Value> = input
-        .to_text()
-        .split(&sep)
-        .map(|s| Value::String(s.to_string()))
-        .collect();
-    Ok(vec![Value::Array(parts)])
+    Ok(vec![super::eval::split_text(&input.to_text(), &sep)])
 }
 
 fn fn_join(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {

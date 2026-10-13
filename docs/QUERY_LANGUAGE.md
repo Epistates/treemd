@@ -57,7 +57,8 @@ treemd -q '.h2 | count' doc.md                  # Number of h2s
 | `.h1[text]` | Level + text filter combined | `.h1[Features]` |
 
 A bracketed word is matched as text, keywords included, so `.h[end]` finds
-"The End".
+"The End". Everything up to the `]` is the text, spaces and punctuation
+included: `.h[Getting Started]`, `.code[c++]`, `.code[objective-c]`.
 
 ### Code Blocks
 
@@ -198,6 +199,11 @@ as in jq: `.table[0].rows[][0]` takes the first cell of every row. After
 anything else it picks from the results, so `(.h | select(.level == 2))[0]`
 is the first matching heading.
 
+On an array, again as in jq, a slice is an array (`[1, 2, 3] | .[1:]` is
+`[2, 3]`), and an index past either end is `null`. A string slices by
+character: `"treemd" | .[0:4]` is `"tree"`. A slice of selector results, such
+as `.h2[0:3]`, stays a stream of elements.
+
 ---
 
 ## Iteration
@@ -251,6 +257,10 @@ stream depends on the query, not on how many matches the document happens to
 have: `.h1.text | count` counts h1s even when there is one. Inside an object
 or a `select`, the input is a single value again, so
 `.h | {n: (.children | count)}` gives each heading's child count.
+
+A stage that starts with a collection function works on the whole stream
+too, so `.h | count > 3` is one `true` or `false` and `.h | count + 1` is one
+number.
 
 ### Multiple Outputs
 
@@ -459,13 +469,21 @@ produce an empty stream.
 | `==`, `!=` | Equality. Values of different types are never equal: `1 == "1"` is `false` |
 | `<`, `<=`, `>`, `>=` | Comparison. Numbers and strings compare as you would expect; values of different types follow jq's order, null < booleans < numbers < strings < arrays < objects, so `1 < "a"` is `true` |
 | `and`, `or`, `not` | Logic. `not` is a prefix (`not .x`) or a pipe stage (`.x \| not`) |
-| `+` | Adds numbers, joins strings and arrays |
-| `-`, `*`, `/`, `%` | Arithmetic. `"ab" * 3` repeats a string |
+| `+` | Adds numbers; joins strings, arrays and objects (keys on the right win). `null + x` is `x` |
+| `-` | Subtracts numbers; removes from an array every item of another: `[1, 2, 3] - [2]` is `[1, 3]` |
+| `*` | Multiplies numbers. `"ab" * 3` repeats a string |
+| `/` | Divides numbers. A string divided by a string splits it: `"a,b" / ","` |
+| `%` | Remainder of whole numbers, as in jq: `5.9 % 3` is `2` |
 | `a // b` | `a`, or `b` when `a` is null, false, `0` or empty |
 | `( )` | Grouping |
 
-From tightest to loosest: `* / %`, `+ -`, `//`, comparisons, `== !=`, `and`,
-`or`, `> >>` between selectors, `|`, `,`.
+Any other pair of types is an error, as in jq, so `.text + 1` fails with
+`string ("Intro") and number (1) cannot be added` and exits `5`. Turn a
+number into text first: `.text + " " + (.level | tostring)`.
+
+From tightest to loosest: `* / %`, `+ -`, `//`, comparisons, `== !=`, `not`,
+`and`, `or`, `> >>` between selectors, `|`, `,`. A prefix `not` takes the
+whole comparison after it, so `not .level == 2` is `not (.level == 2)`.
 
 `//` falls back on any falsy value, which is wider than jq, where only
 `null` and `false` do.
@@ -536,7 +554,15 @@ For documents with YAML front matter:
 .frontmatter | keys             # List all keys
 .frontmatter | has("draft")     # Check field existence
 .fm | .image                    # A key that is also an element name
+.fm["draft-of"]                 # A key with a dash or a space
+.fm."draft-of"                  # The same
+.fm.draft // false              # A missing key is null
+.fm.tags[1:]                    # A slice of an array is an array
 ```
+
+As in jq, a key the front matter or an object does not have is `null`
+rather than an error. An element's properties are fixed, so `.h | .nme` is
+still an error.
 
 ---
 
@@ -685,8 +711,9 @@ treemd -q '[.h[] | {level: .level, text: .text, slug: (.text | slugify)}]' --que
 
 ## Error Messages
 
-Parse errors carry a source span pointing at the offending token. All errors
-go to stderr and exit `1`.
+Parse errors carry a source span pointing at the offending token. Errors go
+to stderr. As in jq, a query that does not parse exits `3` and one that fails
+while running exits `5`, so neither is mistaken for `-e`'s `1` for no results.
 
 ```
 $ treemd -q '.h2 | | text' doc.md
@@ -740,19 +767,22 @@ comparison     = alternative ( ( "<" | "<=" | ">" | ">=" ) alternative )* ;
 alternative    = additive ( "//" additive )* ;
 additive       = multiplicative ( ( "+" | "-" ) multiplicative )* ;
 multiplicative = unary ( ( "*" | "/" | "%" ) unary )* ;
-unary          = ( "not" | "-" ) unary
+unary          = "not" equality              (* not (a == b) *)
+               | "-" unary
                | "not"                       (* as a stage: negates its input *)
                | postfix ;
-postfix        = primary ( "." identifier | index )* ;
+postfix        = primary ( "." ( identifier | string ) | index | "[" string "]" )* ;
 
 primary        = "." identifier filter* index?   (* selector, or key/property *)
+               | "." string                      (* key: ."my-key" *)
                | "."                             (* identity *)
                | "(" pipeline ")"
                | object | array | conditional
                | string | number | "true" | "false" | "null"
                | identifier ( "(" args ")" )? ;   (* function call *)
 
-filter         = "[" ( string | word ) "]" ;
+filter         = "[" ( string | word | bare ) "]" ;
+bare           = ? any text up to the "]", right after a selector ? ;
 index          = "[" ( integer | integer? ":" integer? )? "]" ;
 args           = pipeline ( "," pipeline )* ;
 
