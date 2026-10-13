@@ -51,6 +51,9 @@ pub fn default_keybindings() -> Keybindings {
     // Cell edit mode
     add_cell_edit_mode(&mut kb);
 
+    // Image viewer
+    add_image_viewer_mode(&mut kb);
+
     kb
 }
 
@@ -522,6 +525,23 @@ fn add_file_search_mode(kb: &mut Keybindings) {
     bind(kb, FileSearch, "Backspace", SearchBackspace);
 }
 
+fn add_image_viewer_mode(kb: &mut Keybindings) {
+    use Action::*;
+    use KeybindingMode::ImageViewer;
+
+    // Step through an animation's frames
+    bind(kb, ImageViewer, "h", PreviousFrame);
+    bind(kb, ImageViewer, "Left", PreviousFrame);
+    bind(kb, ImageViewer, "l", NextFrame);
+    bind(kb, ImageViewer, "Right", NextFrame);
+    bind(kb, ImageViewer, "Space", TogglePlayback);
+
+    // Close the viewer
+    bind(kb, ImageViewer, "Escape", ExitMode);
+    bind(kb, ImageViewer, "q", ExitMode);
+    bind(kb, ImageViewer, "Ctrl+c", ExitMode);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,22 +683,7 @@ mod tests {
     fn test_all_modes_have_bindings() {
         let kb = default_keybindings();
 
-        let modes = [
-            KeybindingMode::Normal,
-            KeybindingMode::Help,
-            KeybindingMode::ThemePicker,
-            KeybindingMode::Interactive,
-            KeybindingMode::InteractiveTable,
-            KeybindingMode::LinkFollow,
-            KeybindingMode::LinkSearch,
-            KeybindingMode::Search,
-            KeybindingMode::DocSearch,
-            KeybindingMode::CommandPalette,
-            KeybindingMode::ConfirmDialog,
-            KeybindingMode::CellEdit,
-        ];
-
-        for mode in modes {
+        for mode in <KeybindingMode as strum::IntoEnumIterator>::iter() {
             assert!(
                 kb.get_mode_keybinds(mode).is_some(),
                 "Mode {:?} has no bindings",

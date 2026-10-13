@@ -66,6 +66,8 @@ pub enum KeybindingMode {
     FilePicker,
     /// File picker search/filter mode
     FileSearch,
+    /// The full-screen image viewer
+    ImageViewer,
 }
 
 impl KeybindingMode {
@@ -86,6 +88,7 @@ impl KeybindingMode {
             KeybindingMode::ConfirmDialog => "Confirm",
             KeybindingMode::FilePicker => "File Picker",
             KeybindingMode::FileSearch => "File Search",
+            KeybindingMode::ImageViewer => "Image Viewer",
         }
     }
 }

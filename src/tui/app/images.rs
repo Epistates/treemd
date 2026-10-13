@@ -1128,4 +1128,40 @@ mod image_modal_tests {
         assert_eq!(blue(&show(2)), 255, "jump forward");
         assert_eq!(blue(&show(2)), 255, "the same frame again");
     }
+
+    /// The viewer's keys were wired into the event loop past the keymap, so
+    /// they could not be rebound and Ctrl+C did nothing there. They are a
+    /// keybinding mode like any other now.
+    #[test]
+    fn the_image_viewer_is_a_keybinding_mode() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let gif = three_frame_gif();
+        let mut app = App::new(
+            crate::parser::parse_markdown("# t\n"),
+            "t.md".into(),
+            gif.path().with_file_name("t.md"),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+        app.image_modal.path = Some(gif.path().to_path_buf());
+        app.image_modal.frame_delays_ms = vec![20, 20, 20];
+        assert_eq!(app.current_keybinding_mode(), KeybindingMode::ImageViewer);
+
+        let space = app.get_action_for_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(space, Some(Action::TogglePlayback));
+        app.execute_action(Action::TogglePlayback);
+        assert!(app.image_modal.animation_paused);
+
+        // Typed text does not reach a search behind the viewer.
+        assert!(!app.apply_text_input_edit(TextInputEdit::Insert('x')));
+
+        let ctrl_c = app.get_action_for_key(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(matches!(
+            app.execute_action(ctrl_c.unwrap()),
+            ActionResult::Continue
+        ));
+        assert!(!app.is_image_modal_open());
+    }
 }

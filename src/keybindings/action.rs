@@ -219,6 +219,14 @@ pub enum Action {
     NextMatch,
     /// Previous search match
     PrevMatch,
+
+    // === Image Viewer ===
+    /// Show the previous frame of an animation, pausing it
+    PreviousFrame,
+    /// Show the next frame of an animation, pausing it
+    NextFrame,
+    /// Play or pause an animation
+    TogglePlayback,
 }
 
 impl Action {
@@ -357,6 +365,11 @@ impl Action {
             // Doc search
             Action::NextMatch => "Next search match",
             Action::PrevMatch => "Previous search match",
+
+            // Image viewer
+            Action::PreviousFrame => "Previous frame",
+            Action::NextFrame => "Next frame",
+            Action::TogglePlayback => "Play or pause",
         }
     }
 
@@ -464,6 +477,8 @@ impl Action {
             | Action::CommandPaletteNext
             | Action::CommandPalettePrev
             | Action::CommandPaletteAutocomplete => "Command Palette",
+
+            Action::PreviousFrame | Action::NextFrame | Action::TogglePlayback => "Image Viewer",
         }
     }
 }
