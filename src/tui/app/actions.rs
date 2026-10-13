@@ -5,6 +5,10 @@ use super::*;
 impl App {
     /// Get the current keybinding mode based on app state
     pub fn current_keybinding_mode(&self) -> KeybindingMode {
+        // The image viewer covers everything, whatever mode opened it.
+        if self.is_image_modal_open() {
+            return KeybindingMode::ImageViewer;
+        }
         // Check modal states first
         if self.show_help {
             return KeybindingMode::Help;
@@ -506,6 +510,11 @@ impl App {
             // === Doc Search Navigation ===
             NextMatch => self.next_doc_match(),
             PrevMatch => self.prev_doc_match(),
+
+            // === Image Viewer ===
+            PreviousFrame => self.modal_prev_frame(),
+            NextFrame => self.modal_next_frame(),
+            TogglePlayback => self.modal_toggle_animation(),
         }
 
         ActionResult::Continue
@@ -516,7 +525,6 @@ impl App {
         // Close image modal if open
         if self.is_image_modal_open() {
             self.close_image_modal();
-            self.status_message = Some("Image modal closed".to_string());
             return;
         }
 

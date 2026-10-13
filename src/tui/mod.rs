@@ -20,7 +20,7 @@ pub use interactive::InteractiveState;
 pub use terminal_compat::{ColorMode, TerminalCapabilities};
 pub use theme::ThemeName;
 
-use crate::keybindings::Action;
+use crate::keybindings::{Action, KeybindingMode};
 use crate::tui::image_cache::IMAGE_WORK_POLL_INTERVAL;
 use color_eyre::Result;
 use crossterm::ExecutableCommand;
@@ -346,28 +346,6 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         }
 
         if let Some(key) = event.as_key_press_event() {
-            // When image modal is open, handle modal-specific keys
-            if app.is_image_modal_open() {
-                match key.code {
-                    KeyCode::Esc | KeyCode::Char('q') => {
-                        app.close_image_modal();
-                    }
-                    // Manual frame stepping for GIFs
-                    KeyCode::Left | KeyCode::Char('h') => {
-                        app.modal_prev_frame();
-                    }
-                    KeyCode::Right | KeyCode::Char('l') => {
-                        app.modal_next_frame();
-                    }
-                    // Toggle play/pause for GIF animation
-                    KeyCode::Char(' ') => {
-                        app.modal_toggle_animation();
-                    }
-                    _ => {}
-                }
-                continue;
-            }
-
             // A sticky message (error set without a timestamp) stays visible
             // until the user presses a key; dismiss it now. Track the message
             // state so anything set directly during this keypress is marked
@@ -386,7 +364,10 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                 let digit_handled = if let KeyCode::Char(c) = key.code {
                     if c.is_ascii_digit()
                         && key.modifiers.is_empty()
-                        && matches!(app.mode, app::AppMode::Normal | app::AppMode::Interactive)
+                        && matches!(
+                            app.current_keybinding_mode(),
+                            KeybindingMode::Normal | KeybindingMode::Interactive
+                        )
                     {
                         // Special case: '0' without existing count goes to start (like vim)
                         if c == '0' && !app.has_count() {

@@ -235,6 +235,17 @@ After following a link, `b` / `Backspace` and `F` go back and forward from the m
 </details>
 
 <details>
+<summary><strong>Image Viewer</strong> (<code>Enter</code> on an image)</summary>
+
+| Key | Action |
+|-----|--------|
+| `Space` | Play or pause an animated GIF |
+| `h` / `l` or `←` / `→` | Previous / next frame |
+| `Esc` / `q` / `Ctrl+c` | Close the viewer |
+
+</details>
+
+<details>
 <summary><strong>Commands & System</strong></summary>
 
 | Key | Action |
@@ -531,7 +542,7 @@ Remap any key for any mode using intuitive TOML syntax. Multi-key sequences are 
 "Ctrl+p" = "PrevMatch"
 ```
 
-Available modes: `Normal`, `Help`, `ThemePicker`, `Interactive`, `InteractiveTable`, `LinkFollow`, `LinkSearch`, `Search`, `DocSearch`, `CommandPalette`, `ConfirmDialog`, `CellEdit`, `FilePicker`, `FileSearch`
+Available modes: `Normal`, `Help`, `ThemePicker`, `Interactive`, `InteractiveTable`, `LinkFollow`, `LinkSearch`, `Search`, `DocSearch`, `CommandPalette`, `ConfirmDialog`, `CellEdit`, `FilePicker`, `FileSearch`, `ImageViewer`
 
 A binding that names an unknown key or action is skipped, and the rest of the file still applies; the status bar says which entries were skipped.
 

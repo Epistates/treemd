@@ -686,6 +686,11 @@ impl App {
     pub fn apply_text_input_edit(&mut self, edit: TextInputEdit) -> bool {
         use TextInputEdit::*;
 
+        // The image viewer is in front of any search that opened it.
+        if self.is_image_modal_open() {
+            return false;
+        }
+
         // Outline search
         if self.show_search && self.outline_search_active {
             match edit {
