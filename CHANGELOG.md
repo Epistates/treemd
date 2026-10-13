@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A paste into a search or the command palette is held to the field's length**, as typing already was, so a long paste could not become a query that is re-run on every key
 - **CLI misuse is reported instead of answered.** `-L 9` was accepted though there is no level 9; `-q` with `-l` or `-s` silently ignored the other flag; `-l docs/` printed a made-up `# Select a file` heading; extra files were silently ignored; and with no input at all, treemd printed its usage and exited 0. These are errors now (exit 2 for usage, 1 for a directory), and extra files get a warning that only the first is read, in the TUI too. The same goes for any two of `-l`, `--tree`, `-s`, `--count`, `--at-line` and `-q`, where all but one used to be ignored, and for `--filter`, `-L`, `-n` and `-o` without `-l` or `--tree`, which were ignored while the TUI opened. `-l -o tree` prints the tree, as `-o` always listed it could. A file that cannot be read is named in the error
 - **A fetched document stays remote even if the working directory has a directory named `http:`**, and an uppercase `HTTP://` URL is fetched rather than read as a file name. The URL was resolved as a path first, which could make the page count as a local file, its links and images included
 - **Bidirectional override characters in a heading are shown, not applied, when the CLI prints to a terminal.** They reorder how a line is drawn, so a heading could display as something other than what it says
@@ -135,7 +136,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`-e` / `--exit-status`** makes a query that matches nothing exit 1, so a script can tell an empty result from a match. Without it an empty result still exits 0, as jq does
 - **`Ctrl+c` quits**, asking first when there are unsaved edits. Raw mode made it an ordinary key, bound to nothing
 - **`Ctrl+z` suspends to the shell**, and `fg` brings treemd back as it was. Raw mode made it an ordinary key as well. In interactive mode it is still undo
-- **A paste into a search or the command palette is held to the field's length**, as typing already was, so a long paste could not become a query that is re-run on every key
 - **The image viewer's keys can be rebound**, under `[keybindings.ImageViewer]`, with the actions `PreviousFrame`, `NextFrame` and `TogglePlayback`. They were wired into the event loop past the keymap, which is also why `Ctrl+c` did nothing in the viewer; it closes it now, as `Esc` and `q` do
 - **GitHub's heading anchors, as an option.** `slug_style = "github"` under `[content]` makes the anchor `Y` copies, the `id` and `slug` in `-l -o json`, and `.slug` and `slugify` in queries the way github.com does: `_` is kept, and a repeated heading is numbered, so the second `## Setup` is `setup-1`. treemd's own anchors stay the default, under which repeated headings share an `id`
 - **Keys with a dash or a space can be read**: `.fm["draft-of"]`, `.fm."draft-of"` and `.["key"]`. `.fm["key"]` matched nothing, and the other two were parse errors
