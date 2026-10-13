@@ -307,6 +307,9 @@ fn main() -> Result<()> {
         // Install panic hook before entering raw mode so the terminal is
         // restored if anything below panics.
         treemd::tui::tty::install_panic_hook();
+        // And signals, so one arriving while the terminal is set up (the image
+        // probe can take seconds) does not leave it in raw mode.
+        treemd::tui::signals::install();
 
         // Manually initialize to get better error messages
         // Use our custom enable_raw_mode that handles piped stdin

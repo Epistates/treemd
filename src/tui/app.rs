@@ -30,7 +30,7 @@ pub enum ActionResult {
     Quit,
     /// Run an editor on a file, optionally at a specific line
     RunEditor(PathBuf, Option<u32>),
-    /// Redraw the screen (terminal.clear())
+    /// Clear and redraw the whole screen
     Redraw,
     /// Hand the terminal back to the shell until resumed
     Suspend,
