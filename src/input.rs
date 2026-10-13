@@ -3,7 +3,7 @@
 //! Provides robust stdin reading with UTF-8 validation and format detection.
 //! Includes security limits to prevent denial-of-service via large inputs.
 
-use std::io::{self, BufRead, IsTerminal};
+use std::io::{self, IsTerminal, Read};
 use std::path::Path;
 
 /// Maximum input size (100 MB) - prevents memory exhaustion attacks
@@ -39,11 +39,10 @@ impl std::fmt::Display for InputError {
             InputError::NoTty => {
                 write!(f, "No file specified and stdin is not being piped")
             }
-            InputError::InputTooLarge(size) => {
+            InputError::InputTooLarge(_) => {
                 write!(
                     f,
-                    "Input too large: {} bytes (max {} MB)",
-                    size,
+                    "Input too large: over the {} MB limit",
                     MAX_INPUT_SIZE / (1024 * 1024)
                 )
             }
@@ -72,48 +71,52 @@ pub fn is_stdin_piped() -> bool {
     !io::stdin().is_terminal()
 }
 
-/// Read input from stdin with proper error handling
+/// Read all of `reader` as text, refusing more than [`MAX_INPUT_SIZE`] bytes.
 ///
-/// Implements best practices from Rust stdin handling guides:
-/// - Line-by-line buffered reading for performance
-/// - UTF-8 validation
-/// - Proper error propagation
-/// - Size limits to prevent DoS attacks
-pub fn read_stdin() -> Result<String, InputError> {
-    let stdin = io::stdin();
-    let mut handle = stdin.lock();
-    let mut buffer = String::new();
-    let mut total_size = 0usize;
-    let mut line_buffer = String::new();
-
-    loop {
-        line_buffer.clear();
-        let bytes_read = handle.read_line(&mut line_buffer)?;
-
-        // EOF reached
-        if bytes_read == 0 {
-            break;
-        }
-
-        // Check line size limit
-        if line_buffer.len() > MAX_LINE_SIZE {
-            return Err(InputError::LineTooLong(line_buffer.len()));
-        }
-
-        // Check total size limit
-        total_size = total_size.saturating_add(bytes_read);
-        if total_size > MAX_INPUT_SIZE {
-            return Err(InputError::InputTooLarge(total_size));
-        }
-
-        buffer.push_str(&line_buffer);
+/// The size is only known by reading: stdin has none, and `/dev/zero`, a
+/// FIFO or `<(command)` report 0 in their metadata. Reading at most one byte
+/// past the limit is what keeps any of them from filling memory first. Line
+/// by line it did not: a line was read whole before its length was checked,
+/// so a stream without newlines was never stopped.
+fn read_capped(reader: impl Read) -> Result<String, InputError> {
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_INPUT_SIZE as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_INPUT_SIZE {
+        return Err(InputError::InputTooLarge(bytes.len()));
     }
+    String::from_utf8(bytes).map_err(|_| InputError::Utf8Error)
+}
 
-    // Validate UTF-8 (String already enforces this, but explicit check)
+/// Read a markdown file, held to the same limit as stdin.
+///
+/// Everything that opens a document reads it through here: the file named
+/// on the command line, and in the TUI a followed link, the file picker
+/// and a reload.
+pub fn read_file(path: &Path) -> Result<String, InputError> {
+    // A regular file says how big it is, so a huge one is refused without
+    // reading any of it.
+    let size = std::fs::metadata(path)?.len();
+    if size > MAX_INPUT_SIZE as u64 {
+        return Err(InputError::InputTooLarge(
+            usize::try_from(size).unwrap_or(usize::MAX),
+        ));
+    }
+    read_capped(std::fs::File::open(path)?)
+}
+
+/// Read input from stdin, within the size limits.
+pub fn read_stdin() -> Result<String, InputError> {
+    let buffer = read_capped(io::stdin().lock())?;
+    if let Some(longest) = buffer.split('\n').map(str::len).max()
+        && longest > MAX_LINE_SIZE
+    {
+        return Err(InputError::LineTooLong(longest));
+    }
     if buffer.is_empty() {
         return Err(InputError::EmptyInput);
     }
-
     Ok(buffer)
 }
 
@@ -132,16 +135,10 @@ pub fn determine_input_source(file_path: Option<&Path>) -> Result<InputSource, I
             Ok(InputSource::Stdin(content))
         }
         Some(path) => {
-            // File path provided, held to the same limit as stdin: it is read
-            // whole, so a multi-gigabyte file named by mistake (or a device)
-            // would otherwise be read into memory before anything is shown.
-            let size = std::fs::metadata(path).map_err(InputError::Io)?.len();
-            let size = usize::try_from(size).unwrap_or(usize::MAX);
-            if size > MAX_INPUT_SIZE {
-                return Err(InputError::InputTooLarge(size));
-            }
-            let content = std::fs::read_to_string(path).map_err(InputError::Io)?;
-            Ok(InputSource::File(content))
+            // Held to the same limit as stdin: it is read whole, so a
+            // multi-gigabyte file named by mistake (or a device) would
+            // otherwise be read into memory before anything is shown.
+            Ok(InputSource::File(read_file(path)?))
         }
         None if is_stdin_piped() => {
             // No file, but stdin is piped
@@ -208,6 +205,17 @@ mod tests {
         let result = process_input(source).unwrap();
         assert!(result.starts_with("# Input\n\n"));
         assert!(result.contains("Just some plain text"));
+    }
+
+    /// A stream that never ends (`/dev/zero`, a FIFO, stdin) has no size to
+    /// check up front, and reading it line by line never stopped one with
+    /// no newlines. It is cut off just past the limit.
+    #[test]
+    fn an_endless_stream_stops_at_the_limit() {
+        assert!(matches!(
+            read_capped(io::repeat(b'a')),
+            Err(InputError::InputTooLarge(_))
+        ));
     }
 
     /// A file has to stay byte for byte what is on disk, or saving it is

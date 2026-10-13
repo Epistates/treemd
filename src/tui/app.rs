@@ -4879,7 +4879,7 @@ impl App {
     fn open_picked_file(&mut self, file_path: PathBuf) -> Result<(), String> {
         // Read it before touching the history, so a file that fails to open
         // leaves no entry to go back to.
-        let content = std::fs::read_to_string(&file_path)
+        let content = crate::input::read_file(&file_path)
             .map_err(|e| format!("Failed to read file: {}", e))?;
         let document = crate::parser::parse_markdown(&content);
 
@@ -5501,7 +5501,7 @@ impl App {
         let current_scroll = self.content_scroll;
 
         // Reload the file
-        let content = std::fs::read_to_string(&self.current_file_path)
+        let content = crate::input::read_file(&self.current_file_path)
             .map_err(|e| format!("Failed to reload file: {}", e))?;
 
         if content == self.document.content {

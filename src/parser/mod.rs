@@ -62,7 +62,10 @@ pub fn frontmatter_range(content: &str) -> Option<std::ops::Range<usize>> {
 ///
 /// Returns an error if the file cannot be read.
 pub fn parse_file(path: &Path) -> std::io::Result<Document> {
-    let content = std::fs::read_to_string(path)?;
+    let content = crate::input::read_file(path).map_err(|e| match e {
+        crate::input::InputError::Io(e) => e,
+        other => std::io::Error::other(other),
+    })?;
     Ok(parse_markdown(&content))
 }
 
