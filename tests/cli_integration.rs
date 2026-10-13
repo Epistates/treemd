@@ -322,6 +322,22 @@ fn exit_status_reports_whether_the_query_matched() {
     assert_eq!(code, 0);
 }
 
+/// Query errors have jq's codes, 3 to parse and 5 to run. Both were 1, the
+/// code `-e` gives no results, so a script could not tell a typo from an
+/// empty match.
+#[test]
+fn query_errors_have_their_own_exit_codes() {
+    let f = fixture_file();
+    let path = f.to_str().unwrap();
+    let (_, stderr, code) = run(&["-q", ".h2 | | text", "-e", path]);
+    assert_eq!(code, 3, "{stderr}");
+    let (_, stderr, code) = run(&["-q", r#""a" - 1"#, path]);
+    assert_eq!(code, 5, "{stderr}");
+    assert!(stderr.contains("cannot be subtracted"), "{stderr}");
+    let (_, _, code) = run(&["-q", ".h", "--query-output", "xml", path]);
+    assert_eq!(code, 2);
+}
+
 /// `-l docs/` printed a placeholder `# Select a file` heading.
 #[test]
 fn a_directory_in_cli_mode_is_an_error() {

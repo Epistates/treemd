@@ -386,6 +386,9 @@ so a script can tell:
 treemd -q '.h2[Install]' -e README.md || echo "no install section"
 ```
 
+A query that does not parse exits 3, and one that fails while running (such
+as `"a" - 1`) exits 5, as in jq.
+
 #### Stdin Support
 
 ```bash

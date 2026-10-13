@@ -253,7 +253,8 @@ pub struct Cli {
     ///
     /// Without it, a query that matches nothing still exits 0, as jq does,
     /// so a script cannot tell an empty result from a match. With it, the
-    /// exit status says which.
+    /// exit status says which. A query that does not parse exits 3 and one
+    /// that fails while running exits 5, with or without it.
     ///
     /// Example: treemd -q '.h2[Install]' -e README.md || echo "no install section"
     #[arg(short = 'e', long = "exit-status", requires = "query")]

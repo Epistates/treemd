@@ -175,6 +175,11 @@ impl Engine {
     }
 
     /// How the function a pipeline stage calls treats a piped stream.
+    ///
+    /// A stage that starts with a reducing function, as `count > 3` and
+    /// `count + 1` do, reduces too: it compares or adds to the count of the
+    /// whole stream. It used to run once per value, so `.h | count > 3`
+    /// printed `false` for each heading.
     fn stream_mode(&self, stage: &Expr) -> StreamMode {
         match stage {
             Expr::Function { name, .. } if !is_internal_form(name) => self
@@ -182,6 +187,10 @@ impl Engine {
                 .get_function(name)
                 .map(|f| f.stream)
                 .unwrap_or_default(),
+            Expr::Binary { left, .. } => match self.stream_mode(left) {
+                StreamMode::Reduce => StreamMode::Reduce,
+                _ => StreamMode::PerValue,
+            },
             _ => StreamMode::PerValue,
         }
     }
@@ -215,8 +224,12 @@ impl Engine {
                 "_pipe" => args
                     .iter()
                     .fold(input, |s, stage| self.yields_stream(stage, s)),
+                // An index or a slice keeps its target's shape: one array
+                // sliced is one array, and a stream sliced is a stream.
                 "_index" => match args.get(1).map(decode_index_arg) {
-                    Some(IndexOp::Single(_)) => self.yields_stream(&args[0], input),
+                    Some(IndexOp::Single(_) | IndexOp::Slice { .. }) => {
+                        self.yields_stream(&args[0], input)
+                    }
                     _ => true,
                 },
                 _ => match self.stream_mode(expr) {
@@ -224,6 +237,7 @@ impl Engine {
                     StreamMode::Reduce => false,
                 },
             },
+            Expr::Binary { .. } if self.stream_mode(expr) == StreamMode::Reduce => false,
             _ => input,
         }
     }
@@ -561,6 +575,11 @@ impl Engine {
 
         if let Some(value) = current.get_property(name) {
             Ok(vec![value])
+        } else if current.as_map().is_some() || matches!(current, Value::Null) {
+            // A key that is not there is null, as in jq, so `.fm.draft //
+            // false` works on a page without `draft`. An element's
+            // properties are fixed, and a wrong one is still an error.
+            Ok(vec![Value::Null])
         } else {
             Err(QueryError::new(
                 QueryErrorKind::PropertyNotFound {
@@ -665,9 +684,11 @@ impl Engine {
     ///
     /// When every value of the target is an array, each one is indexed in
     /// turn, as jq does, so `.table[0].rows[][0]` is the first cell of every
-    /// row. Indexing the stream instead gave the first row. When the values
-    /// are not arrays, as in `(.h | select(.level == 2))[0]`, the stream
-    /// itself is indexed. Negative indices count from the end either way.
+    /// row. Indexing the stream instead gave the first row. As in jq, a
+    /// slice of an array is an array, and an index past either end is
+    /// `null`. Strings slice by character. When the values are neither, as
+    /// in `(.h | select(.level == 2))[0]`, the stream itself is indexed.
+    /// Negative indices count from the end either way.
     fn eval_index(&mut self, target: &Expr, index_arg: &Expr) -> Result<Vec<Value>, QueryError> {
         let target_vals = self.eval_expr(target)?;
         let index = decode_index_arg(index_arg);
@@ -676,8 +697,36 @@ impl Engine {
             let mut results = Vec::new();
             for value in target_vals {
                 if let Value::Array(items) = value {
-                    results.extend(apply_index(items, &index)?);
+                    match index {
+                        IndexOp::Single(_) => {
+                            results.push(apply_index(items, &index)?.pop().unwrap_or(Value::Null))
+                        }
+                        IndexOp::Slice { .. } => {
+                            results.push(Value::Array(apply_index(items, &index)?));
+                        }
+                        IndexOp::Iterate => results.extend(items),
+                    }
                 }
+            }
+            return Ok(results);
+        }
+
+        if let IndexOp::Slice { .. } = index
+            && !target_vals.is_empty()
+            && target_vals.iter().all(|v| matches!(v, Value::String(_)))
+        {
+            let mut results = Vec::new();
+            for value in target_vals {
+                let chars = value
+                    .to_text()
+                    .chars()
+                    .map(|c| Value::String(c.to_string()))
+                    .collect();
+                let kept: String = apply_index(chars, &index)?
+                    .iter()
+                    .map(Value::to_text)
+                    .collect();
+                results.push(Value::String(kept));
             }
             return Ok(results);
         }
@@ -834,8 +883,8 @@ impl Engine {
             BinaryOp::Ge => Value::Bool(left_val.sort_cmp(&right_val).is_ge()),
             BinaryOp::And => Value::Bool(left_val.is_truthy() && right_val.is_truthy()),
             BinaryOp::Or => Value::Bool(left_val.is_truthy() || right_val.is_truthy()),
-            BinaryOp::Add => add_values(&left_val, &right_val),
-            BinaryOp::Sub => sub_values(&left_val, &right_val),
+            BinaryOp::Add => add_values(&left_val, &right_val)?,
+            BinaryOp::Sub => sub_values(&left_val, &right_val)?,
             BinaryOp::Mul => mul_values(&left_val, &right_val)?,
             BinaryOp::Div => div_values(&left_val, &right_val)?,
             BinaryOp::Mod => mod_values(&left_val, &right_val)?,
@@ -862,13 +911,19 @@ impl Engine {
 
         let result = match op {
             UnaryOp::Not => Value::Bool(!val.is_truthy()),
-            UnaryOp::Neg => {
-                if let Value::Number(n) = val {
-                    Value::Number(-n)
-                } else {
-                    Value::Null
+            UnaryOp::Neg => match val {
+                Value::Number(n) => Value::Number(-n),
+                other => {
+                    return Err(QueryError::new(
+                        QueryErrorKind::InvalidOperation(format!(
+                            "{} cannot be negated",
+                            other.kind()
+                        )),
+                        Span::default(),
+                        String::new(),
+                    ));
                 }
-            }
+            },
         };
 
         Ok(vec![result])
@@ -1346,8 +1401,43 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-fn add_values(a: &Value, b: &Value) -> Value {
-    match (a, b) {
+/// jq's error for an operator its operands do not support:
+/// `string ("a") and number (1) cannot be subtracted`. These used to give
+/// `null`, or for `+` the two values' text run together, so `{} + 1` was
+/// `{}1` and a typo in a query passed as a result.
+fn cannot(a: &Value, b: &Value, done: &str) -> QueryError {
+    let describe = |v: &Value| {
+        let mut json = v.to_json().to_string();
+        if json.len() > 20 {
+            let cut = (0..=17)
+                .rev()
+                .find(|&i| json.is_char_boundary(i))
+                .unwrap_or(0);
+            json.truncate(cut);
+            json.push_str("...");
+        }
+        format!("{} ({json})", v.kind())
+    };
+    let mut error = QueryError::new(
+        QueryErrorKind::InvalidOperation(format!(
+            "{} and {} cannot be {done}",
+            describe(a),
+            describe(b)
+        )),
+        Span::default(),
+        String::new(),
+    );
+    if done == "added" && (matches!(a, Value::String(_)) || matches!(b, Value::String(_))) {
+        error = error.with_help("turn a value into text first: (.level | tostring)");
+    }
+    error
+}
+
+/// `+` as jq has it: numbers add, strings, arrays and objects join, and
+/// `null` adds nothing.
+fn add_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
+    Ok(match (a, b) {
+        (Value::Null, other) | (other, Value::Null) => other.clone(),
         (Value::Number(a), Value::Number(b)) => Value::Number(a + b),
         (Value::String(a), Value::String(b)) => Value::String(format!("{}{}", a, b)),
         (Value::Array(a), Value::Array(b)) => {
@@ -1355,14 +1445,30 @@ fn add_values(a: &Value, b: &Value) -> Value {
             result.extend(b.clone());
             Value::Array(result)
         }
-        _ => Value::String(format!("{}{}", a.to_text(), b.to_text())),
-    }
+        // Keys from the right replace the left's.
+        _ => match (a.as_map(), b.as_map()) {
+            (Some(left), Some(right)) => {
+                let mut merged = left.clone();
+                merged.extend(right.iter().map(|(k, v)| (k.clone(), v.clone())));
+                Value::Object(merged)
+            }
+            _ => return Err(cannot(a, b, "added")),
+        },
+    })
 }
 
-fn sub_values(a: &Value, b: &Value) -> Value {
+/// `-` as jq has it: numbers subtract, and an array loses every item that
+/// is in the other.
+fn sub_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => Value::Number(a - b),
-        _ => Value::Null,
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
+        (Value::Array(a), Value::Array(b)) => Ok(Value::Array(
+            a.iter()
+                .filter(|item| !b.iter().any(|gone| values_equal(item, gone)))
+                .cloned()
+                .collect(),
+        )),
+        _ => Err(cannot(a, b, "subtracted")),
     }
 }
 
@@ -1399,41 +1505,59 @@ fn mul_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
             }
             Ok(Value::String(s.repeat(count)))
         }
-        _ => Ok(Value::Null),
+        _ => Err(cannot(a, b, "multiplied")),
     }
 }
 
+fn division_by_zero() -> QueryError {
+    QueryError::new(
+        QueryErrorKind::DivisionByZero,
+        Span::default(),
+        String::new(),
+    )
+}
+
+/// `/` as jq has it: numbers divide, and a string divided by a string is
+/// split on it.
 fn div_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => {
-            if *b == 0.0 {
-                Err(QueryError::new(
-                    QueryErrorKind::DivisionByZero,
-                    Span::default(),
-                    String::new(),
-                ))
-            } else {
-                Ok(Value::Number(a / b))
-            }
-        }
-        _ => Ok(Value::Null),
+        (Value::Number(_), Value::Number(b)) if *b == 0.0 => Err(division_by_zero()),
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a / b)),
+        (Value::String(text), Value::String(sep)) => Ok(split_text(text, sep)),
+        _ => Err(cannot(a, b, "divided")),
     }
 }
 
+/// `text` split at each `sep` into an array, as jq's `/` and `split` do: an
+/// empty `sep` splits into characters, and empty text into nothing. Rust's
+/// `split("")` gave an empty string at each end.
+pub(crate) fn split_text(text: &str, sep: &str) -> Value {
+    let parts: Vec<Value> = if text.is_empty() {
+        Vec::new()
+    } else if sep.is_empty() {
+        text.chars().map(|c| Value::String(c.to_string())).collect()
+    } else {
+        text.split(sep)
+            .map(|s| Value::String(s.to_string()))
+            .collect()
+    };
+    Value::Array(parts)
+}
+
+/// `%` as jq has it: both sides are cut to whole numbers first, so
+/// `5.9 % 3` is `2`, where the float remainder was `2.9000000000000004`.
 fn mod_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
     match (a, b) {
         (Value::Number(a), Value::Number(b)) => {
-            if *b == 0.0 {
-                Err(QueryError::new(
-                    QueryErrorKind::DivisionByZero,
-                    Span::default(),
-                    String::new(),
-                ))
+            // `as` saturates, so a huge or infinite operand stays in range.
+            let (a, b) = (*a as i64, *b as i64);
+            if b == 0 {
+                Err(division_by_zero())
             } else {
-                Ok(Value::Number(a % b))
+                Ok(Value::Number(a.wrapping_rem(b) as f64))
             }
         }
-        _ => Ok(Value::Null),
+        _ => Err(cannot(a, b, "divided")),
     }
 }
 

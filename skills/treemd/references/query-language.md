@@ -2,7 +2,8 @@
 
 A jq-like query language for navigating and extracting markdown structure.
 Results print one per line. A selector that matches nothing prints nothing and
-exits `0`.
+exits `0`. A query that does not parse exits `3`, and one that fails while
+running exits `5`.
 
 ## Element Selectors
 
@@ -29,8 +30,10 @@ matter's `image`.
 
 ```
 .h2[Features]        # h2s whose text contains "Features" (case-insensitive)
+.h2[Getting Started] # A bare filter can hold spaces and punctuation
 .h2["Install"]       # h2s whose whole text is "Install" (case-insensitive)
 .code[rust]          # Code blocks by language (whole name, case-insensitive)
+.code[c++]           # Also .code[c#], .code[objective-c]
 .link[external]      # Links by type: external, anchor, relative, wikilink
 .h2[0]               # First h2
 .h2[-1]              # Last h2
@@ -38,10 +41,13 @@ matter's `image`.
 .h2[:3]              # First 3 h2s
 .h2[]                # Every h2
 .table[0].rows[][0]  # First cell of every row
+.fm["draft-of"]      # A key with a dash; also .fm."draft-of"
+.fm.tags[1:]         # A slice of an array is an array, as in jq
 ```
 
 `[external]` and the other link types filter by type only on links; on
-headings they are ordinary text filters.
+headings they are ordinary text filters. A key that is missing from front
+matter or an object is `null`, so `.fm.draft // false` works.
 
 ## Hierarchy Operators
 
@@ -169,8 +175,8 @@ the whole document.
 | -------------------- | ----------------------------------------------------------- |
 | `==`, `!=`           | Equality; values of different types are never equal         |
 | `<`, `<=`, `>`, `>=` | Compare; across types, jq's order (null < bool < number < string < array < object) |
-| `and`, `or`, `not`   | Logic                                                       |
-| `+ - * / %`          | Arithmetic; `+` also joins strings and arrays               |
+| `and`, `or`, `not`   | Logic; `not .level == 2` is `not (.level == 2)`             |
+| `+ - * / %`          | Arithmetic as in jq: `+` joins strings, arrays and objects, `-` removes array items, `/` splits a string. Other types are an error (exit `5`); `"x" + (.level \| tostring)` |
 | `a // b`             | `a`, or `b` when `a` is null, false, `0` or empty           |
 
 ## Construction & Conditionals

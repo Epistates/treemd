@@ -685,12 +685,18 @@ fn handle_query_mode(
         .transpose()
         .map_err(|e| {
             eprintln!("Error: {}", e);
-            process::exit(1);
+            process::exit(2);
         })?
         .unwrap_or(OutputFormat::Plain);
 
-    // Execute query
-    match query::execute(doc, query_str) {
+    // jq's exit codes: 3 for a query that does not parse, 5 for one that
+    // fails while running. Both were 1, which `--exit-status` also uses for
+    // no results, so a script could not tell a typo from an empty match.
+    let parsed = query::parse(query_str).unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        process::exit(3);
+    });
+    match query::engine(doc).execute(&parsed) {
         Ok(results) => {
             // No results prints nothing, like jq, except as JSON, which is
             // always one array so a consumer can parse it the same way
@@ -708,7 +714,7 @@ fn handle_query_mode(
         }
         Err(e) => {
             eprintln!("{}", e);
-            process::exit(1);
+            process::exit(5);
         }
     }
 }
@@ -719,7 +725,8 @@ treemd Query Language (tql)
 
 A jq-like query language for navigating and extracting markdown structure.
 Results print one per line; a selector that matches nothing prints nothing
-(`[]` with --query-output json) and exits 0.
+(`[]` with --query-output json) and exits 0. A query that does not parse
+exits 3, and one that fails while running exits 5.
 
 ELEMENT SELECTORS
     .h, .heading        All headings (any level)
@@ -741,8 +748,10 @@ ELEMENT SELECTORS
 
 FILTERS & INDEXING
     .h2[Features]       h2s whose text contains "Features" (case-insensitive)
+    .h2[Getting Started] A bare filter runs to the ], spaces included
     .h2["Install"]      h2s whose whole text is "Install" (case-insensitive)
     .code[rust]         Code blocks by language (whole name, case-insensitive)
+    .code[c++]          Also .code[c#], .code[objective-c]
     .link[external]     Links by type: external, anchor, relative, wikilink
     .h2[0]              First h2
     .h2[-1]             Last h2
@@ -750,6 +759,8 @@ FILTERS & INDEXING
     .h2[:3]             First 3 h2s
     .h2[]               Every h2
     .table[0].rows[][0] After a stream of arrays, an index applies to each
+    .fm.tags[1:]        A slice of an array is an array, as in jq
+    .fm["draft-of"]     A key with a dash; also .fm."draft-of"
 
 HIERARCHY
     .h1 > .h2           h2s directly under each h1
@@ -768,7 +779,7 @@ PROPERTIES
     lists       .items .ordered
     paragraphs  .text        blockquotes  .text
     document    .heading_count .word_count .text
-    objects     .key, for any key (also front matter)
+    objects     .key, for any key (also front matter); a missing key is null
 
 PIPES
     .h2 | text          Heading text (strips ##)
@@ -781,7 +792,8 @@ PIPES
     nth, limit, skip, sort, sort_by, unique, reverse, group_by, join, min,
     max, add, any, all, levels, langs, types. Given a single array, as in
     `[.h2] | count`, they work on that array. Ordering functions (sort,
-    sort_by, unique, reverse, limit, skip) hand back a stream.
+    sort_by, unique, reverse, limit, skip) hand back a stream. A stage that
+    starts with one works on the whole stream too: `.h | count > 3`.
 
 COLLECTION FUNCTIONS
     count, length       Count values (alias: len, size)
@@ -841,9 +853,11 @@ OPERATORS
     ==, !=              Equality; values of different types are never equal
     <, <=, >, >=        Comparison; across types, jq's order: null <
                         booleans < numbers < strings < arrays < objects
-    and, or, not        Logic
-    +, -, *, /, %       Arithmetic; + also joins strings and arrays,
-                        "ab" * 3 repeats a string
+    and, or, not        Logic; `not .level == 2` is `not (.level == 2)`
+    +, -, *, /, %       Arithmetic as in jq: + joins strings, arrays and
+                        objects, - removes array items, / splits a string,
+                        "ab" * 3 repeats it. Other types are an error:
+                        "x" + (.level | tostring)
     a // b              a, or b when a is null, false, 0 or empty
     ( )                 Grouping
 
