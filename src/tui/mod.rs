@@ -284,6 +284,11 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                     // own save arriving after the suppression window) — ignore.
                     Ok(false) => {}
                     Ok(true) => {
+                        // Lay the reloaded section out as any section is,
+                        // which indexes its elements: skipping this left the
+                        // whole document's elements, which inline images
+                        // were placed by. The scroll is put back after.
+                        app.update_content_metrics();
                         // Re-index interactive elements if in interactive mode
                         if was_interactive {
                             app.reindex_interactive_elements();
@@ -298,8 +303,6 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         app.content_scroll = saved_scroll.min(app.max_content_scroll());
                         app.content_scroll_state =
                             app.content_scroll_state.position(app.content_scroll);
-                        // Sync previous_selection to prevent update_content_metrics() from resetting scroll
-                        app.sync_previous_selection();
 
                         app.status_message = Some("↻ File reloaded (external change)".to_string());
                         needs_redraw = true;
@@ -412,6 +415,9 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                             } else {
                                 app.execute_action(action)
                             };
+                            // A count applies to the action right after it.
+                            // Left over, `3`, Enter, `j` moved three rows.
+                            app.clear_count();
                             match result {
                                 ActionResult::Quit => return Ok(()),
                                 ActionResult::RunEditor(path, line) => {
@@ -498,6 +504,17 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
     // Next and Previous, it moved the content behind an open help screen,
     // palette or picker.
     if app.is_image_modal_open() {
+        return;
+    }
+    // In search, Up and Down step through the matches, which is not what a
+    // wheel is for; it scrolls the text there.
+    if app.mode == app::AppMode::DocSearch {
+        let action = match mouse.kind {
+            MouseEventKind::ScrollDown => crate::keybindings::Action::ScrollDown,
+            MouseEventKind::ScrollUp => crate::keybindings::Action::ScrollUp,
+            _ => return,
+        };
+        let _ = app.execute_action(action);
         return;
     }
     let key = match mouse.kind {

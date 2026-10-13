@@ -389,6 +389,19 @@ mod tests {
             }
         }
     }
+    /// Raw mode makes Ctrl+C an ordinary key. Bound in Normal mode only, it
+    /// did nothing anywhere else.
+    #[test]
+    fn ctrl_c_is_bound_in_every_mode() {
+        use strum::IntoEnumIterator;
+
+        let mut kb = Keybindings::default();
+        for mode in KeybindingMode::iter() {
+            let event = make_key_event(KeyCode::Char('c'), KeyModifiers::CONTROL);
+            assert!(kb.dispatch(mode, event).is_some(), "{mode:?}");
+        }
+    }
+
     use crossterm::event::{KeyCode, KeyEventKind, KeyEventState, KeyModifiers};
 
     fn make_key_event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {

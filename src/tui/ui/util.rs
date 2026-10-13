@@ -688,10 +688,21 @@ pub fn strip_latex(content: &str) -> String {
         .map(collapse_inner_spaces)
         .collect();
 
-    // Restore protected code spans and fenced code blocks
-    for (idx, original) in code_placeholders.iter().enumerate() {
-        result = result.replace(&format!("\x00CODE{idx}\x00"), original);
-    }
+    // Restore protected code spans and fenced code blocks, in one pass. A
+    // replace over the whole text per span was quadratic: a large section
+    // full of inline code took seconds to show.
+    static PLACEHOLDER: OnceLock<Regex> = OnceLock::new();
+    let placeholder = PLACEHOLDER.get_or_init(|| Regex::new("\x00CODE([0-9]+)\x00").unwrap());
+    result = placeholder
+        .replace_all(&result, |caps: &Captures| {
+            caps[1]
+                .parse::<usize>()
+                .ok()
+                .and_then(|idx| code_placeholders.get(idx))
+                .cloned()
+                .unwrap_or_default()
+        })
+        .into_owned();
 
     result
 }

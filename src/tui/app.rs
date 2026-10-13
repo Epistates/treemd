@@ -18,6 +18,29 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Which heading this is, in a way that survives a reload: its text, and how
+/// many headings before it have the same text.
+///
+/// By text alone, headings that share a name were one heading: collapsing
+/// one `### Added` in a changelog collapsed every one, the open-todo filter
+/// kept them all, and a bookmark marked them all and went to the first.
+type HeadingKey = (String, usize);
+
+/// The [`HeadingKey`] of every heading, in heading order.
+fn heading_keys(document: &Document) -> Vec<HeadingKey> {
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    document
+        .headings
+        .iter()
+        .map(|heading| {
+            let count = seen.entry(heading.text.as_str()).or_insert(0);
+            let key = (heading.text.clone(), *count);
+            *count += 1;
+            key
+        })
+        .collect()
+}
+
 /// A file's modified time and length, to tell whether it changed since it
 /// was read. `None` when it cannot be read.
 type FileStamp = Option<(std::time::SystemTime, u64)>;
@@ -601,9 +624,11 @@ pub struct App {
     /// Used to protect power users' custom config values from being overwritten.
     /// Standard values are 20, 30, 40; anything else is considered custom.
     config_has_custom_outline_width: bool,
-    pub bookmark_position: Option<String>, // Bookmarked heading text (was: outline position)
-    collapsed_headings: HashSet<String>,   // Track which headings are collapsed by text
-    pub filter_by_todos: bool,             // Filter outline to show only headings with open todos
+    /// The bookmarked heading (or the document overview, by its text).
+    pub bookmark_position: Option<HeadingKey>,
+    /// The headings whose children are hidden in the outline.
+    collapsed_headings: HashSet<HeadingKey>,
+    pub filter_by_todos: bool, // Filter outline to show only headings with open todos
     pub current_theme: ThemeName,
     pub theme: Theme,
     pub show_theme_picker: bool,
@@ -792,7 +817,8 @@ impl App {
     ) -> Self {
         let tree = document.build_tree();
         let collapsed_headings = HashSet::new();
-        let mut outline_items = Self::flatten_tree(&tree, &collapsed_headings);
+        let mut outline_items =
+            Self::flatten_tree(&tree, &collapsed_headings, &heading_keys(&document));
 
         // Add document overview entry if there's preamble content or no headings
         let has_preamble = Self::has_preamble_content(&document);
@@ -1969,18 +1995,44 @@ impl App {
                     }
                 }
             }
+            // These keys are shared by Normal, Help and Interactive mode,
+            // and act on what that mode shows. In help and interactive mode
+            // `g` and `G` used to move the outline behind them, switching
+            // section, after which Enter acted on an element from the old
+            // one; and PageUp and PageDown did nothing in interactive mode.
             First => {
                 self.clear_count();
-                self.first();
+                if self.show_help {
+                    self.help_scroll = 0;
+                } else if self.mode == AppMode::Interactive {
+                    self.select_interactive_end(false);
+                } else if self.mode == AppMode::DocSearch {
+                    self.content_scroll = 0;
+                } else {
+                    self.first();
+                }
             }
             Last => {
                 self.clear_count();
-                self.last();
+                if self.show_help {
+                    self.help_scroll = self.help_max_scroll;
+                } else if self.mode == AppMode::Interactive {
+                    self.select_interactive_end(true);
+                } else if self.mode == AppMode::DocSearch {
+                    self.content_scroll = self.max_content_scroll();
+                } else {
+                    self.last();
+                }
             }
             PageDown => {
                 self.clear_count();
                 if self.show_help {
                     self.scroll_help_page_down();
+                } else if self.mode == AppMode::Interactive {
+                    self.scroll_page_down_interactive();
+                    self.select_element_at_scroll();
+                } else if self.mode == AppMode::DocSearch {
+                    self.scroll_page_down_interactive();
                 } else {
                     self.scroll_page_down();
                 }
@@ -1989,13 +2041,25 @@ impl App {
                 self.clear_count();
                 if self.show_help {
                     self.scroll_help_page_up();
+                } else if self.mode == AppMode::Interactive {
+                    self.scroll_page_up_interactive();
+                    self.select_element_at_scroll();
+                } else if self.mode == AppMode::DocSearch {
+                    self.scroll_page_up_interactive();
                 } else {
                     self.scroll_page_up();
                 }
             }
             JumpToParent => {
                 self.clear_count();
-                self.jump_to_parent();
+                // In link mode the links listed have to follow the section,
+                // or the picker kept the child section's links while the
+                // pane showed the parent.
+                if self.mode == AppMode::LinkFollow {
+                    self.jump_to_parent_links();
+                } else {
+                    self.jump_to_parent();
+                }
             }
 
             // === Outline ===
@@ -2945,7 +3009,7 @@ impl App {
     }
 
     /// Build a set of heading texts that have open todos (directly or in descendants)
-    fn headings_with_open_todos(&self) -> HashSet<String> {
+    fn headings_with_open_todos(&self) -> HashSet<usize> {
         let mut result = HashSet::new();
         for node in &self.tree {
             self.collect_headings_with_todos(node, &mut result);
@@ -2954,10 +3018,10 @@ impl App {
     }
 
     /// Recursively collect headings that should be shown when filtering by todos
-    fn collect_headings_with_todos(&self, node: &HeadingNode, result: &mut HashSet<String>) {
+    fn collect_headings_with_todos(&self, node: &HeadingNode, result: &mut HashSet<usize>) {
         if self.heading_tree_has_open_todos(node) {
             // This heading or a descendant has todos, include it
-            result.insert(node.heading.text.clone());
+            result.insert(node.index);
             // Also recursively add children that have todos
             for child in &node.children {
                 self.collect_headings_with_todos(child, result);
@@ -2967,12 +3031,19 @@ impl App {
 
     /// Rebuild outline items from the tree, optionally adding document overview
     fn rebuild_outline_items(&mut self) {
-        let mut items = Self::flatten_tree(&self.tree, &self.collapsed_headings);
+        let mut items = Self::flatten_tree(
+            &self.tree,
+            &self.collapsed_headings,
+            &heading_keys(&self.document),
+        );
 
         // Apply todo filter if enabled
         if self.filter_by_todos {
             let headings_with_todos = self.headings_with_open_todos();
-            items.retain(|item| headings_with_todos.contains(&item.text));
+            items.retain(|item| {
+                item.heading_index
+                    .is_some_and(|index| headings_with_todos.contains(&index))
+            });
         }
 
         self.outline_items = items;
@@ -3009,16 +3080,20 @@ impl App {
 
     fn flatten_tree(
         tree: &[HeadingNode],
-        collapsed_headings: &HashSet<String>,
+        collapsed_headings: &HashSet<HeadingKey>,
+        keys: &[HeadingKey],
     ) -> Vec<OutlineItem> {
         let mut items = Vec::new();
 
         fn flatten_recursive(
             node: &HeadingNode,
             items: &mut Vec<OutlineItem>,
-            collapsed_headings: &HashSet<String>,
+            collapsed_headings: &HashSet<HeadingKey>,
+            keys: &[HeadingKey],
         ) {
-            let is_collapsed = collapsed_headings.contains(&node.heading.text);
+            let is_collapsed = keys
+                .get(node.index)
+                .is_some_and(|key| collapsed_headings.contains(key));
             let expanded = !is_collapsed;
             let has_children = !node.children.is_empty();
 
@@ -3033,13 +3108,13 @@ impl App {
             // Only show children if this node is expanded
             if expanded {
                 for child in &node.children {
-                    flatten_recursive(child, items, collapsed_headings);
+                    flatten_recursive(child, items, collapsed_headings, keys);
                 }
             }
         }
 
         for node in tree {
-            flatten_recursive(node, &mut items, collapsed_headings);
+            flatten_recursive(node, &mut items, collapsed_headings, keys);
         }
 
         items
@@ -3090,6 +3165,12 @@ impl App {
             // Reset content scroll when selection changes
             self.content_scroll = 0;
             self.previous_selection = current_selection;
+
+            // Per-element state (a table's cursor, an expanded `<details>`)
+            // is keyed by the element's place in its section, so another
+            // section's element in the same place inherited it: a cursor on
+            // a cell its table does not have, a block shown expanded.
+            self.interactive_state.element_states.clear();
 
             // Reindex interactive elements for the new section
             let content_text = self.displayed_section_content().to_string();
@@ -3330,7 +3411,9 @@ impl App {
             let query_lower = self.search_query.to_lowercase();
             let has_preamble = Self::has_preamble_content(&self.document);
 
-            self.outline_items = Self::flatten_tree(&self.tree, &self.collapsed_headings)
+            // Every heading, collapsed parents or not: a match under a
+            // collapsed heading was not found at all.
+            self.outline_items = Self::flatten_tree(&self.tree, &HashSet::new(), &[])
                 .into_iter()
                 .filter(|item| item.text.to_lowercase().contains(&query_lower))
                 .collect();
@@ -3628,20 +3711,70 @@ impl App {
     }
 
     pub fn scroll_page_down(&mut self) {
+        let page = usize::from(self.content_viewport_height.saturating_sub(2).max(1));
         if self.focus == Focus::Content {
-            let page = usize::from(self.content_viewport_height.saturating_sub(2).max(1));
             let new_scroll = self.content_scroll.saturating_add(page);
             self.content_scroll = new_scroll.min(self.max_content_scroll());
             self.content_scroll_state = self.content_scroll_state.position(self.content_scroll);
+        } else {
+            self.page_outline(page as isize);
         }
     }
 
     pub fn scroll_page_up(&mut self) {
+        let page = usize::from(self.content_viewport_height.saturating_sub(2).max(1));
         if self.focus == Focus::Content {
-            let page = usize::from(self.content_viewport_height.saturating_sub(2).max(1));
             self.content_scroll = self.content_scroll.saturating_sub(page);
             self.content_scroll_state = self.content_scroll_state.position(self.content_scroll);
+        } else {
+            self.page_outline(-(page as isize));
         }
+    }
+
+    /// Move the outline selection by `rows`, clamped to the outline. With the
+    /// outline focused, PageUp and PageDown did nothing at all.
+    fn page_outline(&mut self, rows: isize) {
+        let Some(last) = self.outline_items.len().checked_sub(1) else {
+            return;
+        };
+        let current = self.outline_state.selected().unwrap_or(0);
+        self.select_outline_index(current.saturating_add_signed(rows).min(last));
+    }
+
+    /// Select the first or the last interactive element, and show it.
+    fn select_interactive_end(&mut self, last: bool) {
+        let Some(final_index) = self.interactive_state.elements.len().checked_sub(1) else {
+            return;
+        };
+        self.interactive_state.current_index = Some(if last { final_index } else { 0 });
+        self.scroll_to_interactive_element(self.content_viewport_height);
+    }
+
+    /// Select the interactive element nearest the top of the view: the first
+    /// one drawn on or below the top row, or failing that the last one.
+    ///
+    /// Elements are compared by the rows they are drawn on. Their counted
+    /// lines know nothing of wrapping, and compared with the scroll row,
+    /// which does, below a few wrapped paragraphs `i` picked an element
+    /// pages further down and scrolled away from what was on screen.
+    fn select_element_at_scroll(&mut self) {
+        let top = self.content_scroll;
+        let starts: Option<Vec<usize>> = self
+            .interactive_state
+            .elements
+            .iter()
+            .map(|element| self.element_rows(element).map(|(start, _)| start))
+            .collect();
+        let Some(starts) = starts else {
+            // Not laid out yet; the counted lines are the best there is.
+            self.interactive_state.enter_at_scroll_position(top);
+            return;
+        };
+        self.interactive_state.current_index = starts
+            .iter()
+            .position(|&start| start >= top)
+            .or_else(|| starts.len().checked_sub(1));
+        self.scroll_to_interactive_element(self.content_viewport_height);
     }
 
     /// Scroll page down in interactive mode (bypasses focus check)
@@ -3725,12 +3858,13 @@ impl App {
         {
             let heading_text = self.outline_items[i].text.clone();
             let heading_idx = self.outline_items[i].heading_index;
+            let Some(key) = heading_idx.and_then(|index| self.heading_key(index)) else {
+                return;
+            };
 
             // Toggle the collapsed state
-            if self.collapsed_headings.contains(&heading_text) {
-                self.collapsed_headings.remove(&heading_text);
-            } else {
-                self.collapsed_headings.insert(heading_text.clone());
+            if !self.collapsed_headings.remove(&key) {
+                self.collapsed_headings.insert(key);
             }
 
             // Rebuild the flattened list with overview entry
@@ -3757,7 +3891,9 @@ impl App {
             let heading_idx = self.outline_items[i].heading_index;
 
             // Remove from collapsed set to expand
-            self.collapsed_headings.remove(&heading_text);
+            if let Some(key) = heading_idx.and_then(|index| self.heading_key(index)) {
+                self.collapsed_headings.remove(&key);
+            }
 
             // Rebuild the flattened list with overview entry
             self.rebuild_outline_items();
@@ -3785,7 +3921,9 @@ impl App {
 
             // If current heading has children, collapse it
             if self.outline_items[i].has_children {
-                self.collapsed_headings.insert(current_text.clone());
+                if let Some(key) = current_heading_idx.and_then(|index| self.heading_key(index)) {
+                    self.collapsed_headings.insert(key);
+                }
 
                 // Rebuild the flattened list with overview entry
                 self.rebuild_outline_items();
@@ -3814,7 +3952,10 @@ impl App {
 
                 if let Some(parent) = parent_text {
                     // Collapse the parent
-                    self.collapsed_headings.insert(parent.clone());
+                    if let Some(key) = parent_heading_idx.and_then(|index| self.heading_key(index))
+                    {
+                        self.collapsed_headings.insert(key);
+                    }
 
                     // Rebuild and move selection to parent
                     self.rebuild_outline_items();
@@ -3835,15 +3976,18 @@ impl App {
 
     /// Collapse all headings that have children
     pub fn collapse_all(&mut self) {
-        // Collect all heading texts that have children
-        let headings_to_collapse: Vec<String> = self
+        // Collect all headings that have children
+        let keys = heading_keys(&self.document);
+        let headings_to_collapse: Vec<usize> = self
             .tree
             .iter()
             .flat_map(Self::collect_collapsible_headings)
             .collect();
 
-        for text in headings_to_collapse {
-            self.collapsed_headings.insert(text);
+        for index in headings_to_collapse {
+            if let Some(key) = keys.get(index) {
+                self.collapsed_headings.insert(key.clone());
+            }
         }
 
         // Rebuild outline and preserve selection
@@ -3863,11 +4007,11 @@ impl App {
         self.set_status_message(&format!("Collapsed {} headings", count));
     }
 
-    /// Recursively collect all heading texts that have children
-    fn collect_collapsible_headings(node: &HeadingNode) -> Vec<String> {
+    /// Recursively collect all headings that have children
+    fn collect_collapsible_headings(node: &HeadingNode) -> Vec<usize> {
         let mut result = Vec::new();
         if !node.children.is_empty() {
-            result.push(node.heading.text.clone());
+            result.push(node.index);
             for child in &node.children {
                 result.extend(Self::collect_collapsible_headings(child));
             }
@@ -3897,15 +4041,18 @@ impl App {
     /// Collapse all headings at a specific level (1-6)
     pub fn collapse_level(&mut self, level: usize) {
         // Collect all headings at the target level that have children
-        let headings_to_collapse: Vec<String> = self
+        let keys = heading_keys(&self.document);
+        let headings_to_collapse: Vec<usize> = self
             .tree
             .iter()
             .flat_map(|node| Self::collect_headings_at_level_with_children(node, level))
             .collect();
 
         let count = headings_to_collapse.len();
-        for text in headings_to_collapse {
-            self.collapsed_headings.insert(text);
+        for index in headings_to_collapse {
+            if let Some(key) = keys.get(index) {
+                self.collapsed_headings.insert(key.clone());
+            }
         }
 
         // Rebuild outline and preserve selection
@@ -3927,11 +4074,11 @@ impl App {
     fn collect_headings_at_level_with_children(
         node: &HeadingNode,
         target_level: usize,
-    ) -> Vec<String> {
+    ) -> Vec<usize> {
         let mut result = Vec::new();
 
         if node.heading.level == target_level && !node.children.is_empty() {
-            result.push(node.heading.text.clone());
+            result.push(node.index);
         }
 
         // Always recurse to find nested headings at the target level
@@ -3950,14 +4097,18 @@ impl App {
         let mut count = 0;
 
         // Find all collapsed headings at the specified level and expand them
-        let headings_at_level: Vec<String> = self
+        let keys = heading_keys(&self.document);
+        let headings_at_level: Vec<usize> = self
             .tree
             .iter()
             .flat_map(|node| self.collect_headings_at_level(node, level))
             .collect();
 
-        for heading_text in headings_at_level {
-            if self.collapsed_headings.remove(&heading_text) {
+        for index in headings_at_level {
+            if keys
+                .get(index)
+                .is_some_and(|key| self.collapsed_headings.remove(key))
+            {
                 count += 1;
             }
         }
@@ -3977,11 +4128,11 @@ impl App {
     }
 
     /// Collect heading texts at a specific level
-    fn collect_headings_at_level(&self, node: &HeadingNode, target_level: usize) -> Vec<String> {
+    fn collect_headings_at_level(&self, node: &HeadingNode, target_level: usize) -> Vec<usize> {
         let mut result = Vec::new();
 
         if node.heading.level == target_level {
-            result.push(node.heading.text.clone());
+            result.push(node.index);
         }
 
         for child in &node.children {
@@ -4410,14 +4561,72 @@ impl App {
     }
 
     pub fn set_bookmark(&mut self) {
-        // Store bookmark as heading text instead of index
-        self.bookmark_position = self.selected_heading_text().map(|s| s.to_string());
+        self.bookmark_position = match self.selected_heading_index() {
+            Some(index) => self.heading_key(index),
+            // The document overview, which no heading shares a key with.
+            None => self
+                .selected_heading_text()
+                .map(|text| (text.to_string(), 0)),
+        };
     }
 
     pub fn jump_to_bookmark(&mut self) {
-        // Jump to bookmark by finding the heading text
-        if let Some(text) = self.bookmark_position.clone() {
-            self.select_by_text(&text);
+        let Some(key) = self.bookmark_position.clone() else {
+            return;
+        };
+        match heading_keys(&self.document).iter().position(|k| *k == key) {
+            Some(index) => {
+                self.reveal_heading(index);
+                self.select_by_heading_index(index);
+            }
+            None => {
+                self.select_by_text(&key.0);
+            }
+        }
+    }
+
+    /// Whether `item` is the bookmarked heading.
+    pub(crate) fn is_bookmarked(&self, item: &OutlineItem) -> bool {
+        let Some(key) = &self.bookmark_position else {
+            return false;
+        };
+        if key.0 != item.text {
+            return false;
+        }
+        match item.heading_index {
+            Some(index) => self.heading_key(index).as_ref() == Some(key),
+            None => true,
+        }
+    }
+
+    /// The [`HeadingKey`] of heading `index`.
+    fn heading_key(&self, index: usize) -> Option<HeadingKey> {
+        let text = &self.document.headings.get(index)?.text;
+        let before = self.document.headings[..index]
+            .iter()
+            .filter(|heading| heading.text == *text)
+            .count();
+        Some((text.clone(), before))
+    }
+
+    /// Expand every collapsed ancestor of heading `index`, so its outline row
+    /// exists to be selected.
+    fn reveal_heading(&mut self, index: usize) {
+        let Some(level) = self.document.headings.get(index).map(|h| h.level) else {
+            return;
+        };
+        let keys = heading_keys(&self.document);
+        let mut deepest = level;
+        let mut changed = false;
+        for ancestor in (0..index).rev() {
+            let ancestor_level = self.document.headings[ancestor].level;
+            if ancestor_level < deepest {
+                deepest = ancestor_level;
+                changed |= self.collapsed_headings.remove(&keys[ancestor]);
+            }
+        }
+        if changed {
+            self.rebuild_outline_items();
         }
     }
 
@@ -4517,18 +4726,30 @@ impl App {
     /// to the section's starting line in the source file.
     pub fn interactive_element_source_line(&self) -> Option<u32> {
         let (element_line, _) = self.interactive_state.current_element_line_range()?;
+        u32::try_from(self.displayed_text_first_line() + element_line).ok()
+    }
 
-        let selected_text = self.selected_heading_text();
-        let is_overview = selected_text.is_none_or(|t| t == DOCUMENT_OVERVIEW);
-
-        if is_overview {
-            // Document overview: element lines are relative to full document content
-            Some((element_line + 1) as u32)
-        } else {
-            // Section: element lines are relative to section content (after heading line)
-            let heading_line = self.selected_heading_source_line().unwrap_or(1) as usize;
-            Some((heading_line + 1 + element_line) as u32)
-        }
+    /// The file line, from 1, that the displayed section's text starts on.
+    ///
+    /// Elements count lines in the displayed text, which starts at the
+    /// section's first non-blank line, past hidden frontmatter in the
+    /// overview. Counting from the line after the heading put the editor one
+    /// line or more above the element.
+    fn displayed_text_first_line(&self) -> usize {
+        let content = &self.document.content;
+        let start = match self.selected_heading_index() {
+            Some(index) => {
+                let end = self.document.section_end(index);
+                let body = self.document.body_start(index).min(end);
+                let text = &content[body..end];
+                body + (text.len() - text.trim_start().len())
+            }
+            None if self.frontmatter_filter_active() => {
+                crate::parser::frontmatter_range(content).map_or(0, |range| range.end)
+            }
+            None => 0,
+        };
+        1 + content[..start].matches('\n').count()
     }
 
     /// Sync previous_selection to current selection (prevents spurious scroll resets)
@@ -4620,6 +4841,17 @@ impl App {
     }
 
     pub fn copy_content(&mut self) {
+        // In interactive mode `y` copies the selected element, as the help
+        // and the status line say. It copied the whole section.
+        if self.mode == AppMode::Interactive
+            && let Some((text, what)) = self.current_element_text()
+        {
+            self.status_message = Some(match self.copy_to_clipboard(&text) {
+                Ok(()) => format!("✓ {what} copied to clipboard"),
+                Err(e) => format!("✗ {e}"),
+            });
+            return;
+        }
         let content = self.current_section_content();
         if let Some(clipboard) = &mut self.clipboard {
             match clipboard.set_text(content) {
@@ -5257,34 +5489,47 @@ impl App {
         }
     }
 
-    /// Jump to a heading by anchor name or heading text.
+    /// Select the heading an in-document link points at, by anchor
+    /// (`#mixed-links-test`) or heading text (`[[#Mixed Links Test]]`).
     ///
-    /// Supports two matching strategies (checked per-item, Strategy 1 takes priority):
-    /// 1. **Normalized anchor match** - compares `heading_to_anchor(item)` with lowercased anchor.
-    ///    Handles markdown links (`#features`, `#mixed-links-test`) and simple wikilinks (`[[#Features]]`).
-    /// 2. **Heading text match** - case-insensitive comparison of raw heading text.
-    ///    Handles wikilinks preserving spaces (`[[#Mixed Links Test]]`).
+    /// Every heading is searched, not just the outline's visible rows, so a
+    /// heading under a collapsed one is found (its ancestors are expanded).
+    /// As on GitHub, `#name-1` is the second heading whose anchor is `name`.
     fn jump_to_anchor(&mut self, anchor: &str) -> Result<(), String> {
         let anchor_lower = anchor.to_lowercase();
+        let anchors: Vec<String> = self
+            .document
+            .headings
+            .iter()
+            .map(|heading| Self::heading_to_anchor(&heading.text))
+            .collect();
 
-        for (idx, item) in self.outline_items.iter().enumerate() {
-            // Strategy 1: Normalized anchor match
-            // The anchor from markdown links is already normalized (lowercase, dashes),
-            // so we just lowercase the query and compare with the item's normalized form.
-            if Self::heading_to_anchor(&item.text) == anchor_lower {
-                self.select_outline_index(idx);
-                return Ok(());
-            }
+        // Strategy 1: Normalized anchor match. The anchor from markdown
+        // links is already normalized (lowercase, dashes).
+        // Strategy 2: Direct heading text match (case-insensitive).
+        // Wikilinks like [[#Mixed Links Test]] keep the heading's text.
+        // Strategy 3: `name-N`, the Nth repeat of anchor `name`.
+        let found = anchors.iter().position(|a| *a == anchor_lower).or_else(|| {
+            self.document
+                .headings
+                .iter()
+                .position(|heading| heading.text.eq_ignore_ascii_case(anchor))
+        });
+        let found = found.or_else(|| {
+            let (base, n) = anchor_lower.rsplit_once('-')?;
+            let n: usize = n.parse().ok()?;
+            anchors
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| *a == base)
+                .nth(n)
+                .map(|(index, _)| index)
+        });
 
-            // Strategy 2: Direct heading text match (case-insensitive)
-            // Wikilinks like [[#Mixed Links Test]] preserve the original heading text.
-            if item.text.eq_ignore_ascii_case(anchor) {
-                self.select_outline_index(idx);
-                return Ok(());
-            }
-        }
-
-        Err(format!("Heading '{}' not found", anchor))
+        let index = found.ok_or_else(|| format!("Heading '{}' not found", anchor))?;
+        self.reveal_heading(index);
+        self.select_by_heading_index(index);
+        Ok(())
     }
 
     /// Load a file by relative path (checks for unsaved changes first)
@@ -5644,7 +5889,10 @@ impl App {
             self.select_outline_index(selected_idx);
         }
 
-        self.content_scroll = state.content_scroll;
+        // The section is laid out for the new selection first: done on the
+        // next frame instead, that reset the scroll restored here to the top.
+        self.update_content_metrics();
+        self.content_scroll = state.content_scroll.min(self.max_content_scroll());
         self.content_scroll_state = self.content_scroll_state.position(state.content_scroll);
     }
 
@@ -5722,8 +5970,7 @@ impl App {
         self.populate_image_cache();
 
         // Enter interactive mode at current scroll position (preserve user's view)
-        self.interactive_state
-            .enter_at_scroll_position(self.content_scroll);
+        self.select_element_at_scroll();
         self.mode = AppMode::Interactive;
 
         // Only scroll if the selected element is not fully visible
@@ -6077,6 +6324,35 @@ impl App {
         }
     }
 
+    /// The selected interactive element as text to copy, and what it is: a
+    /// link's target, a code block's code, a table as markdown, an image's
+    /// source, a task's text, a details block's summary.
+    fn current_element_text(&self) -> Option<(String, &'static str)> {
+        use crate::tui::interactive::ElementType;
+
+        let element = self.interactive_state.current_element()?;
+        Some(match &element.element_type {
+            ElementType::Link { link, .. } => (link.target.as_str(), "Link"),
+            ElementType::CodeBlock { content, .. } => (content.clone(), "Code"),
+            ElementType::Table { .. } => (self.table_as_markdown()?, "Table"),
+            ElementType::Image { src, .. } => (src.clone(), "Image source"),
+            ElementType::Checkbox { content, .. } => (content.clone(), "Task"),
+            ElementType::Details { summary, .. } => (summary.clone(), "Summary"),
+        })
+    }
+
+    /// The selected table as markdown.
+    fn table_as_markdown(&self) -> Option<String> {
+        let (headers, rows) = self.get_current_table_data()?;
+        let row = |cells: &[String]| format!("| {} |\n", cells.join(" | "));
+        let mut table = row(&headers);
+        table.push_str(&row(&vec!["---".to_string(); headers.len()]));
+        for cells in &rows {
+            table.push_str(&row(cells));
+        }
+        Some(table)
+    }
+
     /// Copy text to clipboard
     fn copy_to_clipboard(&mut self, text: &str) -> Result<(), String> {
         if let Some(clipboard) = &mut self.clipboard {
@@ -6137,32 +6413,10 @@ impl App {
 
     /// Copy entire table as markdown
     pub fn copy_table_markdown(&mut self) -> Result<(), String> {
-        if let Some((headers, rows)) = self.get_current_table_data() {
-            let mut table_md = String::new();
-
-            // Header row
-            table_md.push_str("| ");
-            table_md.push_str(&headers.join(" | "));
-            table_md.push_str(" |\n");
-
-            // Separator row
-            table_md.push_str("| ");
-            table_md.push_str(&vec!["---"; headers.len()].join(" | "));
-            table_md.push_str(" |\n");
-
-            // Data rows
-            for row in &rows {
-                table_md.push_str("| ");
-                table_md.push_str(&row.join(" | "));
-                table_md.push_str(" |\n");
-            }
-
-            self.copy_to_clipboard(&table_md)?;
-            self.status_message = Some("✓ Table copied as markdown".to_string());
-            Ok(())
-        } else {
-            Err("No table data available".to_string())
-        }
+        let table = self.table_as_markdown().ok_or("No table data available")?;
+        self.copy_to_clipboard(&table)?;
+        self.status_message = Some("✓ Table copied as markdown".to_string());
+        Ok(())
     }
 
     /// Enter cell edit mode for the currently selected table cell
@@ -6726,7 +6980,7 @@ details for chapter 2
 ";
         let doc = make_doc(content);
         let tree = doc.build_tree();
-        let items = App::flatten_tree(&tree, &HashSet::new());
+        let items = App::flatten_tree(&tree, &HashSet::new(), &heading_keys(&doc));
 
         assert_eq!(items.len(), 4);
         assert_eq!(items[1].text, "Details");
@@ -6765,8 +7019,8 @@ sub b content
         let tree = doc.build_tree();
 
         let mut collapsed = HashSet::new();
-        collapsed.insert("A".to_string());
-        let items = App::flatten_tree(&tree, &collapsed);
+        collapsed.insert(("A".to_string(), 0));
+        let items = App::flatten_tree(&tree, &collapsed, &heading_keys(&doc));
 
         // Sub A hidden, Sub B still accessible
         assert_eq!(items.len(), 3);
@@ -7064,6 +7318,119 @@ mod save_tests {
         );
         assert!(app.write_document("# t\n- [x] a\n").is_err());
         assert!(!std::path::Path::new("<stdin>").exists());
+    }
+}
+
+#[cfg(test)]
+mod heading_identity_tests {
+    use super::*;
+    use crate::keybindings::Action;
+
+    const CHANGELOG: &str = "# One\n\n## Added\n\n- a\n\n# Two\n\n## Added\n\n- b\n\n# Three\n\n## Child\n\n### Deep\n\ntext\n";
+
+    fn app() -> App {
+        App::new(
+            crate::parser::parse_markdown(CHANGELOG),
+            "CHANGELOG.md".into(),
+            PathBuf::from("CHANGELOG.md"),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        )
+    }
+
+    fn outline(app: &App) -> Vec<&str> {
+        app.outline_items
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect()
+    }
+
+    /// Collapse was keyed by heading text, so collapsing one `# One` made
+    /// every heading with its name collapse: here the two `## Added` share
+    /// a name, and collapsing the first `# One`'s does not touch `# Two`'s.
+    #[test]
+    fn collapsing_a_heading_leaves_its_namesakes_alone() {
+        let mut app = app();
+        app.focus = Focus::Outline;
+        let first_one = outline(&app).iter().position(|t| *t == "One").unwrap();
+        app.select_outline_index(first_one);
+        app.collapse();
+        assert_eq!(
+            outline(&app),
+            ["One", "Two", "Added", "Three", "Child", "Deep"]
+        );
+    }
+
+    /// Anchors were searched in the visible outline rows only, so a heading
+    /// under a collapsed one was not found, and `#added-1` never reached
+    /// the second `## Added`.
+    #[test]
+    fn anchors_reach_collapsed_and_repeated_headings() {
+        let mut app = app();
+        app.collapse_all();
+        app.jump_to_anchor("deep").unwrap();
+        assert_eq!(app.selected_heading_text(), Some("Deep"));
+
+        app.jump_to_anchor("added-1").unwrap();
+        assert_eq!(app.selected_heading_index(), Some(3));
+    }
+
+    /// In interactive mode `g` and `G` moved the outline, switching section
+    /// under the selected element; they move between elements now.
+    #[test]
+    fn first_and_last_in_interactive_mode_pick_elements() {
+        let mut app = App::new(
+            crate::parser::parse_markdown(
+                "# A\n\n[one](a.md)\n\n[two](b.md)\n\n[three](c.md)\n\n# B\n",
+            ),
+            "t.md".into(),
+            PathBuf::from("t.md"),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+        app.select_outline_index(0);
+        app.enter_interactive_mode();
+        let count = app.interactive_state.elements.len();
+        assert!(count >= 3);
+
+        app.execute_action(Action::Last);
+        assert_eq!(app.interactive_state.current_index, Some(count - 1));
+        assert_eq!(app.selected_heading_text(), Some("A"));
+        app.execute_action(Action::First);
+        assert_eq!(app.interactive_state.current_index, Some(0));
+        assert_eq!(app.selected_heading_text(), Some("A"));
+    }
+
+    /// Element lines count from the first line of the displayed text, after
+    /// the blank lines below the heading; counted from the heading's next
+    /// line, `e` opened the editor above the element.
+    #[test]
+    fn the_editor_opens_on_the_element_line() {
+        let mut app = App::new(
+            crate::parser::parse_markdown("# A\n\n\n[link](a.md)\n"),
+            "t.md".into(),
+            PathBuf::from("t.md"),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+        app.select_outline_index(0);
+        app.enter_interactive_mode();
+        assert_eq!(app.interactive_element_source_line(), Some(4));
+    }
+
+    /// In help, `G` moved the outline behind the popup.
+    #[test]
+    fn last_in_help_scrolls_help() {
+        let mut app = app();
+        app.select_outline_index(0);
+        app.show_help = true;
+        app.help_max_scroll = 40;
+        app.execute_action(Action::Last);
+        assert_eq!(app.help_scroll, 40);
+        assert_eq!(app.selected_heading_text(), Some("One"));
     }
 }
 
