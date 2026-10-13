@@ -161,15 +161,22 @@ pub fn determine_input_source(file_path: Option<&Path>) -> Result<InputSource, I
 /// - Raw markdown (passed through)
 /// - Plain text (wrapped in markdown heading)
 pub fn process_input(source: InputSource) -> Result<String, Box<dyn std::error::Error>> {
+    // A file is kept exactly as it is on disk: it can be edited and saved,
+    // and a save checks that the file still holds what was loaded, so a
+    // heading added here made every save fail as a change made on disk. The
+    // outline gives a document without headings an overview entry anyway.
     let content = match source {
-        InputSource::File(c) | InputSource::Stdin(c) => c,
+        InputSource::File(c) => return Ok(c),
+        InputSource::Stdin(c) => c,
     };
 
     // Decide whether to wrap based on whether the markdown *parser* finds any
     // headings — not a naive `#` text scan. A `#` scan both misfires (e.g. a
     // leading `#` inside a code fence) and misses setext headings
-    // (`Title\n=====`), which have no `#` at all but are real headings.
-    if turbovault_parser::parse_headings(&content).is_empty() {
+    // (`Title\n=====`), which have no `#` at all but are real headings. The
+    // document parser also reads past a byte order mark, which hid the
+    // first heading from the bare heading parser.
+    if crate::parser::parse_markdown(&content).headings.is_empty() {
         // No headings at all: wrap in a phantom heading for basic viewing.
         let mut markdown = String::from("# Input\n\n");
         markdown.push_str(&content);
@@ -201,6 +208,24 @@ mod tests {
         let result = process_input(source).unwrap();
         assert!(result.starts_with("# Input\n\n"));
         assert!(result.contains("Just some plain text"));
+    }
+
+    /// A file has to stay byte for byte what is on disk, or saving it is
+    /// refused as a change made elsewhere.
+    #[test]
+    fn a_file_is_never_wrapped() {
+        let text = "- [ ] a\n- [ ] b\n";
+        let result = process_input(InputSource::File(text.to_string())).unwrap();
+        assert_eq!(result, text);
+    }
+
+    /// The byte order mark used to hide the heading, so a heading-less
+    /// wrapper went on top and the real heading stopped being one.
+    #[test]
+    fn a_byte_order_mark_does_not_hide_the_first_heading() {
+        let text = "\u{feff}# T\n\n- [ ] a\n";
+        let result = process_input(InputSource::Stdin(text.to_string())).unwrap();
+        assert_eq!(result, text);
     }
 
     #[test]

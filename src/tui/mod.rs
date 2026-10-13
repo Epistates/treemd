@@ -146,6 +146,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     }
 
     let mut needs_redraw = true;
+    // A change on disk that arrived while edits were pending.
+    let mut reload_deferred = false;
 
     loop {
         if signals::should_exit() {
@@ -242,23 +244,31 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         // Check the file watcher every iteration, regardless of whether there
         // was a keyboard event. Otherwise a debounced reload could stall
         // behind a stream of keypresses indefinitely.
-        if app.suppress_file_watch {
+        let changed_on_disk = if app.suppress_file_watch {
             app.suppress_file_watch = false;
             if let Some(ref mut watcher) = file_watcher {
                 watcher.check_for_changes(); // Drain events, ignore result
             }
-        } else if let Some(ref mut watcher) = file_watcher
-            && watcher.check_for_changes()
-        {
-            if app.has_unsaved_changes() {
-                // Never clobber buffered edits with an external reload; the
-                // user must save or undo first, then the file can be reloaded.
-                app.status_message = Some(
-                    "⚠ File changed on disk — reload skipped to protect unsaved edits (save or undo first)"
-                        .to_string(),
-                );
-                needs_redraw = true;
-            } else {
+            false
+        } else {
+            file_watcher
+                .as_mut()
+                .is_some_and(|watcher| watcher.check_for_changes())
+        };
+        if changed_on_disk && app.has_unsaved_changes() {
+            // Never clobber buffered edits with an external reload. It is
+            // remembered and runs once they are saved or undone; dropped,
+            // the change never appeared and every later save was refused
+            // as a change made on disk.
+            reload_deferred = true;
+            app.status_message = Some(
+                "⚠ File changed on disk — reload waits until the unsaved edits are saved or undone"
+                    .to_string(),
+            );
+            needs_redraw = true;
+        } else if changed_on_disk || (reload_deferred && !app.has_unsaved_changes()) {
+            reload_deferred = false;
+            {
                 // Save state before reload
                 let was_interactive = app.mode == app::AppMode::Interactive;
                 let saved_scroll = app.content_scroll;

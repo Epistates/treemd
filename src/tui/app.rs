@@ -66,6 +66,8 @@ pub enum PendingNavigation {
     Forward,
     /// Load a file (relative path, optional anchor)
     LoadFile(PathBuf, Option<String>),
+    /// Open a file chosen in the file picker (absolute path)
+    OpenPicked(PathBuf),
 }
 
 /// Available commands in the command palette
@@ -2023,6 +2025,24 @@ impl App {
                 }
             }
             OpenInEditor => {
+                // The editor works on the file, and the document is reloaded
+                // from it afterwards, so buffered edits would be lost even
+                // if the editor changed nothing.
+                if self.has_unsaved_changes() {
+                    self.status_message = Some(
+                        "Save (:w) or undo (u) the unsaved edits before opening the editor"
+                            .to_string(),
+                    );
+                    return ActionResult::Continue;
+                }
+                // Piped and fetched documents have a placeholder path, which
+                // an editor would create as a file, or fetch again itself.
+                if !(self.current_file_path.is_absolute() && self.current_file_path.is_file()) {
+                    self.status_message = Some(
+                        "This document is not a file on disk, so it cannot be edited".to_string(),
+                    );
+                    return ActionResult::Continue;
+                }
                 let line = if self.mode == AppMode::Interactive {
                     // In interactive mode, jump to the current element's source line
                     self.interactive_element_source_line()
@@ -2306,8 +2326,15 @@ impl App {
     }
 
     /// Drop all buffered edits.
+    /// Put back every buffered edit, newest first, so the document is what
+    /// was loaded. Clearing the list alone left the edits in the text, where
+    /// the next save (a checkbox toggle) wrote them anyway.
     pub fn discard_pending_edits(&mut self) {
-        self.pending_edits.clear();
+        while !self.pending_edits.is_empty() {
+            if self.undo_last_edit().is_err() {
+                self.pending_edits.pop();
+            }
+        }
     }
 
     /// Handle discard and quit action (quit without saving)
@@ -2366,6 +2393,11 @@ impl App {
             Some(PendingNavigation::LoadFile(path, anchor)) => {
                 // Call internal load_file_internal that skips the unsaved check
                 if let Err(e) = self.load_file_internal(&path, anchor.as_deref()) {
+                    self.status_message = Some(format!("✗ {}", e));
+                }
+            }
+            Some(PendingNavigation::OpenPicked(path)) => {
+                if let Err(e) = self.open_picked_file(path) {
                     self.status_message = Some(format!("✗ {}", e));
                 }
             }
@@ -4828,6 +4860,29 @@ impl App {
             return Ok(());
         }
 
+        // Ask about unsaved edits first, as following a link does. Opening the
+        // file straight away left the edits pending against the new file, so
+        // quitting reported them there and undo applied them to it.
+        if self.has_unsaved_changes() {
+            self.file_picker.query.clear();
+            self.file_picker.active = false;
+            self.pending_navigation = Some(PendingNavigation::OpenPicked(file_path));
+            self.mode = AppMode::ConfirmSaveBeforeNav;
+            return Ok(());
+        }
+
+        self.open_picked_file(file_path)
+    }
+
+    /// Open a file chosen in the file picker, recording the current one in
+    /// the history.
+    fn open_picked_file(&mut self, file_path: PathBuf) -> Result<(), String> {
+        // Read it before touching the history, so a file that fails to open
+        // leaves no entry to go back to.
+        let content = std::fs::read_to_string(&file_path)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+        let document = crate::parser::parse_markdown(&content);
+
         // Save current state to history
         let current_state = FileState {
             path: self.current_file_path.clone(),
@@ -4840,10 +4895,6 @@ impl App {
         self.file_history.push(current_state);
         self.file_future.clear(); // Clear forward history when navigating to new file
 
-        // Load new file
-        let content = std::fs::read_to_string(&file_path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-        let document = crate::parser::parse_markdown(&content);
         let filename = file_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -5446,6 +5497,7 @@ impl App {
     pub fn reload_current_file(&mut self) -> Result<bool, String> {
         // Save current state to restore after reload
         let current_selection = self.selected_heading_text().map(|s| s.to_string());
+        let current_index = self.selected_heading_index();
         let current_scroll = self.content_scroll;
 
         // Reload the file
@@ -5466,8 +5518,20 @@ impl App {
 
         self.load_document(document, filename, self.current_file_path.clone());
 
-        // Try to restore selection if the heading still exists
-        if let Some(heading) = current_selection {
+        // Restore the same heading: by its position while the heading there
+        // still reads the same, which tells apart sections that share a name
+        // (several `## Tasks`), and by text otherwise. By text alone, a
+        // checkbox toggle in the second `## Tasks` moved the selection to the
+        // first, and the next toggle went there.
+        let same_place = current_index.filter(|&i| {
+            self.document
+                .headings
+                .get(i)
+                .is_some_and(|h| Some(h.text.as_str()) == current_selection.as_deref())
+        });
+        if let Some(index) = same_place {
+            self.select_by_heading_index(index);
+        } else if let Some(heading) = current_selection {
             self.select_by_text(&heading);
         }
 
@@ -6729,6 +6793,55 @@ mod save_tests {
         app.undo_last_edit().unwrap();
         assert_eq!(app.document.content, original);
         assert_eq!(app.current_section_content().trim(), "last 日本語");
+    }
+
+    /// The document is reloaded from the file after the editor, so opening
+    /// it lost buffered edits even when the editor changed nothing.
+    #[test]
+    fn the_editor_waits_for_unsaved_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().canonicalize().unwrap().join("note.md");
+        std::fs::write(&path, "# A\n\n| a | b |\n|---|---|\n| one | 2 |\n").unwrap();
+        let mut app = app_for(&path);
+        app.select_outline_index(0);
+        edit_first_body_cell(&mut app, "x");
+
+        let result = app.execute_action(crate::keybindings::Action::OpenInEditor);
+        assert!(matches!(result, ActionResult::Continue));
+        assert_eq!(app.pending_edits.len(), 1);
+    }
+
+    /// Discarding cleared the list of edits and left them in the text,
+    /// where the next save wrote them anyway.
+    #[test]
+    fn discarding_edits_puts_the_text_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().canonicalize().unwrap().join("note.md");
+        let original = "# A\n\n| a | b |\n|---|---|\n| one | 2 |\n";
+        std::fs::write(&path, original).unwrap();
+        let mut app = app_for(&path);
+        app.select_outline_index(0);
+        edit_first_body_cell(&mut app, "x");
+        edit_first_body_cell(&mut app, "y");
+
+        app.discard_pending_edits();
+        assert!(!app.has_unsaved_changes());
+        assert_eq!(app.document.content, original);
+    }
+
+    /// Restored by text, a reload selected the first of two sections with
+    /// the same name, so the next checkbox toggle went to the other one.
+    #[test]
+    fn a_reload_keeps_the_section_among_namesakes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().canonicalize().unwrap().join("note.md");
+        std::fs::write(&path, "# Tasks\n\n- [ ] a\n\n# Tasks\n\n- [ ] c\n").unwrap();
+        let mut app = app_for(&path);
+        app.select_outline_index(1);
+
+        std::fs::write(&path, "# Tasks\n\n- [ ] a\n\n# Tasks\n\n- [x] c\n").unwrap();
+        assert!(app.reload_current_file().unwrap());
+        assert_eq!(app.selected_heading_index(), Some(1));
     }
 
     /// Stdin and fetched documents have a placeholder path. A save used to
