@@ -11,7 +11,9 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use indexmap::IndexMap;
 use ratatui::layout::Rect;
 use ratatui::widgets::{ListState, ScrollbarState};
-use std::collections::{HashMap, HashSet};
+#[cfg(all(feature = "mermaid", unix))]
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -837,6 +839,7 @@ impl App {
         let image_worker = picker.as_ref().map(|_| ImageWorker::new());
         let disk_hash = content_hash(document.content.as_bytes());
         let link_root = link_root_for(&file_path);
+        let latex_detected = crate::tui::ui::util::contains_latex(&document.content);
 
         Self {
             document,
@@ -987,7 +990,7 @@ impl App {
             mermaid_needs_reindex: false,
 
             // LaTeX detection
-            latex_detected: false,
+            latex_detected,
             latex_hint_shown: false,
         }
     }
@@ -4257,8 +4260,8 @@ impl App {
         (
             &raw,
             self.show_raw_source,
-            self.should_hide_frontmatter(),
-            self.should_hide_latex(),
+            self.frontmatter_filter_active(),
+            self.latex_filter_active(),
             self.should_latex_aggressive(),
         )
             .hash(&mut hasher);
@@ -4285,8 +4288,8 @@ impl App {
         } else {
             crate::tui::ui::util::filter_content(
                 &raw,
-                self.should_hide_frontmatter(),
-                self.should_hide_latex(),
+                self.frontmatter_filter_active(),
+                self.latex_filter_active(),
                 self.should_latex_aggressive(),
             )
         }
@@ -4910,6 +4913,21 @@ impl App {
         self.config.content.hide_latex
     }
 
+    /// Whether frontmatter is hidden from what is displayed: `hide_frontmatter`
+    /// is on and the whole document is shown, the only text that can start
+    /// with frontmatter. Applied to a section, it took a section opening
+    /// with a `---` rule for frontmatter and hid it up to the next rule.
+    fn frontmatter_filter_active(&self) -> bool {
+        self.should_hide_frontmatter() && self.selected_heading_index().is_none()
+    }
+
+    /// Whether LaTeX is filtered from this document: `hide_latex` is on and
+    /// the document has LaTeX in it. Run on an ordinary document, the filter
+    /// ate dollar signs, backslashed paths and indentation.
+    pub fn latex_filter_active(&self) -> bool {
+        self.should_hide_latex() && self.latex_detected
+    }
+
     /// Check if aggressive LaTeX filtering is enabled (from config)
     pub fn should_latex_aggressive(&self) -> bool {
         self.config.content.latex_aggressive
@@ -5352,16 +5370,9 @@ impl App {
         self.populate_image_cache();
 
         // Detect LaTeX content for status hint
-        self.latex_detected = content.contains("\\begin{")
-            || content.contains("\\end{")
-            || content.contains("\\textbf{")
-            || content.contains("\\textit{")
-            || content.contains("\\usepackage")
-            || content.contains("\\documentclass")
-            || content.contains("\\newpage")
-            || content.contains("\\section{");
+        self.latex_detected = crate::tui::ui::util::contains_latex(&content);
 
-        if self.latex_detected && self.should_hide_latex() && !self.latex_hint_shown {
+        if self.latex_filter_active() && !self.latex_hint_shown {
             self.latex_hint_shown = true;
             self.set_status_message("LaTeX detected · filtered via hide_latex in config");
         }
@@ -6019,7 +6030,7 @@ impl App {
             self.cell_edit_col,
             &sanitized_value,
         )?;
-        self.document.content = new_content;
+        self.apply_edited_content(new_content);
 
         // Store the edit in the pending buffer for undo capability
         let pending_edit = PendingEdit {
@@ -6031,9 +6042,6 @@ impl App {
             new_value: sanitized_value,
         };
         self.pending_edits.push(pending_edit);
-
-        // Re-parse headings if needed (table edits don't affect heading structure)
-        // The document tree stays the same, only content changed
 
         let edit_count = self.pending_edits.len();
         self.status_message = Some(format!(
@@ -6127,6 +6135,37 @@ impl App {
         Ok(())
     }
 
+    /// Swap in content edited in place, by a table cell edit or its undo.
+    ///
+    /// Sections are cut from the content at their headings' byte offsets,
+    /// and an edit moves every heading after it. Keeping the old parse
+    /// sliced later sections at stale offsets: a shorter cell panicked on the
+    /// next frame and lost the edit, a longer one cut sections short or
+    /// split a character. The outline is left alone unless the headings
+    /// themselves changed, which a first cell starting with `#` in a table
+    /// without outer pipes can do.
+    fn apply_edited_content(&mut self, content: String) {
+        let document = crate::parser::parse_markdown(&content);
+        let same_headings = document.headings.len() == self.document.headings.len()
+            && document
+                .headings
+                .iter()
+                .zip(&self.document.headings)
+                .all(|(new, old)| new.level == old.level && new.text == old.text);
+        self.document = document;
+        self.tree = self.document.build_tree();
+        if !same_headings {
+            let selected = self.outline_state.selected();
+            self.rebuild_outline_items();
+            let last = self.outline_items.len().checked_sub(1);
+            self.outline_state
+                .select(selected.zip(last).map(|(i, last)| i.min(last)));
+            self.outline_scroll_state = ScrollbarState::new(self.outline_items.len());
+            self.previous_selection = None;
+        }
+        self.metrics_dirty = true;
+    }
+
     /// Undo the last pending edit
     pub fn undo_last_edit(&mut self) -> Result<(), String> {
         if let Some(edit) = self.pending_edits.pop() {
@@ -6142,7 +6181,7 @@ impl App {
                 &edit.original_value,
             )?;
 
-            self.document.content = new_content;
+            self.apply_edited_content(new_content);
 
             if self.pending_edits.is_empty() {
                 self.status_message = Some("✓ Undone - no unsaved changes".to_string());
@@ -6648,6 +6687,50 @@ mod save_tests {
         );
     }
 
+    /// Edit the first body cell of the first table in the selected section.
+    fn edit_first_body_cell(app: &mut App, value: &str) {
+        app.enter_interactive_mode();
+        let table = app
+            .interactive_state
+            .elements
+            .iter()
+            .position(|e| matches!(e.element_type, ElementType::Table { .. }))
+            .expect("a table in the section");
+        app.interactive_state.current_index = Some(table);
+        app.interactive_state.enter_table_mode().unwrap();
+        app.interactive_state.table_move_down(1);
+        app.enter_cell_edit_mode().unwrap();
+        app.cell_edit_value = value.to_string();
+        app.save_edited_cell().unwrap();
+    }
+
+    /// A cell edit moves every heading after it. Sections are cut at heading
+    /// offsets, which the edit left stale: shortening a cell panicked on the
+    /// next frame, and lengthening one cut the next section's text.
+    #[test]
+    fn a_cell_edit_keeps_the_sections_after_it_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().canonicalize().unwrap().join("note.md");
+        let original =
+            "# A\n\n| a | b |\n|---|---|\n| a long cell value | 2 |\n\n# B\n\nlast 日本語\n";
+        std::fs::write(&path, original).unwrap();
+        let mut app = app_for(&path);
+
+        edit_first_body_cell(&mut app, "x");
+        app.select_outline_index(1);
+        assert_eq!(app.current_section_content().trim(), "last 日本語");
+
+        app.select_outline_index(0);
+        edit_first_body_cell(&mut app, "a much, much longer cell value than before");
+        app.select_outline_index(1);
+        assert_eq!(app.current_section_content().trim(), "last 日本語");
+
+        app.undo_last_edit().unwrap();
+        app.undo_last_edit().unwrap();
+        assert_eq!(app.document.content, original);
+        assert_eq!(app.current_section_content().trim(), "last 日本語");
+    }
+
     /// Stdin and fetched documents have a placeholder path. A save used to
     /// write a file named `<stdin>` into the working directory.
     #[test]
@@ -6662,6 +6745,46 @@ mod save_tests {
         );
         assert!(app.write_document("# t\n- [x] a\n").is_err());
         assert!(!std::path::Path::new("<stdin>").exists());
+    }
+}
+
+#[cfg(test)]
+mod display_filter_tests {
+    use super::*;
+
+    fn app_with(content: &str) -> App {
+        App::new(
+            crate::parser::parse_markdown(content),
+            "note.md".into(),
+            PathBuf::from("note.md"),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        )
+    }
+
+    /// A section opening with a `---` rule was taken for frontmatter and
+    /// hidden up to the next rule.
+    #[test]
+    fn a_rule_at_the_top_of_a_section_is_content() {
+        let mut app = app_with("# Title\n\n---\n\nImportant text here.\n\n---\n\nMore text.\n");
+        app.select_outline_index(0);
+        assert!(
+            app.displayed_section_content()
+                .contains("Important text here.")
+        );
+    }
+
+    /// With LaTeX hidden by default, the filter ran on every document and
+    /// collapsed indentation, so a nested list displayed flat and a checkbox
+    /// toggle mapped to the wrong item.
+    #[test]
+    fn a_document_without_latex_is_displayed_as_written() {
+        let body = "- [ ] top one\n  - [ ] sub a\n- [ ] costs $5 and $10";
+        let mut app = app_with(&format!("# Tasks\n\n{body}\n"));
+        app.select_outline_index(0);
+        assert!(app.config.content.hide_latex);
+        assert_eq!(app.displayed_section_content().as_str(), body);
     }
 }
 

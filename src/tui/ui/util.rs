@@ -339,37 +339,30 @@ pub fn build_highlighted_line(
 
 /// Strip YAML frontmatter from the beginning of a document.
 ///
-/// Frontmatter must:
-/// - Start at the very beginning of the document (possibly after leading newlines)
-/// - Begin with `---` on its own line
-/// - End with `---` on its own line
+/// Frontmatter opens with a `---` line at the very start (after a byte order
+/// mark, if any) and closes at the next line that is exactly `---` or `...`.
+/// A closing line only starting with `---` (`----`, `--- note`) does not
+/// count, and nothing is stripped when there is no closing line.
 ///
-/// # Arguments
-/// * `content` - The document content
-///
-/// # Returns
-/// Content with frontmatter removed, or original content if no frontmatter found
+/// Only the start of the document can hold frontmatter: a section that opens
+/// with a `---` rule is content, which stripping it used to drop up to the
+/// next rule.
 pub fn strip_frontmatter(content: &str) -> String {
-    // Frontmatter must start at the beginning (after optional whitespace/newlines)
-    let trimmed = content.trim_start();
-
-    if !trimmed.starts_with("---") {
+    let body = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let mut lines = body.split_inclusive('\n');
+    let Some(first) = lines.next() else {
+        return content.to_string();
+    };
+    if first.trim_end() != "---" {
         return content.to_string();
     }
-
-    // Find the closing ---
-    // The pattern is: ---\n...\n---\n (or end of content)
-    if let Some(rest) = trimmed.strip_prefix("---") {
-        // Find the closing marker (must be on its own line)
-        if let Some(end_pos) = rest.find("\n---") {
-            // Skip past the closing ---
-            let after_close = &rest[end_pos + 4..];
-            // Also skip the newline after the closing --- if present
-            let result = after_close.strip_prefix('\n').unwrap_or(after_close);
-            return result.to_string();
+    let mut consumed = first.len();
+    for line in lines {
+        consumed += line.len();
+        if matches!(line.trim_end(), "---" | "...") {
+            return body[consumed..].to_string();
         }
     }
-
     content.to_string()
 }
 
@@ -488,7 +481,6 @@ pub fn strip_latex(content: &str) -> String {
     static FONT_SIZE_INLINE: OnceLock<Regex> = OnceLock::new();
     static BARE_CMD: OnceLock<Regex> = OnceLock::new();
     static BARE_CMD_EOL: OnceLock<Regex> = OnceLock::new();
-    static MULTI_SPACE: OnceLock<Regex> = OnceLock::new();
 
     let superscript = SUPERSCRIPT.get_or_init(|| Regex::new(r"\^\{?([0-9+\-=()nix])\}?").unwrap());
     let subscript = SUBSCRIPT.get_or_init(|| {
@@ -498,7 +490,11 @@ pub fn strip_latex(content: &str) -> String {
         .unwrap()
     });
     let display_math = DISPLAY_MATH.get_or_init(|| Regex::new(r"\$\$[\s\S]*?\$\$").unwrap());
-    let inline_math = INLINE_MATH.get_or_init(|| Regex::new(r"\$([^\$\n]+)\$").unwrap());
+    // Pandoc's rule: the opening `$` is followed by a non-space, the closing
+    // one follows a non-space and is not followed by a digit. Without it,
+    // `$5 and $10` and `$HOME and $PATH` lost their dollar signs as math.
+    let inline_math = INLINE_MATH
+        .get_or_init(|| Regex::new(r"\$([^\s$](?:[^$\n]*[^\s$])?)\$([^0-9]|$)").unwrap());
     let paren_math = PAREN_MATH.get_or_init(|| Regex::new(r"\\\(([\s\S]*?)\\\)").unwrap());
     let bracket_math = BRACKET_MATH.get_or_init(|| Regex::new(r"\\\[([\s\S]*?)\\\]").unwrap());
     let latex_env = LATEX_ENV.get_or_init(|| {
@@ -674,7 +670,7 @@ pub fn strip_latex(content: &str) -> String {
 
     // 2. Strip remaining delimiters and structural commands
     result = display_math.replace_all(&result, "").to_string();
-    result = inline_math.replace_all(&result, "$1").to_string();
+    result = inline_math.replace_all(&result, "$1$2").to_string();
     result = paren_math.replace_all(&result, "$1").to_string();
     result = bracket_math.replace_all(&result, "$1").to_string();
     result = latex_env.replace_all(&result, "$1").to_string();
@@ -695,9 +691,14 @@ pub fn strip_latex(content: &str) -> String {
     result = bare_cmd.replace_all(&result, "$1").to_string();
     result = bare_cmd_eol.replace_all(&result, "").to_string();
 
-    // Collapse multiple spaces left by stripped inline commands
-    let multi_space = MULTI_SPACE.get_or_init(|| Regex::new(r"  +").unwrap());
-    result = multi_space.replace_all(&result, " ").to_string();
+    // Collapse the double spaces stripped inline commands leave between
+    // words. Only between words: collapsing every run of spaces flattened
+    // nested lists and indented code, and took the two trailing spaces of a
+    // hard line break.
+    result = result
+        .split_inclusive('\n')
+        .map(collapse_inner_spaces)
+        .collect();
 
     // Restore protected code spans and fenced code blocks
     for (idx, original) in code_placeholders.iter().enumerate() {
@@ -705,6 +706,53 @@ pub fn strip_latex(content: &str) -> String {
     }
 
     result
+}
+
+/// Collapse runs of spaces between words in one line to a single space,
+/// leaving its indentation and trailing spaces alone.
+fn collapse_inner_spaces(line: &str) -> String {
+    let body = line.trim_end_matches(['\n', '\r']);
+    let ending = &line[body.len()..];
+    let content = body.trim_end_matches(' ');
+    let trailing = &body[content.len()..];
+    let text = content.trim_start_matches([' ', '\t']);
+    let indent = &content[..content.len() - text.len()];
+
+    let mut out = String::with_capacity(line.len());
+    out.push_str(indent);
+    let mut previous_space = false;
+    for c in text.chars() {
+        if c == ' ' && previous_space {
+            continue;
+        }
+        previous_space = c == ' ';
+        out.push(c);
+    }
+    out.push_str(trailing);
+    out.push_str(ending);
+    out
+}
+
+/// Whether a document holds LaTeX worth filtering: environments, document
+/// commands, or display math on its own line.
+///
+/// The filter rewrites `$`, backslashes and spacing, which in an ordinary
+/// document is text, so it only runs where this finds LaTeX.
+pub fn contains_latex(content: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "\\begin{",
+        "\\end{",
+        "\\textbf{",
+        "\\textit{",
+        "\\usepackage",
+        "\\documentclass",
+        "\\newpage",
+        "\\section{",
+    ];
+    MARKERS.iter().any(|marker| content.contains(marker))
+        || content
+            .lines()
+            .any(|line| line.trim_start().starts_with("$$"))
 }
 
 /// Strip ALL lines starting with backslash (aggressive LaTeX filtering).
@@ -881,10 +929,50 @@ mod tests {
             let result = strip_frontmatter(content);
             assert_eq!(result, content); // Should not strip
         }
+
+        #[test]
+        fn a_closing_line_has_to_be_exactly_a_marker() {
+            let content = "---\ntitle: T\n----\nkept\n--- not this\n";
+            assert_eq!(strip_frontmatter(content), content);
+            assert_eq!(strip_frontmatter("---\na: 1\n...\nbody"), "body");
+        }
+
+        #[test]
+        fn a_byte_order_mark_does_not_hide_frontmatter() {
+            assert_eq!(strip_frontmatter("\u{feff}---\na: 1\n---\nbody"), "body");
+        }
     }
 
     mod strip_latex_tests {
         use super::*;
+
+        /// Collapsing every run of spaces flattened nested lists and
+        /// indented code, and dropped a hard break's trailing spaces.
+        #[test]
+        fn indentation_and_hard_breaks_survive() {
+            let content = "- top\n  - [ ] nested\n\n    indented code\n\nline one  \nline two \\textbf{x}  end\n";
+            assert_eq!(
+                strip_latex(content),
+                "- top\n  - [ ] nested\n\n    indented code\n\nline one  \nline two x end\n"
+            );
+        }
+
+        /// Prices and shell variables are not math.
+        #[test]
+        fn dollar_amounts_and_variables_are_left_alone() {
+            for text in ["It costs $5 and $10 later.", "echo $HOME and $PATH"] {
+                assert_eq!(strip_latex(text), text);
+            }
+        }
+
+        #[test]
+        fn latex_is_detected_only_where_there_is_some() {
+            assert!(!contains_latex(
+                "Costs $5, see C:\\Users\\name\\docs and $PATH."
+            ));
+            assert!(contains_latex("Intro\n\n$$\nE = mc^2\n$$\n"));
+            assert!(contains_latex("\\begin{equation}x\\end{equation}"));
+        }
 
         #[test]
         fn test_inline_math() {
