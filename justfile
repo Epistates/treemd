@@ -160,6 +160,14 @@ release-preflight VERSION:
         fail=1
     fi
 
+    # The tag goes on HEAD, so HEAD has to be what everyone else has: a tag
+    # on an unpushed local commit releases code nobody reviewed.
+    git fetch --quiet origin main
+    if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+        echo "HEAD is not origin/main; push or pull first"
+        fail=1
+    fi
+
     manifest=$(cargo metadata --no-deps --format-version 1 \
         | jq -r '.packages[] | select(.name == "treemd") | .version')
     if [ "$version" != "$manifest" ]; then
@@ -189,7 +197,11 @@ release-preflight VERSION:
     fi
     echo "ready to tag v$version"
 
-# Cut and push a release tag, but only if the preflight passes.
+# Cut and push a release tag, but only if the preflight passes. crates.io is
+# published by hand afterwards, once the release workflow is green, so a
+# failed build never leaves a crate on crates.io without its GitHub release.
 release-tag VERSION: (release-preflight VERSION)
     git tag -a "v{{VERSION}}" -m "Release v{{VERSION}}"
     git push origin "v{{VERSION}}"
+    @echo "Tag pushed. When the release workflow has passed and published v{{VERSION}},"
+    @echo "publish the crate: cargo publish --locked"

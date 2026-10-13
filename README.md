@@ -412,7 +412,7 @@ Download from the [releases page](https://github.com/epistates/treemd/releases):
 | macOS ARM64 (Apple Silicon) | `treemd-aarch64-apple-darwin.tar.gz` |
 | Windows x86_64 | `treemd-x86_64-pc-windows-msvc.exe.zip` |
 
-Each archive holds the binary, named as above without the extension, and `LICENSE`; the `.tar.gz` archives also hold the man page, `treemd.1`. `SHA256SUMS` lists the hash of every archive, and each `treemd-<target>.sha256` is the hash of the binary inside it. The archives are reproducible: the same binaries always produce byte-identical archives.
+Each archive holds the binary, named as above without the extension, and `LICENSE`; the `.tar.gz` archives also hold the man page, `treemd.1`. `SHA256SUMS` lists the hash of every archive, and each `treemd-<target>.sha256` is the hash of the binary inside it. The archives are reproducible: the same binaries, packaged by `scripts/package-release.sh` with the same versions of tar, gzip and zip, give byte-identical archives. Each archive also has signed build provenance, checkable with `gh attestation verify <archive> --repo Epistates/treemd`. The Linux glibc builds need glibc 2.28 or newer (RHEL 8, Debian 10, Ubuntu 18.10); the musl builds need no glibc at all.
 
 Each archive also has a signed build provenance attestation, which shows it was built by this repository's release workflow from the tagged commit:
 
