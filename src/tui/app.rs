@@ -3227,13 +3227,6 @@ impl App {
         }
     }
 
-    /// Mark content metrics as needing recomputation. Call this whenever the
-    /// rendered section's source could have changed (file reload, raw-source
-    /// toggle, document edit).
-    pub fn mark_metrics_dirty(&mut self) {
-        self.metrics_dirty = true;
-    }
-
     pub fn next(&mut self) {
         if self.focus == Focus::Outline {
             let i = match self.outline_state.selected() {
@@ -3715,32 +3708,6 @@ impl App {
         });
 
         self.scroll_to_doc_search_match();
-    }
-
-    /// Get document search status text for status bar
-    pub fn doc_search_status(&self) -> String {
-        if self.doc_search.matches.is_empty() {
-            if self.doc_search.query.is_empty() {
-                "Search: ".to_string()
-            } else {
-                format!("Search: {} (no matches)", self.doc_search.query)
-            }
-        } else {
-            let current = self.doc_search.current_idx.unwrap_or(0) + 1;
-            let total = self.doc_search.matches.len();
-            let base = format!("Search: {} ({}/{})", self.doc_search.query, current, total);
-
-            // Add link indicator if match is inside a link
-            if let Some(link_idx) = self.doc_search.selected_link_idx {
-                if let Some(link) = self.links_in_view.get(link_idx) {
-                    format!("{} → [{}] (Enter to follow)", base, link.text)
-                } else {
-                    base
-                }
-            } else {
-                base
-            }
-        }
     }
 
     pub fn scroll_page_down(&mut self) {
@@ -4330,12 +4297,6 @@ impl App {
         }
     }
 
-    /// Show confirmation modal for saving outline width.
-    /// Called when user presses `S`.
-    pub fn show_save_width_confirmation(&mut self) {
-        self.mode = AppMode::ConfirmSaveWidth;
-    }
-
     /// Confirm and save outline width to config file.
     pub fn confirm_save_outline_width(&mut self) {
         match self.config.set_outline_width(self.outline_width) {
@@ -4577,14 +4538,6 @@ impl App {
             .last()
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|&n| (1..=6).contains(&n))
-    }
-
-    /// Get selected command for display
-    pub fn selected_command(&self) -> Option<&'static PaletteCommand> {
-        self.command_palette
-            .filtered
-            .get(self.command_palette.selected)
-            .map(|&idx| &PALETTE_COMMANDS[idx])
     }
 
     pub fn jump_to_heading(&mut self, index: usize) {
@@ -6089,13 +6042,6 @@ impl App {
         self.pending_file_create_message = None;
         self.mode = AppMode::Normal;
         self.status_message = Some("File creation cancelled".to_string());
-    }
-
-    /// Get the currently selected interactive element
-    pub fn get_selected_interactive_element(
-        &self,
-    ) -> Option<&crate::tui::interactive::InteractiveElement> {
-        self.interactive_state.current_element()
     }
 
     /// Activate the currently selected interactive element
