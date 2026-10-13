@@ -397,6 +397,16 @@ curl -s https://raw.githubusercontent.com/.../README.md | treemd -q '.h'
 tree | treemd                          # Pipe tree output to TUI
 ```
 
+A piped document could come from anywhere, so in the TUI its links and images
+stay inside the working directory, and it loads no image by absolute path. A
+document opened by URL reaches nothing on this machine at all. To treat piped
+documents like local files:
+
+```toml
+[security]
+trust_piped_documents = true
+```
+
 Run `treemd --query-help` for complete documentation.
 
 ## Releases
