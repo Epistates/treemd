@@ -373,25 +373,19 @@ impl Config {
     /// Load the configuration file, falling back to `Default` on error.
     ///
     /// The path is kept, so a later [`save`](Self::save) writes there, only
-    /// when there is nothing at it yet or it parsed. A file that failed to
-    /// parse is still the user's: saving defaults over it the first time they
-    /// changed the theme lost every setting in it over one typo.
+    /// when there is nothing at it yet or it was read and parsed. A file that
+    /// could not be used is still the user's: saving defaults over it the
+    /// first time they changed the theme lost every setting in it over one
+    /// typo, a Latin-1 comment, a UTF-16 file or a permission bit.
     ///
     /// `[keybindings]` is read entry by entry: a key that does not parse or
     /// an action that does not exist is skipped with a warning. Read as part
     /// of the whole file, one such entry failed the parse, so every setting
     /// fell back to its default over a single misspelled action name.
     fn load_from_path(path: &Path) -> Self {
-        let Ok(content) = fs::read_to_string(path) else {
-            return Self {
-                path: Some(path.to_path_buf()),
-                ..Self::default()
-            };
-        };
-
-        let unparsed = |e: &dyn std::fmt::Display| {
+        let unusable = |e: &dyn std::fmt::Display| {
             let warning = format!(
-                "failed to parse config {}: {} (using defaults; \
+                "could not use config {}: {} (using defaults; \
                  settings changed this session will not be saved over it)",
                 path.display(),
                 e
@@ -403,14 +397,25 @@ impl Config {
             }
         };
 
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let mut config = Self::default();
+                config.baseline = config.settings_table().ok();
+                config.path = Some(path.to_path_buf());
+                return config;
+            }
+            Err(e) => return unusable(&e),
+        };
+
         let mut table = match content.parse::<toml::Table>() {
             Ok(table) => table,
-            Err(e) => return unparsed(&e),
+            Err(e) => return unusable(&e),
         };
         let keybindings = table.remove("keybindings");
         let mut config = match toml::Value::Table(table).try_into::<Self>() {
             Ok(config) => config,
-            Err(e) => return unparsed(&e),
+            Err(e) => return unusable(&e),
         };
 
         let mut warnings = Vec::new();
@@ -441,34 +446,44 @@ impl Config {
             .unwrap_or_default()
     }
 
-    /// Save config to file
-    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Save config to file.
+    ///
+    /// The user's file is edited in place, writing only the settings that
+    /// changed since it was loaded or last saved. Serializing the whole
+    /// config over it dropped every comment and unknown key, and wrote out
+    /// every default the user had left unset, which then stopped following
+    /// the defaults. With no file yet, only settings that differ from the
+    /// defaults are written. A file that can no longer be read or parsed is
+    /// left alone.
+    pub fn save(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let path = self
             .path
-            .as_ref()
-            .ok_or("config not saved: no config directory, or the config file did not parse")?;
+            .clone()
+            .ok_or("config not saved: no config directory, or the config file could not be used")?;
 
         // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        // Edit the user's file in place where there is one, writing only the
-        // settings that changed since it was loaded. Serializing the whole
-        // config over it dropped every comment and unknown key, and wrote
-        // out every default the user had left unset.
-        let existing = fs::read_to_string(path)
-            .ok()
-            .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok());
-        let contents = match (existing, &self.baseline) {
-            (Some(mut document), Some(baseline)) => {
-                apply_changes(document.as_table_mut(), baseline, &self.settings_table()?)?;
-                document.to_string()
-            }
-            _ => toml::to_string_pretty(self)?,
+        let mut document = match fs::read_to_string(&path) {
+            Ok(text) => text.parse::<toml_edit::DocumentMut>()?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml_edit::DocumentMut::new(),
+            Err(e) => return Err(e.into()),
         };
-        crate::fsutil::write_atomic(path, contents.as_bytes())?;
+        let current = self.settings_table()?;
+        let baseline = match self.baseline.take() {
+            Some(baseline) => baseline,
+            None => Self::default().settings_table()?,
+        };
+        let applied = apply_changes(document.as_table_mut(), &baseline, &current);
+        self.baseline = Some(baseline);
+        applied?;
+        crate::fsutil::write_atomic(&path, document.to_string().as_bytes())?;
 
+        // What is on disk now is what the next save compares against, so
+        // changing a setting back to its loaded value is saved too.
+        self.baseline = Some(current);
         Ok(())
     }
 
@@ -539,7 +554,7 @@ impl Config {
 /// Write into `document` every value of `new` that differs from `baseline`,
 /// recursing into tables, and leave everything else as it is.
 fn apply_changes(
-    document: &mut toml_edit::Table,
+    document: &mut dyn toml_edit::TableLike,
     baseline: &toml::Table,
     new: &toml::Table,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -555,11 +570,17 @@ fn apply_changes(
                     Some(toml::Value::Table(before)) => before,
                     _ => &empty,
                 };
-                if !document.contains_table(key) {
+                // `ui = { theme = "Nord" }` is a table too. Taken for a
+                // missing one, it was replaced and lost its other keys.
+                if !document
+                    .get(key)
+                    .is_some_and(toml_edit::Item::is_table_like)
+                {
                     document.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
                 }
-                let section = document[key.as_str()]
-                    .as_table_mut()
+                let section = document
+                    .get_mut(key)
+                    .and_then(toml_edit::Item::as_table_like_mut)
                     .ok_or_else(|| format!("config key `{key}` is not a table"))?;
                 apply_changes(section, before, table)?;
             }
@@ -569,7 +590,7 @@ fn apply_changes(
                 if let Some(old) = document.get(key).and_then(toml_edit::Item::as_value) {
                     *value.decor_mut() = old.decor().clone();
                 }
-                document[key.as_str()] = toml_edit::value(value);
+                document.insert(key, toml_edit::value(value));
             }
         }
     }
@@ -853,6 +874,65 @@ something_new = "kept"
 
         // And the result loads back with the new value.
         assert_eq!(Config::load_from_path(&path).ui.theme, "Nord");
+    }
+
+    /// A file that could not be read (here not UTF-8, as a Latin-1 comment
+    /// or a UTF-16 file is) was treated as no file yet and replaced with
+    /// defaults on the first save.
+    #[test]
+    fn an_unreadable_config_is_never_saved_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let bytes = b"# caf\xe9\n[ui]\ntheme = \"Nord\"\n";
+        std::fs::write(&path, bytes).unwrap();
+
+        let mut c = Config::load_from_path(&path);
+        assert_eq!(c.warnings.len(), 1, "{:?}", c.warnings);
+        assert!(c.set_outline_width(40).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    /// The comparison point for a save was fixed at load, so changing a
+    /// setting and then changing it back left the changed value on disk.
+    #[test]
+    fn changing_a_setting_back_is_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\ntheme = \"Nord\"\n").unwrap();
+
+        let mut c = Config::load_from_path(&path);
+        c.set_outline_width(40).unwrap();
+        c.set_outline_width(30).unwrap();
+        assert_eq!(Config::load_from_path(&path).ui.outline_width, 30);
+    }
+
+    /// `ui = { ... }` was taken for a missing table and replaced.
+    #[test]
+    fn an_inline_table_keeps_its_other_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "ui = { theme = \"Nord\", outline_width = 30 }\n").unwrap();
+
+        let mut c = Config::load_from_path(&path);
+        c.set_outline_width(40).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "ui = { theme = \"Nord\", outline_width = 40 }\n"
+        );
+    }
+
+    /// With no file yet, the first save wrote every default, pinning them.
+    #[test]
+    fn a_first_save_writes_only_what_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("treemd").join("config.toml");
+
+        let mut c = Config::load_from_path(&path);
+        c.set_outline_width(40).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[ui]\noutline_width = 40\n"
+        );
     }
 
     #[test]
