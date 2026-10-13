@@ -7,6 +7,7 @@ mod interactive;
 mod iterm_animation;
 #[cfg(all(feature = "mermaid", unix))]
 mod mermaid;
+pub mod signals;
 mod syntax;
 pub mod terminal_compat;
 pub mod theme;
@@ -34,11 +35,14 @@ use std::time::Duration;
 /// Hand the terminal back: leave the alternate screen, drop raw mode, and
 /// release the mouse, so whatever runs next (an editor, the shell) gets a
 /// normal terminal. A program inheriting mouse-reporting mode misbehaves.
+/// The cursor is shown too: frames hide it, and the shell and editors that
+/// do not show it themselves were left without one.
 fn release_terminal(mouse_captured: bool) -> Result<()> {
     use crossterm::event::{DisableBracketedPaste, DisableMouseCapture};
 
     let _ = stdout().execute(DisableBracketedPaste);
     stdout().execute(LeaveAlternateScreen)?;
+    let _ = stdout().execute(crossterm::cursor::Show);
     if mouse_captured {
         let _ = stdout().execute(DisableMouseCapture);
     }
@@ -56,7 +60,18 @@ fn reclaim_terminal(terminal: &mut DefaultTerminal, mouse_captured: bool) -> Res
         let _ = stdout().execute(EnableMouseCapture);
     }
     tty::resume_raw_mode()?;
-    terminal.clear()?;
+    repaint(terminal)
+}
+
+/// Clear the screen and redraw all of it on the next frame.
+///
+/// `Terminal::clear` asks the terminal where its cursor is first and fails
+/// when no answer comes, which ended the session on Ctrl+L, on resuming
+/// after Ctrl+Z, and after the editor, in a terminal that does not answer.
+/// Resizing to the current size clears the same way without asking.
+fn repaint(terminal: &mut DefaultTerminal) -> Result<()> {
+    let area = terminal.size()?.into();
+    terminal.resize(area)?;
     Ok(())
 }
 
@@ -83,6 +98,7 @@ fn run_editor(
     }
 
     let result = builder.open();
+    signals::forget_interrupt();
 
     reclaim_terminal(terminal, mouse_captured)?;
     result.map_err(|e| color_eyre::eyre::eyre!("{}", e))
@@ -129,27 +145,17 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         let _ = watcher.watch(&app.current_file_path);
     }
 
-    // SIGTERM and SIGHUP (a closed terminal) end the session through the
-    // normal exit path, which restores the terminal. Left at their default
-    // they killed the process with raw mode, the alternate screen and mouse
-    // reporting still on, so the shell received mouse escapes as input.
-    let terminate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    #[cfg(unix)]
-    for signal in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGHUP] {
-        let _ = signal_hook::flag::register(signal, std::sync::Arc::clone(&terminate));
-    }
-
     let mut needs_redraw = true;
 
     loop {
-        if terminate.load(std::sync::atomic::Ordering::Relaxed) {
+        if signals::should_exit() {
             return Ok(());
         }
         if app.sync_native_animation_activation() {
             // Direct terminal images outlive Ratatui buffer cells. Clear once
             // when their target changes so a deselected or moved GIF cannot
             // remain painted at its old location.
-            terminal.clear()?;
+            repaint(terminal)?;
             needs_redraw = true;
         }
         if app.process_image_results() {
@@ -167,7 +173,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
             let mut output = stdout();
             if let Err(error) = app.transmit_staged_iterm_animation(&mut output) {
                 app.disable_iterm_animation(&error);
-                terminal.clear()?;
+                repaint(terminal)?;
                 needs_redraw = true;
                 continue;
             }
@@ -440,7 +446,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                     }
                                 }
                                 ActionResult::Redraw => {
-                                    terminal.clear()?;
+                                    repaint(terminal)?;
                                 }
                                 ActionResult::Suspend => {
                                     #[cfg(unix)]
