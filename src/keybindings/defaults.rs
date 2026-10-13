@@ -131,6 +131,8 @@ fn add_normal_mode(kb: &mut Keybindings) {
     bind(kb, Normal, "q", Quit);
     // Raw mode turns Ctrl+C into an ordinary key, so without this it did
     // nothing at all. Quit still asks first when there are unsaved edits.
+    // Every mode binds it: where `q` quits it quits, and where text is
+    // typed or a question asked it cancels, as Escape does.
     bind(kb, Normal, "Ctrl+c", Quit);
     // Esc backs out (clears search/filter, shows quit hint) instead of
     // terminating the session — q is the deliberate quit key.
@@ -177,6 +179,7 @@ fn add_help_mode(kb: &mut Keybindings) {
 
     // Quit
     bind(kb, Help, "q", Quit);
+    bind(kb, Help, "Ctrl+c", Quit);
 }
 
 fn add_theme_picker_mode(kb: &mut Keybindings) {
@@ -199,6 +202,7 @@ fn add_theme_picker_mode(kb: &mut Keybindings) {
 
     // Quit
     bind(kb, ThemePicker, "q", Quit);
+    bind(kb, ThemePicker, "Ctrl+c", Quit);
 }
 
 fn add_interactive_mode(kb: &mut Keybindings) {
@@ -251,6 +255,7 @@ fn add_interactive_mode(kb: &mut Keybindings) {
 
     // Quit
     bind(kb, Interactive, "q", Quit);
+    bind(kb, Interactive, "Ctrl+c", Quit);
 }
 
 fn add_interactive_table_mode(kb: &mut Keybindings) {
@@ -283,6 +288,7 @@ fn add_interactive_table_mode(kb: &mut Keybindings) {
 
     // Quit
     bind(kb, InteractiveTable, "q", Quit);
+    bind(kb, InteractiveTable, "Ctrl+c", Quit);
 }
 
 fn add_link_follow_mode(kb: &mut Keybindings) {
@@ -322,6 +328,7 @@ fn add_link_follow_mode(kb: &mut Keybindings) {
 
     // Quit
     bind(kb, LinkFollow, "q", Quit);
+    bind(kb, LinkFollow, "Ctrl+c", Quit);
 }
 
 fn add_link_search_mode(kb: &mut Keybindings) {
@@ -330,6 +337,7 @@ fn add_link_search_mode(kb: &mut Keybindings) {
 
     // Exit search (back to link follow)
     bind(kb, LinkSearch, "Escape", ExitMode);
+    bind(kb, LinkSearch, "Ctrl+c", ExitMode);
 
     // Select filtered result
     bind(kb, LinkSearch, "Enter", FollowLink);
@@ -348,6 +356,7 @@ fn add_search_mode(kb: &mut Keybindings) {
 
     // Exit search
     bind(kb, Search, "Escape", ExitMode);
+    bind(kb, Search, "Ctrl+c", ExitMode);
 
     // Confirm search (select result)
     bind(kb, Search, "Enter", ConfirmAction);
@@ -365,6 +374,7 @@ fn add_doc_search_mode(kb: &mut Keybindings) {
 
     // Exit search
     bind(kb, DocSearch, "Escape", ExitMode);
+    bind(kb, DocSearch, "Ctrl+c", ExitMode);
 
     // Accept search and enter navigation mode
     bind(kb, DocSearch, "Enter", ConfirmAction);
@@ -384,6 +394,19 @@ fn add_doc_search_mode(kb: &mut Keybindings) {
 
     // Re-enter search input with /
     bind(kb, DocSearch, "/", EnterDocSearch);
+
+    // Reading with the matches highlighted, once Enter has accepted the
+    // search: these keys did nothing there. While the query is typed they
+    // are text, taken before any binding.
+    bind(kb, DocSearch, "j", ScrollDown);
+    bind(kb, DocSearch, "k", ScrollUp);
+    bind(kb, DocSearch, "d", PageDown);
+    bind(kb, DocSearch, "PageDown", PageDown);
+    bind(kb, DocSearch, "u", PageUp);
+    bind(kb, DocSearch, "PageUp", PageUp);
+    bind(kb, DocSearch, "g", First);
+    bind(kb, DocSearch, "G", Last);
+    bind(kb, DocSearch, "q", Quit);
 }
 
 fn add_command_palette_mode(kb: &mut Keybindings) {
@@ -392,6 +415,7 @@ fn add_command_palette_mode(kb: &mut Keybindings) {
 
     // Exit
     bind(kb, CommandPalette, "Escape", ExitMode);
+    bind(kb, CommandPalette, "Ctrl+c", ExitMode);
 
     // Execute selected command
     bind(kb, CommandPalette, "Enter", ConfirmAction);
@@ -422,6 +446,7 @@ fn add_confirm_dialog_mode(kb: &mut Keybindings) {
     bind(kb, ConfirmDialog, "n", CancelAction);
     bind(kb, ConfirmDialog, "N", CancelAction);
     bind(kb, ConfirmDialog, "Escape", CancelAction);
+    bind(kb, ConfirmDialog, "Ctrl+c", CancelAction);
 
     // Discard and quit (for unsaved changes dialogs)
     bind(kb, ConfirmDialog, "q", DiscardAndQuit);
@@ -436,6 +461,7 @@ fn add_cell_edit_mode(kb: &mut Keybindings) {
 
     // Cancel editing
     bind(kb, CellEdit, "Escape", CancelAction);
+    bind(kb, CellEdit, "Ctrl+c", CancelAction);
 
     // Confirm edit
     bind(kb, CellEdit, "Enter", ConfirmAction);
@@ -475,6 +501,7 @@ fn add_file_picker_mode(kb: &mut Keybindings) {
     // Exit
     bind(kb, FilePicker, "Escape", ExitMode);
     bind(kb, FilePicker, "q", Quit);
+    bind(kb, FilePicker, "Ctrl+c", Quit);
 }
 
 fn add_file_search_mode(kb: &mut Keybindings) {
@@ -488,6 +515,7 @@ fn add_file_search_mode(kb: &mut Keybindings) {
 
     // Exit search
     bind(kb, FileSearch, "Escape", ExitMode);
+    bind(kb, FileSearch, "Ctrl+c", ExitMode);
     bind(kb, FileSearch, "Enter", FollowLink);
 
     // Delete character

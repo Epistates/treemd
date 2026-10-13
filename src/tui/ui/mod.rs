@@ -295,11 +295,7 @@ fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
             };
 
             // Show bookmark indicator if this item's text matches the bookmark
-            let bookmark_indicator = if app.bookmark_position.as_deref() == Some(&item.text) {
-                "⚑ "
-            } else {
-                ""
-            };
+            let bookmark_indicator = if app.is_bookmarked(item) { "⚑ " } else { "" };
 
             // Color headings by level using theme
             let color = theme.heading_color(item.level);
