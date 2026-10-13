@@ -33,6 +33,7 @@ jobs:
   lint:
     name: Format & Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,6 +63,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -80,6 +82,7 @@ jobs:
   msrv:
     name: MSRV (1.90)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,6 +97,7 @@ jobs:
   package:
     name: Package
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -111,6 +115,7 @@ jobs:
   musl:
     name: musl on Alpine
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,8 +132,38 @@ jobs:
       # The checkout is mounted read-only: the container only runs the binary.
       - name: Smoke test on Alpine
         run: >-
-          docker run --rm -v "$PWD:/src:ro" -w /src alpine:3
+          docker run --rm -v "$PWD:/src:ro" -w /src alpine:3.22
           sh scripts/smoke-test.sh target/x86_64-unknown-linux-musl/debug/treemd
+
+  # The release packaging otherwise only runs once a tag is pushed, which
+  # cannot be re-cut. Package one target twice and compare: the script has
+  # to work, and to give the same bytes both times.
+  archives:
+    name: Release archives
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build
+        run: cargo build --locked
+      - name: Package twice and compare
+        run: |
+          mkdir -p builds/x86_64-unknown-linux-gnu
+          cp target/debug/treemd builds/x86_64-unknown-linux-gnu/
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export SOURCE_DATE_EPOCH
+          scripts/package-release.sh builds first
+          sleep 1
+          scripts/package-release.sh builds second
+          diff -r first second
+          cat first/SHA256SUMS
+        shell: bash
 
   # Advisories (the RustSec database cargo-audit reads), licenses, banned
   # dependency specs and sources, all configured in deny.toml. The action
@@ -137,6 +172,7 @@ jobs:
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

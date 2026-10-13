@@ -14,7 +14,8 @@
 # and SHA256SUMS, the hashes of the archives themselves.
 #
 # Every timestamp is SOURCE_DATE_EPOCH, owners are 0, and file order and
-# modes are fixed, so the same binaries always give byte-identical archives.
+# modes are fixed, so the same binaries give byte-identical archives with the
+# same versions of tar, gzip and zip.
 # Needs GNU tar, GNU coreutils, gzip and Info-ZIP zip, as on ubuntu runners.
 set -euo pipefail
 
