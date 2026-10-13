@@ -29,35 +29,49 @@ pub struct DocSearchState {
 }
 
 impl App {
+    /// With an outline search applied, select the next match, or the
+    /// previous when not `forward`, wrapping around. Whether it did.
+    pub(super) fn cycle_search_results(&mut self, forward: bool) -> bool {
+        let len = self.outline_items.len();
+        if self.outline_search != OutlineSearch::Applied || len == 0 {
+            return false;
+        }
+        let current = self.outline_state.selected().unwrap_or(0);
+        let step = if forward { 1 } else { len - 1 };
+        self.select_outline_index((current + step) % len);
+        true
+    }
+
     pub fn toggle_search(&mut self) {
-        if self.show_search && self.outline_search_active {
+        match self.outline_search {
             // If actively typing in search, toggle it off (clear and hide)
-            self.show_search = false;
-            self.outline_search_active = false;
-            self.search_query.clear();
-            self.filter_outline();
-        } else if self.show_search {
+            OutlineSearch::Typing => {
+                self.outline_search = OutlineSearch::Off;
+                self.search_query.clear();
+                self.filter_outline();
+            }
             // In accepted search state (showing filtered results) - start fresh search
-            self.search_query.clear();
-            self.filter_outline(); // Restore full outline for new search
-            self.outline_search_active = true; // Re-enter input mode
-        } else {
+            OutlineSearch::Applied => {
+                self.search_query.clear();
+                self.filter_outline(); // Restore full outline for new search
+                self.outline_search = OutlineSearch::Typing;
+            }
             // Enter search mode from normal state
-            self.show_search = true;
-            self.outline_search_active = true;
-            self.search_query.clear();
+            OutlineSearch::Off => {
+                self.outline_search = OutlineSearch::Typing;
+                self.search_query.clear();
+            }
         }
     }
 
     /// Toggle between outline search and document search, preserving the query.
     /// After search is accepted (Enter pressed), Tab cycles through matches instead.
     pub fn toggle_search_mode(&mut self) {
-        if self.show_search {
+        if self.outline_search.is_on() {
             // Currently in outline search -> switch to doc search
             let query = self.search_query.clone();
-            let was_active = self.outline_search_active;
-            self.show_search = false;
-            self.outline_search_active = false;
+            let was_active = self.outline_search == OutlineSearch::Typing;
+            self.outline_search = OutlineSearch::Off;
             self.search_query.clear();
             self.filter_outline(); // Reset outline filter
 
@@ -79,8 +93,7 @@ impl App {
                 self.doc_search.current_idx = None;
 
                 // Enter outline search with the same query
-                self.show_search = true;
-                self.outline_search_active = true; // Keep input active
+                self.outline_search = OutlineSearch::Typing; // Keep input active
                 self.search_query = query;
                 self.filter_outline();
             } else {
@@ -165,9 +178,9 @@ impl App {
     /// If already in accepted doc search state, re-enter doc search input
     pub fn enter_doc_search(&mut self) {
         // If in accepted outline search state (locked-in filter), re-enter outline search input
-        if self.show_search && !self.outline_search_active {
+        if self.outline_search == OutlineSearch::Applied {
             // Re-activate outline search input (keep existing query for editing)
-            self.outline_search_active = true;
+            self.outline_search = OutlineSearch::Typing;
             return;
         }
 
@@ -347,12 +360,8 @@ impl App {
     /// Navigate to next search match
     /// Handles both doc search matches and accepted outline search navigation
     pub fn next_doc_match(&mut self) {
-        // Check if in accepted outline search state (filtered outline visible)
-        if self.show_search && !self.outline_search_active && !self.outline_items.is_empty() {
-            // Cycle through filtered outline items
-            let current = self.outline_state.selected().unwrap_or(0);
-            let next = (current + 1) % self.outline_items.len();
-            self.select_outline_index(next);
+        // With an outline search applied, cycle through its matches
+        if self.cycle_search_results(true) {
             return;
         }
 
@@ -371,13 +380,8 @@ impl App {
     /// Navigate to previous search match
     /// Handles both doc search matches and accepted outline search navigation
     pub fn prev_doc_match(&mut self) {
-        // Check if in accepted outline search state (filtered outline visible)
-        if self.show_search && !self.outline_search_active && !self.outline_items.is_empty() {
-            // Cycle through filtered outline items
-            let current = self.outline_state.selected().unwrap_or(0);
-            let len = self.outline_items.len();
-            let prev = (current + len - 1) % len;
-            self.select_outline_index(prev);
+        // With an outline search applied, cycle through its matches
+        if self.cycle_search_results(false) {
             return;
         }
 
@@ -392,5 +396,58 @@ impl App {
         });
 
         self.scroll_to_doc_search_match();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> App {
+        App::new(
+            crate::parser::parse_markdown("# Alpha\n## Beta\n## Alphabet\n## Gamma\n"),
+            "t.md".into(),
+            PathBuf::from("t.md"),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        )
+    }
+
+    fn outline(app: &App) -> Vec<&str> {
+        app.outline_items.iter().map(|i| i.text.as_str()).collect()
+    }
+
+    /// The outline search moves from typing to applied and back to off,
+    /// one state at a time, and the keys follow it.
+    #[test]
+    fn the_outline_search_moves_through_its_states() {
+        let mut app = app();
+        assert_eq!(app.outline_search, OutlineSearch::Off);
+
+        app.execute_action(Action::EnterSearchMode);
+        assert_eq!(app.outline_search, OutlineSearch::Typing);
+        assert_eq!(app.current_keybinding_mode(), KeybindingMode::Search);
+        for c in "alph".chars() {
+            assert!(app.apply_text_input_edit(TextInputEdit::Insert(c)));
+        }
+        assert_eq!(outline(&app), ["Alpha", "Alphabet"]);
+
+        app.execute_action(Action::ConfirmAction);
+        assert_eq!(app.outline_search, OutlineSearch::Applied);
+        assert_eq!(app.current_keybinding_mode(), KeybindingMode::Normal);
+        // Typed text no longer goes to the query.
+        assert!(!app.apply_text_input_edit(TextInputEdit::Insert('x')));
+
+        // Tab cycles through the matches, wrapping.
+        app.select_outline_index(0);
+        app.toggle_focus();
+        assert_eq!(app.selected_heading_text(), Some("Alphabet"));
+        app.toggle_focus();
+        assert_eq!(app.selected_heading_text(), Some("Alpha"));
+
+        app.execute_action(Action::ExitMode);
+        assert_eq!(app.outline_search, OutlineSearch::Off);
+        assert_eq!(outline(&app), ["Alpha", "Beta", "Alphabet", "Gamma"]);
     }
 }

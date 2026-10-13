@@ -102,6 +102,27 @@ pub enum AppMode {
     FilePicker,            // File picker modal for switching files
 }
 
+/// Where the outline search is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutlineSearch {
+    /// No search; the outline shows every heading.
+    #[default]
+    Off,
+    /// A query being typed, which filters the outline as it changes. Keys
+    /// go to the search bar.
+    Typing,
+    /// A query accepted with Enter. The outline stays filtered, and keys
+    /// move through it as usual, with Tab and `n`/`N` cycling the matches.
+    Applied,
+}
+
+impl OutlineSearch {
+    /// Whether a query filters the outline, typed or applied.
+    pub fn is_on(self) -> bool {
+        self != OutlineSearch::Off
+    }
+}
+
 /// A popup shown in front of the current mode. It takes the keys until it
 /// closes, and only one is open at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,8 +184,8 @@ pub struct App {
     /// laid out by the frame that drew it.
     pub(crate) help_max_scroll: u16,
     pub(crate) help_page: u16,
-    pub show_search: bool,
-    pub outline_search_active: bool, // Whether search input is active (cursor visible)
+    /// Where the outline search is: off, being typed, or applied.
+    pub outline_search: OutlineSearch,
     pub search_query: String,
     pub highlighter: SyntaxHighlighter,
     pub show_outline: bool,
@@ -460,8 +481,7 @@ impl App {
             help_scroll: 0,
             help_max_scroll: u16::MAX,
             help_page: 1,
-            show_search: false,
-            outline_search_active: false,
+            outline_search: OutlineSearch::Off,
             search_query: String::new(),
             highlighter: SyntaxHighlighter::new(
                 code_theme,
@@ -699,7 +719,7 @@ impl App {
         }
 
         // Outline search
-        if self.show_search && self.outline_search_active {
+        if self.outline_search == OutlineSearch::Typing {
             match edit {
                 Insert(c) => self.search_input(c),
                 Clear => {
@@ -807,7 +827,7 @@ impl App {
             })
             .collect();
 
-        if self.show_search && self.outline_search_active {
+        if self.outline_search == OutlineSearch::Typing {
             self.search_query.push_str(&text);
             self.filter_outline();
             return true;
@@ -978,11 +998,8 @@ impl App {
     }
 
     pub fn toggle_focus(&mut self) {
-        // If in locked-in outline search state, Tab cycles to next filtered item
-        if self.show_search && !self.outline_search_active && !self.outline_items.is_empty() {
-            let current = self.outline_state.selected().unwrap_or(0);
-            let next = (current + 1) % self.outline_items.len();
-            self.select_outline_index(next);
+        // With an outline search applied, Tab cycles to the next match
+        if self.cycle_search_results(true) {
             return;
         }
 
@@ -996,12 +1013,8 @@ impl App {
 
     /// Toggle focus backwards (Shift+Tab) - cycles to previous item when search is locked in
     pub fn toggle_focus_back(&mut self) {
-        // If in locked-in outline search state, Shift+Tab cycles to previous filtered item
-        if self.show_search && !self.outline_search_active && !self.outline_items.is_empty() {
-            let current = self.outline_state.selected().unwrap_or(0);
-            let len = self.outline_items.len();
-            let prev = (current + len - 1) % len;
-            self.select_outline_index(prev);
+        // With an outline search applied, Shift+Tab cycles to the previous match
+        if self.cycle_search_results(false) {
             return;
         }
 
