@@ -1195,7 +1195,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     let theme_name = format!(" • Theme:{}", app.theme.name);
     let raw_indicator = if app.show_raw_source { " [RAW]" } else { "" };
-    let latex_indicator = if app.latex_detected && app.should_hide_latex() {
+    let latex_indicator = if app.latex_filter_active() {
         " [LaTeX filtered]"
     } else {
         ""
