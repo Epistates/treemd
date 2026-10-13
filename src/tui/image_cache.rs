@@ -36,16 +36,51 @@ pub(crate) struct ResizeResult {
     error: Option<String>,
 }
 
+/// When a file was last changed and how big it is, to tell whether a cached
+/// image is still the file on disk. `None` when it cannot be read.
+pub(crate) type FileStamp = Option<(std::time::SystemTime, u64)>;
+
+pub(crate) fn file_stamp(path: &Path) -> FileStamp {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+struct DecodeJob {
+    path: PathBuf,
+    stamp: FileStamp,
+    generation: u64,
+}
+
+/// An inline image decoded off the UI thread.
+pub(crate) struct DecodedStill {
+    pub(crate) path: PathBuf,
+    pub(crate) stamp: FileStamp,
+    /// `None` when the job was skipped, because the section it was for was
+    /// left before its turn came.
+    pub(crate) image: Option<Result<image::DynamicImage, String>>,
+}
+
 /// A single background worker shared by all images in an [`App`](crate::tui::App).
 ///
 /// `ratatui-image` deliberately separates resize/encode from rendering because
 /// graphics protocols can be expensive to prepare. Keeping one ordered worker
 /// avoids both frame stalls and an unbounded thread per cached image.
+///
+/// Decoding an inline image's file is the other slow part, a large PNG or
+/// JPEG taking most of a second, and it has a thread of its own. Done on the
+/// UI thread, every section with images froze the screen until they had all
+/// been read.
 pub(crate) struct ImageWorker {
     request_tx: mpsc::Sender<ResizeJob>,
     result_rx: mpsc::Receiver<ResizeResult>,
     pending: Arc<AtomicUsize>,
     next_protocol_id: AtomicU64,
+    decode_tx: mpsc::Sender<DecodeJob>,
+    decoded_rx: mpsc::Receiver<DecodedStill>,
+    decodes_pending: Arc<AtomicUsize>,
+    /// Jobs from before the latest [`supersede_decodes`](Self::supersede_decodes)
+    /// are skipped.
+    decode_generation: Arc<AtomicU64>,
 }
 
 impl ImageWorker {
@@ -53,6 +88,36 @@ impl ImageWorker {
         let (request_tx, request_rx) = mpsc::channel::<ResizeJob>();
         let (result_tx, result_rx) = mpsc::channel::<ResizeResult>();
         let pending = Arc::new(AtomicUsize::new(0));
+        let (decode_tx, decode_rx) = mpsc::channel::<DecodeJob>();
+        let (decoded_tx, decoded_rx) = mpsc::channel::<DecodedStill>();
+        let decode_generation = Arc::new(AtomicU64::new(0));
+
+        let current = Arc::clone(&decode_generation);
+        let _ = thread::Builder::new()
+            .name("treemd-image-decode".to_string())
+            .spawn(move || {
+                while let Ok(job) = decode_rx.recv() {
+                    let image = (job.generation >= current.load(Ordering::Acquire)).then(|| {
+                        // Inline, a GIF is a still of its first frame; it
+                        // plays in the image viewer.
+                        crate::tui::tty::catch_isolated(|| {
+                            ImageCache::extract_first_frame(&job.path).map(fit_for_inline)
+                        })
+                        .unwrap_or_else(|_| {
+                            Err(ImageError::InvalidFormat("decoder panicked".into()))
+                        })
+                        .map_err(|error| error.to_string())
+                    });
+                    let decoded = DecodedStill {
+                        path: job.path,
+                        stamp: job.stamp,
+                        image,
+                    };
+                    if decoded_tx.send(decoded).is_err() {
+                        break;
+                    }
+                }
+            });
 
         let _ = thread::Builder::new()
             .name("treemd-image-resize".to_string())
@@ -86,7 +151,38 @@ impl ImageWorker {
             result_rx,
             pending,
             next_protocol_id: AtomicU64::new(1),
+            decode_tx,
+            decoded_rx,
+            decodes_pending: Arc::new(AtomicUsize::new(0)),
+            decode_generation,
         }
+    }
+
+    /// Queue `path` to be decoded as an inline still.
+    pub(crate) fn request_decode(&self, path: PathBuf, stamp: FileStamp) {
+        let job = DecodeJob {
+            path,
+            stamp,
+            generation: self.decode_generation.load(Ordering::Acquire),
+        };
+        if self.decode_tx.send(job).is_ok() {
+            self.decodes_pending.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    /// Skip every decode queued so far that has not started, as when the
+    /// section they were for is left. Each comes back with no image.
+    pub(crate) fn supersede_decodes(&self) {
+        self.decode_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn drain_decoded(&self) -> Vec<DecodedStill> {
+        let results: Vec<_> = self.decoded_rx.try_iter().collect();
+        if !results.is_empty() {
+            self.decodes_pending
+                .fetch_sub(results.len(), Ordering::AcqRel);
+        }
+        results
     }
 
     pub(crate) fn wrap(&self, protocol: StatefulProtocol) -> AsyncProtocol {
@@ -113,7 +209,7 @@ impl ImageWorker {
     }
 
     pub(crate) fn has_pending(&self) -> bool {
-        self.pending.load(Ordering::Acquire) > 0
+        self.pending.load(Ordering::Acquire) > 0 || self.decodes_pending.load(Ordering::Acquire) > 0
     }
 }
 
