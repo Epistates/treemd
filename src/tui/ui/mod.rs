@@ -3792,7 +3792,7 @@ mod screen_tests {
         draw(&mut app, 80, 20);
         app.enter_doc_search();
         for c in "needle".chars() {
-            app.doc_search_input(c);
+            app.apply_text_input_edit(crate::tui::app::TextInputEdit::Insert(c));
         }
         let screen = draw(&mut app, 80, 20).join("\n");
         assert_eq!(app.doc_search.matches.len(), 1);

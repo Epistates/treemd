@@ -495,7 +495,7 @@ impl App {
             ThemePickerPrevious => self.theme_picker_previous(),
 
             // === Search Input ===
-            SearchBackspace => self.handle_search_backspace(),
+            SearchBackspace => self.text_input_backspace(),
 
             // === Command Palette ===
             CommandPaletteNext => self.command_palette_next(),
@@ -745,33 +745,6 @@ impl App {
                 }
             }
             None => {}
-        }
-    }
-
-    /// Handle backspace in search contexts
-    pub(super) fn handle_search_backspace(&mut self) {
-        // Handle outline search - only if active
-        if self.outline_search == OutlineSearch::Typing {
-            self.search_backspace();
-            return;
-        }
-
-        match self.mode {
-            AppMode::DocSearch => self.doc_search_backspace(),
-            AppMode::LinkFollow if self.link_picker.active => self.link_search_pop(),
-            AppMode::FilePicker if self.file_picker.active => {
-                if self.file_picker.query.is_empty() {
-                    // Empty search query + Backspace => navigate to parent directory
-                    self.file_picker_parent_dir();
-                } else {
-                    self.file_search_pop();
-                }
-            }
-            AppMode::CommandPalette => self.command_palette_backspace(),
-            AppMode::CellEdit => {
-                self.cell_edit_value.pop();
-            }
-            _ => {}
         }
     }
 

@@ -342,20 +342,6 @@ impl App {
         self.command_palette.selected = 0;
     }
 
-    /// Add a character to command palette search
-    pub fn command_palette_input(&mut self, c: char) {
-        if self.command_palette.query.len() < 32 {
-            self.command_palette.query.push(c);
-            self.filter_commands();
-        }
-    }
-
-    /// Remove last character from command palette search
-    pub fn command_palette_backspace(&mut self) {
-        self.command_palette.query.pop();
-        self.filter_commands();
-    }
-
     /// Filter commands based on current query
     pub(super) fn filter_commands(&mut self) {
         // Lowercase once, pass to each command — saves N allocations per
