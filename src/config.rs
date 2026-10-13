@@ -132,6 +132,12 @@ pub struct ContentConfig {
     /// How to mark the edges of a fenced code block (default: full)
     #[serde(default)]
     pub code_fences: CodeFences,
+
+    /// How heading anchors are made, for copied anchors, `-l -o json` ids
+    /// and the query language's `.slug` (default: treemd). `github` keeps
+    /// `_` and numbers repeated headings, as github.com does
+    #[serde(default)]
+    pub slug_style: crate::parser::SlugStyle,
 }
 
 /// How fenced code blocks are delimited in the rendered content pane.
@@ -162,6 +168,7 @@ impl Default for ContentConfig {
             hide_latex: default_hide_latex(),
             latex_aggressive: default_latex_aggressive(),
             code_fences: CodeFences::default(),
+            slug_style: crate::parser::SlugStyle::default(),
         }
     }
 }

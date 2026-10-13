@@ -479,6 +479,8 @@ pub struct HeadingValue {
     pub raw_md: String,
     /// Index in the flat headings list (for navigation)
     pub index: usize,
+    /// Anchor slug, in the engine's [`SlugStyle`](crate::parser::SlugStyle)
+    pub slug: String,
 }
 
 impl HeadingValue {
@@ -490,7 +492,7 @@ impl HeadingValue {
             "line" => Some(Value::Number(self.line as f64)),
             "content" => Some(Value::String(self.content.clone())),
             "md" | "markdown" => Some(Value::String(self.raw_md.clone())),
-            "slug" => Some(Value::String(slugify(&self.text))),
+            "slug" => Some(Value::String(self.slug.clone())),
             _ => None,
         }
     }
@@ -698,19 +700,6 @@ impl DocumentValue {
     }
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Generate URL-friendly slug from text.
-///
-/// Delegates to the single canonical implementation (turbovault, via
-/// `parser::content::slugify`) so heading slugs are consistent across the
-/// document model, JSON output, and the query language.
-fn slugify(text: &str) -> String {
-    crate::parser::content::slugify(text)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,14 +721,5 @@ mod tests {
         assert!(Value::Number(1.0).is_truthy());
         assert!(!Value::String("".into()).is_truthy());
         assert!(Value::String("hello".into()).is_truthy());
-    }
-
-    #[test]
-    fn test_slugify() {
-        // Now delegates to turbovault's canonical slugify: `.` and `_` are
-        // dropped (not treated as separators), so "API v2.0" -> "api-v20".
-        assert_eq!(slugify("Hello World"), "hello-world");
-        assert_eq!(slugify("Getting Started!"), "getting-started");
-        assert_eq!(slugify("API v2.0"), "api-v20");
     }
 }

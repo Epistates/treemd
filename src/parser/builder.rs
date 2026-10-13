@@ -1,12 +1,21 @@
 //! Build nested JSON output from document structure
 
-use super::content::{parse_content, slugify};
+use super::content::{SlugStyle, parse_content};
 use super::document::{Document, HeadingNode};
 use super::output::*;
 use std::path::Path;
 
 /// Build complete JSON output with nested sections and markdown intelligence
 pub fn build_json_output(doc: &Document, source_path: Option<&Path>) -> DocumentOutput {
+    build_json_output_with(doc, source_path, SlugStyle::default())
+}
+
+/// [`build_json_output`], with each section's `id` and `slug` in `slug_style`.
+pub fn build_json_output_with(
+    doc: &Document,
+    source_path: Option<&Path>,
+    slug_style: SlugStyle,
+) -> DocumentOutput {
     let tree = doc.build_tree();
 
     // Calculate metadata
@@ -21,10 +30,13 @@ pub fn build_json_output(doc: &Document, source_path: Option<&Path>) -> Document
     };
 
     // Build sections with content
-    let lines = doc.heading_lines();
+    let headings = HeadingFacts {
+        lines: doc.heading_lines(),
+        slugs: doc.heading_slugs(slug_style),
+    };
     let sections = tree
         .iter()
-        .map(|node| build_section(node, doc, &lines))
+        .map(|node| build_section(node, doc, &headings))
         .collect();
 
     DocumentOutput {
@@ -32,8 +44,15 @@ pub fn build_json_output(doc: &Document, source_path: Option<&Path>) -> Document
     }
 }
 
-fn build_section(node: &HeadingNode, doc: &Document, lines: &[usize]) -> Section {
+/// What each heading needs from the whole document, by heading index.
+struct HeadingFacts {
+    lines: Vec<usize>,
+    slugs: Vec<String>,
+}
+
+fn build_section(node: &HeadingNode, doc: &Document, headings: &HeadingFacts) -> Section {
     let heading = &node.heading;
+    let lines = &headings.lines;
 
     // Extract content for this section
     let (raw_content, offset, line) = extract_section_content(doc, node.index, lines[node.index]);
@@ -45,14 +64,15 @@ fn build_section(node: &HeadingNode, doc: &Document, lines: &[usize]) -> Section
     let children = node
         .children
         .iter()
-        .map(|child| build_section(child, doc, lines))
+        .map(|child| build_section(child, doc, headings))
         .collect();
 
+    let slug = &headings.slugs[node.index];
     Section {
-        id: slugify(&heading.text),
+        id: slug.clone(),
         level: heading.level,
         title: heading.text.clone(),
-        slug: slugify(&heading.text),
+        slug: slug.clone(),
         position: Position { line, offset },
         content: Content {
             raw: raw_content,
@@ -268,6 +288,24 @@ mod tests {
             "child body leaked into parent raw"
         );
         assert_eq!(a.children[0].content.raw.trim(), "A1-body");
+    }
+
+    /// With GitHub's slugs, repeated headings get unique ids, and the ids
+    /// are GitHub's. The default keeps treemd's, where they repeat.
+    #[test]
+    fn github_slugs_number_repeated_headings() {
+        let doc = parse_markdown("# Setup\n## snake_case\n# Setup\n");
+        let ids = |style| -> Vec<String> {
+            let out = build_json_output_with(&doc, None, style);
+            let mut ids = Vec::new();
+            for section in &out.document.sections {
+                ids.push(section.id.clone());
+                ids.extend(section.children.iter().map(|c| c.slug.clone()));
+            }
+            ids
+        };
+        assert_eq!(ids(SlugStyle::Github), ["setup", "snake_case", "setup-1"]);
+        assert_eq!(ids(SlugStyle::Treemd), ["setup", "snakecase", "setup"]);
     }
 
     #[test]

@@ -237,6 +237,11 @@ impl Document {
             .unwrap_or(self.content.len())
     }
 
+    /// Every heading's anchor slug in `style`, in document order.
+    pub fn heading_slugs(&self, style: super::content::SlugStyle) -> Vec<String> {
+        style.slugs(self.headings.iter().map(|h| h.text.as_str()))
+    }
+
     /// The 1-indexed line each heading sits on, in heading order.
     ///
     /// One sequential pass, counting newlines between consecutive headings.

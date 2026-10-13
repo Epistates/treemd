@@ -4874,10 +4874,14 @@ impl App {
     }
 
     pub fn copy_anchor(&mut self) {
-        // Copy the anchor link for the currently selected heading
-        if let Some(heading_text) = self.selected_heading_text() {
-            // Convert heading to anchor format (lowercase, replace spaces with dashes)
-            let anchor = Self::heading_to_anchor(heading_text);
+        // Copy the anchor link for the currently selected heading, in the
+        // configured slug style. GitHub's numbers repeated headings, so the
+        // slug depends on the headings before it.
+        if let Some(index) = self.selected_heading_index() {
+            let anchor = self
+                .document
+                .heading_slugs(self.config.content.slug_style)
+                .swap_remove(index);
             let anchor_link = format!("#{}", anchor);
 
             // Use persistent clipboard for Linux X11 compatibility
@@ -4896,11 +4900,6 @@ impl App {
         } else {
             self.status_message = Some("✗ No heading selected".to_string());
         }
-    }
-
-    /// Convert heading text to anchor format using the parser's slugify for consistency
-    fn heading_to_anchor(heading: &str) -> String {
-        crate::parser::content::slugify(heading)
     }
 
     /// Enter link follow mode - extract links from current section and highlight them
@@ -5505,25 +5504,34 @@ impl App {
     /// heading under a collapsed one is found (its ancestors are expanded).
     /// As on GitHub, `#name-1` is the second heading whose anchor is `name`.
     fn jump_to_anchor(&mut self, anchor: &str) -> Result<(), String> {
+        use crate::parser::SlugStyle;
+
         let anchor_lower = anchor.to_lowercase();
-        let anchors: Vec<String> = self
-            .document
-            .headings
-            .iter()
-            .map(|heading| Self::heading_to_anchor(&heading.text))
-            .collect();
+        let anchors = self.document.heading_slugs(SlugStyle::Treemd);
 
         // Strategy 1: Normalized anchor match. The anchor from markdown
-        // links is already normalized (lowercase, dashes).
+        // links is already normalized (lowercase, dashes). A link may be
+        // written for treemd or copied from GitHub, which keeps `_`
+        // (`#snake_case`), so either style finds the heading, whatever the
+        // config's style for making anchors is.
         // Strategy 2: Direct heading text match (case-insensitive).
         // Wikilinks like [[#Mixed Links Test]] keep the heading's text.
         // Strategy 3: `name-N`, the Nth repeat of anchor `name`.
-        let found = anchors.iter().position(|a| *a == anchor_lower).or_else(|| {
-            self.document
-                .headings
-                .iter()
-                .position(|heading| heading.text.eq_ignore_ascii_case(anchor))
-        });
+        let found = anchors
+            .iter()
+            .position(|a| *a == anchor_lower)
+            .or_else(|| {
+                self.document
+                    .heading_slugs(SlugStyle::Github)
+                    .iter()
+                    .position(|a| *a == anchor_lower)
+            })
+            .or_else(|| {
+                self.document
+                    .headings
+                    .iter()
+                    .position(|heading| heading.text.eq_ignore_ascii_case(anchor))
+            });
         let found = found.or_else(|| {
             let (base, n) = anchor_lower.rsplit_once('-')?;
             let n: usize = n.parse().ok()?;
@@ -7402,6 +7410,25 @@ mod heading_identity_tests {
 
         app.jump_to_anchor("added-1").unwrap();
         assert_eq!(app.selected_heading_index(), Some(3));
+    }
+
+    /// A link copied from GitHub keeps `_` (`#snake_case`), which treemd's
+    /// own slugs drop, so it was "not found" whatever the config said.
+    #[test]
+    fn github_anchors_are_followed_in_either_style() {
+        let mut app = App::new(
+            crate::parser::parse_markdown("# Intro\n## snake_case\n## Other\n"),
+            "t.md".into(),
+            PathBuf::from("t.md"),
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+        app.jump_to_anchor("snake_case").unwrap();
+        assert_eq!(app.selected_heading_text(), Some("snake_case"));
+        app.jump_to_anchor("other").unwrap();
+        app.jump_to_anchor("snakecase").unwrap();
+        assert_eq!(app.selected_heading_text(), Some("snake_case"));
     }
 
     /// In interactive mode `g` and `G` moved the outline, switching section
