@@ -83,6 +83,12 @@ pub fn parse_file(path: &Path) -> std::io::Result<Document> {
 ///
 /// A `Document` containing the content and extracted headings with byte offsets.
 pub fn parse_markdown(content: &str) -> Document {
+    // A lone `\r` ends a line in CommonMark, as in a file saved with classic
+    // Mac line endings, but the parser reads it as nothing, so every heading
+    // after the first ran into one line. It becomes `\n`, which is the same
+    // length, so offsets still index the file.
+    let content = &*lone_cr_to_lf(content);
+
     // A UTF-8 byte order mark is not markdown, and left in place it sits in
     // front of the first `#`, which then no longer opens a heading. Parse
     // past it, but keep it in the content so offsets still index the file
@@ -103,9 +109,46 @@ pub fn parse_markdown(content: &str) -> Document {
     Document::new(content.to_string(), headings)
 }
 
+/// `content` with each `\r` that is not part of a `\r\n` made a `\n`.
+pub fn lone_cr_to_lf(content: &str) -> std::borrow::Cow<'_, str> {
+    if !has_lone_cr(content.as_bytes()) {
+        return std::borrow::Cow::Borrowed(content);
+    }
+    let mut bytes = content.as_bytes().to_vec();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n') {
+            bytes[i] = b'\n';
+        }
+    }
+    // One ASCII byte replaced by another, so still UTF-8.
+    std::borrow::Cow::Owned(String::from_utf8(bytes).expect("ASCII swap keeps UTF-8"))
+}
+
+/// Whether `bytes` has a `\r` that is not part of a `\r\n`.
+pub fn has_lone_cr(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .enumerate()
+        .any(|(i, &b)| b == b'\r' && bytes.get(i + 1) != Some(&b'\n'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bare CR line endings ran every heading after the first into one
+    /// line: `# A\rtext\r## B` listed one heading, `Atext## B`.
+    #[test]
+    fn bare_cr_ends_a_line() {
+        let doc = parse_markdown("# A\rtext\r\r## B\rmore\r\n## C\r\n");
+        let texts: Vec<&str> = doc.headings.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, ["A", "B", "C"]);
+        // Same length, so offsets index the original.
+        assert_eq!(doc.content, "# A\ntext\n\n## B\nmore\r\n## C\r\n");
+        assert_eq!(doc.heading_lines(), [1, 4, 6]);
+        assert!(!has_lone_cr(b"a\r\nb\n"));
+        assert!(has_lone_cr(b"a\rb"));
+    }
 
     #[test]
     fn test_parse_headings() {
