@@ -66,6 +66,9 @@ impl From<io::Error> for InputError {
     }
 }
 
+/// The path the TUI gives a document read from stdin, which has none.
+pub const STDIN_PATH: &str = "<stdin>";
+
 /// Whether `spec` names a remote document rather than a path: an http(s)
 /// URL, scheme in any case as URLs allow, or `github:owner/repo`.
 pub fn is_remote_spec(spec: &str) -> bool {

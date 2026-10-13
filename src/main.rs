@@ -351,7 +351,10 @@ fn main() -> Result<()> {
             (name, path)
         } else {
             // Stdin input or directory
-            ("stdin".to_string(), std::path::PathBuf::from("<stdin>"))
+            (
+                "stdin".to_string(),
+                std::path::PathBuf::from(treemd::input::STDIN_PATH),
+            )
         };
 
         // Determine if images are enabled

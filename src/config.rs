@@ -45,6 +45,22 @@ pub struct Config {
     /// Content filtering options
     #[serde(default)]
     pub content: ContentConfig,
+
+    /// What a document from outside may reach on this machine
+    #[serde(default)]
+    pub security: SecurityConfig,
+}
+
+/// What a document from outside may reach on this machine.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// Treat a piped document (`curl ... | treemd`) like a local file
+    /// (default: false). Untrusted, its links and images stay inside the
+    /// working directory and it loads no image by absolute path. Trusted, it
+    /// may load any local image, and its links reach anywhere in the working
+    /// directory's git repository.
+    #[serde(default)]
+    pub trust_piped_documents: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

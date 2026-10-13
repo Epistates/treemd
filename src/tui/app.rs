@@ -214,12 +214,18 @@ impl PaletteCommand {
 /// The link root for a document at `path`: the enclosing git work tree if
 /// there is one, otherwise the document's own directory. See
 /// [`App::confine_link_path`].
-fn link_root_for(path: &std::path::Path) -> PathBuf {
+///
+/// A piped document is not from any directory and may be from anywhere,
+/// so unless `trust_piped` its links stay in the working directory itself.
+fn link_root_for(path: &std::path::Path, trust_piped: bool) -> PathBuf {
     let dir = path
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
         .unwrap_or(std::path::Path::new("."));
     let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if path == std::path::Path::new(crate::input::STDIN_PATH) && !trust_piped {
+        return dir;
+    }
     dir.ancestors()
         .find(|ancestor| ancestor.join(".git").exists())
         .map(std::path::Path::to_path_buf)
@@ -892,7 +898,7 @@ impl App {
         let picker = images_enabled.then(Self::init_picker).flatten();
         let image_worker = picker.as_ref().map(|_| ImageWorker::new());
         let disk_hash = content_hash(document.content.as_bytes());
-        let link_root = link_root_for(&file_path);
+        let link_root = link_root_for(&file_path, config.security.trust_piped_documents);
         let latex_detected = crate::tui::ui::util::contains_latex(&document.content);
 
         Self {
@@ -5293,7 +5299,10 @@ impl App {
             .to_string();
 
         self.load_document(document, filename, file_path);
-        self.link_root = link_root_for(&self.current_file_path);
+        self.link_root = link_root_for(
+            &self.current_file_path,
+            self.config.security.trust_piped_documents,
+        );
 
         // Exit picker mode
         self.mode = AppMode::Normal;
@@ -6683,6 +6692,13 @@ impl App {
         crate::input::is_remote_spec(&self.current_file_path.to_string_lossy())
     }
 
+    /// Whether the document was piped in and the config does not trust
+    /// piped documents (`security.trust_piped_documents`).
+    fn is_untrusted_piped_document(&self) -> bool {
+        self.current_file_path == std::path::Path::new(crate::input::STDIN_PATH)
+            && !self.config.security.trust_piped_documents
+    }
+
     /// Resolve an image path relative to the current markdown file.
     ///
     /// Supports both relative and absolute paths:
@@ -6707,6 +6723,21 @@ impl App {
             );
         }
         let path = std::path::Path::new(src);
+
+        // A piped document may come from anywhere (`curl ... | treemd`), so
+        // unless the config trusts it, its images are held to the working
+        // directory the way its links are. It could otherwise show any
+        // image on disk by absolute path.
+        if self.is_untrusted_piped_document() {
+            if path.has_root() {
+                return Err(
+                    "A piped document loads images from the working directory only; \
+                     set security.trust_piped_documents to allow absolute paths"
+                        .to_string(),
+                );
+            }
+            return self.confine_link_path(path);
+        }
 
         if path.is_absolute() {
             return Ok(path.to_path_buf());
@@ -7606,6 +7637,42 @@ mod link_boundary_tests {
         assert!(app.confine_link_path(Path::new("notes.md")).is_err());
         assert!(app.resolve_image_path("/etc/passwd").is_err());
         assert!(app.resolve_image_path("diagram.png").is_err());
+    }
+
+    fn piped_app(trusted: bool) -> App {
+        let mut config = Config::default();
+        config.security.trust_piped_documents = trusted;
+        App::new(
+            crate::parser::parse_markdown("# doc\n"),
+            "stdin".into(),
+            PathBuf::from(crate::input::STDIN_PATH),
+            config,
+            ColorMode::Rgb,
+            false,
+        )
+    }
+
+    /// A piped document can come from anywhere (`curl ... | treemd`). Its
+    /// images could be loaded by absolute path, so a page could show any
+    /// image on disk. Its links and images now stay in the working
+    /// directory unless the config trusts piped documents.
+    #[test]
+    fn a_piped_document_stays_in_the_working_directory() {
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let app = piped_app(false);
+        assert_eq!(app.link_root, cwd);
+        assert!(app.resolve_image_path("/etc/passwd").is_err());
+        assert!(app.resolve_image_path("../outside.png").is_err());
+        assert_eq!(
+            app.resolve_image_path("docs/diagram.png").unwrap(),
+            cwd.join("docs/diagram.png")
+        );
+
+        let trusted = piped_app(true);
+        assert_eq!(
+            trusted.resolve_image_path("/etc/passwd").unwrap(),
+            Path::new("/etc/passwd")
+        );
     }
 
     #[test]
