@@ -11,16 +11,27 @@ pub fn detect_shell() -> Option<String> {
     })
 }
 
-/// Gets the appropriate shell config file path
+/// Gets the appropriate shell config file path: `.bashrc`, zsh's `.zshrc`
+/// in `$ZDOTDIR` when set, and fish's `config.fish` under
+/// `$XDG_CONFIG_HOME` when set.
 pub fn get_shell_config_path(shell: &str) -> Option<PathBuf> {
-    let home = env::var("HOME").ok()?;
-    let config_file = match shell {
-        "bash" => ".bashrc",
-        "zsh" => ".zshrc",
-        "fish" => ".config/fish/config.fish",
-        _ => return None,
+    let home = PathBuf::from(env::var_os("HOME")?);
+    let var_dir = |name: &str| {
+        env::var_os(name)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
     };
-    Some(PathBuf::from(home).join(config_file))
+    match shell {
+        "bash" => Some(home.join(".bashrc")),
+        "zsh" => Some(var_dir("ZDOTDIR").unwrap_or(home).join(".zshrc")),
+        "fish" => Some(
+            var_dir("XDG_CONFIG_HOME")
+                .unwrap_or_else(|| home.join(".config"))
+                .join("fish")
+                .join("config.fish"),
+        ),
+        _ => None,
+    }
 }
 
 /// Generates the completion setup line for a given shell
@@ -33,14 +44,22 @@ pub fn get_completion_setup_line(shell: &str, bin_name: &str) -> Option<String> 
     }
 }
 
-/// Checks if completion is already set up in the config file
-pub fn is_completion_setup(config_path: &PathBuf, bin_name: &str) -> io::Result<bool> {
+/// Checks if completion is already set up in the config file: a line that
+/// is `setup_line`, ignoring surrounding space.
+///
+/// Any `COMPLETE=` anywhere plus any mention of treemd anywhere counted,
+/// so another tool's completion line and a treemd alias read as set up.
+pub fn is_completion_setup(config_path: &PathBuf, setup_line: &str) -> io::Result<bool> {
     let content = fs::read_to_string(config_path)?;
-    Ok(content.contains("COMPLETE=") && content.contains(bin_name))
+    Ok(content.lines().any(|line| line.trim() == setup_line))
 }
 
 /// Adds completion setup to the shell config file
 pub fn add_completion_to_config(config_path: &PathBuf, setup_line: &str) -> io::Result<()> {
+    // Fish's config directory need not exist yet.
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -65,20 +84,20 @@ pub fn setup_completions_interactive(bin_name: &str) -> io::Result<()> {
         )
     })?;
 
-    if config_path.exists() && is_completion_setup(&config_path, bin_name)? {
-        println!(
-            "✓ Shell completions are already set up in {:?}",
-            config_path
-        );
-        return Ok(());
-    }
-
     let setup_line = get_completion_setup_line(&shell, bin_name).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("No completion setup available for {}", shell),
         )
     })?;
+
+    if config_path.exists() && is_completion_setup(&config_path, &setup_line)? {
+        println!(
+            "✓ Shell completions are already set up in {:?}",
+            config_path
+        );
+        return Ok(());
+    }
 
     println!(
         "\nTo enable shell completions, add this line to {:?}:",

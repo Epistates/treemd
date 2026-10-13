@@ -80,7 +80,7 @@ Use it to:
 | **Statistics** | Count headings by level (`--count`) |
 | **Stdin support** | Pipe markdown content (`cat doc.md \| treemd -q '.h'`) |
 
-**Pro tip:** Combine `--tree` with `--section` for rapid navigation of large files. The query language brings [jq](https://jqlang.github.io/jq/)-like power to markdown extraction.
+**Pro tip:** `--tree -n` shows each section's line range, so you can read just the lines you need from a large file, or pull one out whole with `--section`. The query language brings [jq](https://jqlang.github.io/jq/)-like power to markdown extraction.
 
 ## Installation
 
@@ -140,7 +140,6 @@ Launch the interactive interface by running treemd with a file:
 treemd README.md        # Open specific file
 treemd .                # Open file picker in current directory
 treemd docs/            # Open file picker in specified directory
-treemd *.md             # Open file picker with matched files
 ```
 
 #### Keyboard Shortcuts
@@ -196,9 +195,10 @@ treemd *.md             # Open file picker with matched files
 | `Tab` / `Shift+Tab` | Navigate links |
 | `1`-`9` | Jump to link by number |
 | `Enter` | Follow selected link |
-| `b` / `Backspace` | Go back |
-| `F` (Shift+F) | Go forward |
+| `p` | List the parent section's links |
 | `Esc` | Exit link mode |
+
+After following a link, `b` / `Backspace` and `F` go back and forward from the main view.
 
 </details>
 
@@ -209,10 +209,13 @@ treemd *.md             # Open file picker with matched files
 |-----|--------|
 | `i` | Enter interactive mode |
 | `j` / `k` | Navigate elements |
+| `g` / `G` | First / last element |
+| `d` / `u` | Page down / up |
 | `Tab` / `Shift+Tab` | Next/previous link within element |
 | `Enter` | Activate element |
 | `Space` | Toggle checkboxes/details |
-| `y` | Copy content |
+| `y` | Copy the selected element (link target, code, table, image source) |
+| `e` | Open the editor at the element's line |
 | `Esc` | Exit interactive mode |
 
 </details>
@@ -249,7 +252,7 @@ treemd *.md             # Open file picker with matched files
 | `m` | Set bookmark |
 | `'` | Jump to bookmark |
 | `?` | Toggle help overlay |
-| `q` / `Ctrl+c` | Quit (`Esc` backs out of searches/modes) |
+| `q` / `Ctrl+c` | Quit (`Esc` backs out of searches/modes; in a search or prompt, `Ctrl+c` cancels it) |
 | `Ctrl+z` | Suspend to the shell (`fg` to return) |
 
 </details>

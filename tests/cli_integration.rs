@@ -644,3 +644,55 @@ fn section_with_inline_markdown_in_heading() {
     );
     assert!(!stdout.contains("body-of-next"));
 }
+
+// ------------------------------------------------------------------
+// One mode at a time, and the options that shape a listing need one.
+// Given two modes, all but one were silently ignored; given a listing
+// option without a listing, it was ignored and the TUI started.
+// ------------------------------------------------------------------
+
+#[test]
+fn modes_cannot_be_combined() {
+    let f = fixture_file();
+    for args in [
+        &["-l", "--tree"][..],
+        &["--tree", "-s", "Installation"],
+        &["--count", "-l"],
+        &["--at-line", "1", "-l"],
+        &["-q", ".h1", "--tree"],
+    ] {
+        let mut argv = args.to_vec();
+        argv.push(f.to_str().unwrap());
+        let (_, stderr, code) = run(&argv);
+        assert_eq!(code, 2, "{args:?}: {stderr}");
+        assert!(stderr.contains("cannot be used with"), "{args:?}: {stderr}");
+    }
+}
+
+#[test]
+fn listing_options_need_a_listing() {
+    let f = fixture_file();
+    for args in [
+        &["--filter", "usage"][..],
+        &["-L", "2"],
+        &["-n"],
+        &["-o", "json"],
+        &["--count", "-L", "2"],
+    ] {
+        let mut argv = args.to_vec();
+        argv.push(f.to_str().unwrap());
+        let (_, stderr, code) = run(&argv);
+        assert_eq!(code, 2, "{args:?}: {stderr}");
+        assert!(stderr.contains("--list|--tree"), "{args:?}: {stderr}");
+    }
+}
+
+/// `-o tree` was listed as an output format and refused with -l.
+#[test]
+fn list_with_tree_output_prints_the_tree() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", "-o", "tree", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let (tree, _, _) = run(&["--tree", f.to_str().unwrap()]);
+    assert_eq!(stdout, tree);
+}

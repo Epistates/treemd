@@ -28,9 +28,18 @@ pub fn display(text: &str) -> Cow<'_, str> {
 /// DEL as `^?`, and a C1 control as its code point, so nothing reaches the
 /// terminal as a command. Newlines, tabs and the CR of a CRLF pair pass
 /// through, so ordinary text, including a CRLF file, prints as it is.
+///
+/// The bidirectional overrides and isolates are shown as code points too.
+/// They are not commands, but they reorder how the rest of the line is
+/// drawn, so a heading could display as something other than what it says.
+/// The plain direction marks used in right-to-left text are left alone.
 pub fn escape_controls(text: &str) -> Cow<'_, str> {
     let is_kept = |c: char, next: Option<char>| {
-        !c.is_control() || c == '\n' || c == '\t' || (c == '\r' && next == Some('\n'))
+        let reorders = matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
+        (!c.is_control() && !reorders)
+            || c == '\n'
+            || c == '\t'
+            || (c == '\r' && next == Some('\n'))
     };
     let mut chars = text.chars().peekable();
     let mut clean = true;
@@ -64,6 +73,17 @@ pub fn escape_controls(text: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bidi_overrides_are_shown_not_applied() {
+        assert_eq!(
+            escape_controls("admin\u{202e}txt.exe"),
+            "admin<U+202E>txt.exe"
+        );
+        assert_eq!(escape_controls("a\u{2067}b\u{2069}"), "a<U+2067>b<U+2069>");
+        // A right-to-left mark is ordinary text.
+        assert!(matches!(escape_controls("שלום\u{200f}"), Cow::Borrowed(_)));
+    }
 
     #[test]
     fn ordinary_text_is_untouched() {
