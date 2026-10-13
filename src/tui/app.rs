@@ -18,6 +18,15 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// A file's modified time and length, to tell whether it changed since it
+/// was read. `None` when it cannot be read.
+type FileStamp = Option<(std::time::SystemTime, u64)>;
+
+fn file_stamp(path: &std::path::Path) -> FileStamp {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
 /// Special marker for the document overview entry (shows entire file content)
 pub const DOCUMENT_OVERVIEW: &str = "(Document)";
 
@@ -490,12 +499,23 @@ pub struct ImageModalState {
     /// canvas rather than every frame, so a long recording stays small.
     pub(crate) stream: Option<StreamingGif>,
     pub(crate) stream_index: usize,
+    /// A walk to a frame other than the next, running off the UI thread.
+    pub(crate) seek: Option<std::sync::mpsc::Receiver<ModalSeek>>,
+    /// Bumped by each seek and on close; a walk stops once it is stale.
+    pub(crate) seek_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// One entry per frame; a still image has one, of zero.
     pub frame_delays_ms: Vec<u32>,
     pub frame_index: usize,
     pub last_rendered_frame: Option<usize>,
     pub last_frame_update: Option<Instant>,
     pub animation_paused: bool,
+}
+
+/// A GIF decoder walked to a frame by [`App::modal_frame`]'s seek thread.
+pub(crate) struct ModalSeek {
+    stream: StreamingGif,
+    index: usize,
+    frame: image::DynamicImage,
 }
 
 /// A high-level edit applied to whichever text-input field is active.
@@ -689,6 +709,12 @@ pub struct App {
     /// seen images survives navigation between sections so the user doesn't
     /// pay the decode cost on every back-and-forth.
     pub(crate) image_protocol_cache: IndexMap<PathBuf, AsyncProtocol>,
+    /// The file each cached image was decoded from, as it was then, so a
+    /// replaced image is decoded again rather than shown as it used to be.
+    image_stamps: std::collections::HashMap<PathBuf, FileStamp>,
+    /// Images that failed to decode, and the file as it was then, so a bad
+    /// image is not decoded again on every section change.
+    image_failures: std::collections::HashMap<PathBuf, FileStamp>,
 
     // Streaming inline GIF state, keyed with the corresponding protocol cache.
     // Unlike the modal viewer this retains only the compositing canvas, keeping
@@ -709,7 +735,7 @@ pub struct App {
 
     // Mermaid diagram rendering cache: source hash → rendered protocol
     #[cfg(all(feature = "mermaid", unix))]
-    pub(crate) mermaid_protocol_cache: HashMap<u64, AsyncProtocol>,
+    pub(crate) mermaid_protocol_cache: IndexMap<u64, AsyncProtocol>,
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_render_errors: HashMap<u64, String>,
     /// Lays diagrams out off the UI thread; started by the first diagram.
@@ -961,6 +987,8 @@ impl App {
 
             // Cached image protocols (populated after index_elements)
             image_protocol_cache: IndexMap::new(),
+            image_stamps: std::collections::HashMap::new(),
+            image_failures: std::collections::HashMap::new(),
 
             // Image modal viewing state (path, GIF playback, etc.)
             image_modal: ImageModalState::default(),
@@ -975,7 +1003,7 @@ impl App {
 
             // Mermaid diagram cache
             #[cfg(all(feature = "mermaid", unix))]
-            mermaid_protocol_cache: HashMap::new(),
+            mermaid_protocol_cache: IndexMap::new(),
             #[cfg(all(feature = "mermaid", unix))]
             mermaid_render_errors: HashMap::new(),
             #[cfg(all(feature = "mermaid", unix))]
@@ -1005,6 +1033,10 @@ impl App {
     fn init_picker() -> Option<ratatui_image::picker::Picker> {
         use ratatui_image::picker::Picker;
 
+        // Before any picker is made: in tmux, every one of them, halfblocks
+        // included, turns the pane's passthrough on.
+        crate::tui::tty::remember_tmux_passthrough();
+
         // ratatui-image 11 reads the probe's answer on a thread it leaves
         // blocked on stdin when the terminal never answers, and from then on
         // that thread swallows every key, `q` included. Ask first with a
@@ -1012,6 +1044,12 @@ impl App {
         // keeps any keys it reads for the event loop. Fixed upstream in
         // ratatui-image 12, which polls instead.
         if crossterm::cursor::position().is_err() {
+            return Some(Picker::halfblocks());
+        }
+        // Inside tmux that answer comes from tmux itself. The probe goes on
+        // to the terminal tmux runs in, and a session with none attached (a
+        // script, a detached session) never answers, with the same result.
+        if Self::tmux_session_detached() {
             return Some(Picker::halfblocks());
         }
 
@@ -1051,6 +1089,19 @@ impl App {
         }
 
         Some(picker)
+    }
+
+    /// Whether this is a tmux session no terminal is attached to.
+    fn tmux_session_detached() -> bool {
+        if std::env::var_os("TMUX").is_none() {
+            return false;
+        }
+        std::process::Command::new("tmux")
+            .args(["display-message", "-p", "#{session_attached}"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|output| output.status.success() && output.stdout.trim_ascii() == b"0")
     }
 
     fn is_iterm2_terminal() -> bool {
@@ -1116,24 +1167,34 @@ impl App {
             })
             .collect();
 
+        let paths: Vec<PathBuf> = srcs
+            .iter()
+            .filter_map(|src| self.resolve_image_path(src).ok())
+            .collect();
+        let in_section: ImgSet<&PathBuf> = paths.iter().collect();
+
         // Decode any newly-seen images. Existing cache entries are preserved.
-        for src in &srcs {
-            let path = match self.resolve_image_path(src) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
+        for path in &paths {
+            let stamp = file_stamp(path);
+            if self.image_failures.get(path) == Some(&stamp) {
+                continue;
+            }
 
             // Touch existing entries so index 0 remains the least recently used.
-            if let Some(protocol) = self.image_protocol_cache.shift_remove(&path) {
-                self.image_protocol_cache.insert(path, protocol);
+            if self.image_stamps.get(path) == Some(&stamp)
+                && let Some(protocol) = self.image_protocol_cache.shift_remove(path)
+            {
+                self.image_protocol_cache.insert(path.clone(), protocol);
                 continue;
             }
             // Inline, a GIF is a still of its first frame; it plays in the
             // image viewer.
-            let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(&path)
+            let Ok(img_data) = crate::tui::image_cache::ImageCache::extract_first_frame(path)
             else {
+                self.image_failures.insert(path.clone(), stamp);
                 continue;
             };
+            self.image_failures.remove(path);
             let img_data = crate::tui::image_cache::fit_for_inline(img_data);
 
             let picker = match self.picker.as_mut() {
@@ -1147,10 +1208,24 @@ impl App {
             };
             self.image_protocol_cache
                 .insert(path.clone(), worker.wrap(protocol));
+            self.image_stamps.insert(path.clone(), stamp);
 
-            // Evict the least recently used entry when over capacity.
+            // Evict the least recently used entry when over capacity, but
+            // never one this section shows. The oldest entry used to go
+            // whatever it was, so a section with more than the limit evicted
+            // its own first images as it decoded the last, and they were
+            // never drawn.
             while self.image_protocol_cache.len() > IMAGE_CACHE_LIMIT {
-                self.image_protocol_cache.shift_remove_index(0);
+                let Some(oldest) = self
+                    .image_protocol_cache
+                    .keys()
+                    .position(|cached| !in_section.contains(cached))
+                else {
+                    break;
+                };
+                if let Some((evicted, _)) = self.image_protocol_cache.shift_remove_index(oldest) {
+                    self.image_stamps.remove(&evicted);
+                }
             }
         }
     }
@@ -1165,10 +1240,21 @@ impl App {
         // passthrough wrapping varies by configuration.
         let use_native_iterm = self.can_use_native_iterm_animation();
 
+        // The whole file is written to the terminal on the UI thread, and
+        // again whenever the image moves. Past this size that is a freeze,
+        // over ssh especially, so a larger GIF plays through the streaming
+        // decoder like any other.
+        const MAX_NATIVE_GIF_BYTES: u64 = 16 * 1024 * 1024;
         let native_target = if use_native_iterm
             && self.is_image_modal_open()
             && !self.image_modal.animation_paused
             && self.image_modal_frame_count() > 1
+            && self
+                .image_modal
+                .path
+                .as_ref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .is_some_and(|meta| meta.len() <= MAX_NATIVE_GIF_BYTES)
         {
             self.image_modal
                 .path
@@ -1356,6 +1442,17 @@ impl App {
             self.mermaid_placeholder_rows
                 .insert(result.hash, rows.max(1));
             self.mermaid_needs_reindex = true;
+
+            // Up to 64 MB each, and kept for the whole session at one
+            // width, so bounded like the image cache: the oldest go first,
+            // and a diagram still on screen is drawn again if it was one.
+            const MERMAID_CACHE_LIMIT: usize = 32;
+            while self.mermaid_protocol_cache.len() > MERMAID_CACHE_LIMIT {
+                if let Some((evicted, _)) = self.mermaid_protocol_cache.shift_remove_index(0) {
+                    self.mermaid_image_dims.remove(&evicted);
+                    self.mermaid_placeholder_rows.remove(&evicted);
+                }
+            }
         }
         arrived
     }
@@ -1428,6 +1525,7 @@ impl App {
             },
         };
 
+        self.cancel_modal_seek();
         let (Some(picker), Some(worker)) = (&mut self.picker, &self.image_worker) else {
             return;
         };
@@ -1444,6 +1542,7 @@ impl App {
 
     /// Close the image modal
     pub fn close_image_modal(&mut self) {
+        self.cancel_modal_seek();
         self.image_modal.path = None;
         self.image_modal.state = None;
         self.image_modal.stream = None;
@@ -1502,43 +1601,98 @@ impl App {
     /// The modal's frame at `frame_index`, from its streaming decoder.
     ///
     /// Playback asks for the frame after the last one, which is one decode.
-    /// Stepping back, or resuming after a step, reopens the stream and walks
-    /// to the frame once, after which playback is sequential again.
+    /// Any other frame means walking the GIF from its start, which for a long
+    /// recording took tens of seconds on the UI thread, with every key
+    /// waiting behind it. That walk runs on its own thread instead, and
+    /// returns `None` here; [`Self::process_modal_seek`] shows the frame when
+    /// it arrives, and playback carries on from there one frame at a time.
     fn modal_frame(&mut self) -> Option<image::DynamicImage> {
+        use std::sync::atomic::Ordering;
+
         let modal = &mut self.image_modal;
         let target = modal.frame_index;
         let len = modal.frame_delays_ms.len().max(1);
-        let next = (modal.stream_index + 1) % len;
+        if let Some(stream) = modal.stream.as_mut()
+            && target == (modal.stream_index + 1) % len
+        {
+            let frame = stream.next_frame_looping().ok()?;
+            modal.stream_index = target;
+            return Some(frame);
+        }
 
-        if target != next || modal.stream.is_none() {
-            let (stream, first) = StreamingGif::open(modal.path.as_ref()?).ok()?;
-            modal.stream = Some(stream);
-            modal.stream_index = 0;
-            if target == 0 {
-                return Some(first);
+        let path = modal.path.clone()?;
+        let generation = modal.seek_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let current = std::sync::Arc::clone(&modal.seek_generation);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        modal.seek = Some(receiver);
+        modal.stream = None;
+        std::thread::spawn(move || {
+            let _ = crate::tui::tty::catch_isolated(|| -> Option<()> {
+                let (mut stream, mut frame) = StreamingGif::open(&path).ok()?;
+                for _ in 0..target {
+                    if current.load(Ordering::Relaxed) != generation {
+                        return None;
+                    }
+                    frame = stream.next_frame_looping().ok()?;
+                }
+                sender
+                    .send(ModalSeek {
+                        stream,
+                        index: target,
+                        frame,
+                    })
+                    .ok()
+            });
+        });
+        None
+    }
+
+    /// Stop any walk in progress; its frame is no longer wanted.
+    fn cancel_modal_seek(&mut self) {
+        self.image_modal
+            .seek_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.image_modal.seek = None;
+    }
+
+    /// Show the frame a seek walked to, once it arrives. Returns whether one
+    /// did.
+    fn process_modal_seek(&mut self) -> bool {
+        use std::sync::mpsc::TryRecvError;
+
+        let Some(receiver) = &self.image_modal.seek else {
+            return false;
+        };
+        let seek = match receiver.try_recv() {
+            Ok(seek) => seek,
+            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Disconnected) => {
+                self.image_modal.seek = None;
+                return false;
             }
-        }
-
-        let stream = modal.stream.as_mut()?;
-        let mut frame = None;
-        while modal.stream_index != target {
-            frame = Some(stream.next_frame_looping().ok()?);
-            modal.stream_index = (modal.stream_index + 1) % len;
-        }
-        frame
+        };
+        self.image_modal.seek = None;
+        self.image_modal.stream = Some(seek.stream);
+        self.image_modal.stream_index = seek.index;
+        self.show_modal_frame(seek.frame, seek.index);
+        true
     }
 
     fn replace_current_modal_frame(&mut self) {
         let Some(image) = self.modal_frame() else {
             return;
         };
+        self.show_modal_frame(image, self.image_modal.frame_index);
+    }
+
+    fn show_modal_frame(&mut self, image: image::DynamicImage, index: usize) {
         let Some(picker) = self.picker.as_ref() else {
             return;
         };
         let replacement = picker.new_resize_protocol(image);
         if let Some(state) = self.image_modal.state.as_mut() {
             state.replace_protocol(replacement);
-            self.image_modal.last_rendered_frame = Some(self.image_modal.frame_index);
+            self.image_modal.last_rendered_frame = Some(index);
         }
     }
 
@@ -1547,6 +1701,7 @@ impl App {
         if !self.is_image_modal_open()
             || self.image_modal.animation_paused
             || self.image_modal_frame_count() <= 1
+            || self.image_modal.seek.is_some()
         {
             return false;
         }
@@ -1590,6 +1745,7 @@ impl App {
         let diagrams_arrived = self.process_mermaid_results();
         #[cfg(not(all(feature = "mermaid", unix)))]
         let diagrams_arrived = false;
+        let diagrams_arrived = self.process_modal_seek() | diagrams_arrived;
 
         let Some(worker) = &self.image_worker else {
             return diagrams_arrived;
@@ -1643,6 +1799,9 @@ impl App {
     }
 
     pub fn has_pending_image_work(&self) -> bool {
+        if self.image_modal.seek.is_some() {
+            return true;
+        }
         #[cfg(all(feature = "mermaid", unix))]
         if !self.mermaid_pending.is_empty() {
             return true;
@@ -6625,6 +6784,40 @@ sub b content
 mod image_modal_tests {
     use super::*;
 
+    /// The cache held 32 images and evicted the oldest as it decoded each
+    /// new one, so in a section with more, the first ones were evicted by
+    /// the last and never drawn.
+    #[test]
+    fn a_section_with_many_images_keeps_them_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut markdown = String::from("# Gallery\n\n");
+        for i in 0..40 {
+            image::RgbaImage::from_pixel(2, 2, image::Rgba([i, 0, 0, 255]))
+                .save(root.join(format!("{i}.png")))
+                .unwrap();
+            markdown.push_str(&format!("![{i}]({i}.png)\n\n"));
+        }
+        let path = root.join("gallery.md");
+        std::fs::write(&path, &markdown).unwrap();
+
+        let mut app = App::new(
+            crate::parser::parse_markdown(&markdown),
+            "gallery.md".into(),
+            path,
+            Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+        app.picker = Some(ratatui_image::picker::Picker::halfblocks());
+        app.image_worker = Some(ImageWorker::new());
+        app.images_enabled = true;
+        app.select_outline_index(0);
+        app.enter_interactive_mode();
+
+        assert_eq!(app.image_protocol_cache.len(), 40);
+    }
+
     /// A three-frame GIF whose frames are red, green and blue.
     fn three_frame_gif() -> tempfile::NamedTempFile {
         use std::borrow::Cow;
@@ -6680,7 +6873,20 @@ mod image_modal_tests {
 
         let mut show = |index: usize| {
             app.image_modal.frame_index = index;
-            app.modal_frame().expect("frame")
+            if let Some(frame) = app.modal_frame() {
+                return frame;
+            }
+            // Anything but the next frame is walked to off the UI thread.
+            let seek = app
+                .image_modal
+                .seek
+                .take()
+                .expect("a seek")
+                .recv()
+                .expect("frame");
+            app.image_modal.stream = Some(seek.stream);
+            app.image_modal.stream_index = seek.index;
+            seek.frame
         };
         assert_eq!(green(&show(1)), 255, "advance");
         assert_eq!(blue(&show(2)), 255, "advance");

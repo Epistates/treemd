@@ -309,9 +309,17 @@ fn read_gif(
     path: &Path,
     color: gif::ColorOutput,
 ) -> Result<Option<gif::Decoder<BufReader<File>>>, ImageError> {
-    let file = open_image_file(path)?;
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(color);
+    read_gif_with(path, options)
+}
+
+/// [`read_gif`] with the decoder configured by the caller.
+fn read_gif_with(
+    path: &Path,
+    options: gif::DecodeOptions,
+) -> Result<Option<gif::Decoder<BufReader<File>>>, ImageError> {
+    let file = open_image_file(path)?;
     let Ok(decoder) = options.read_info(BufReader::new(file)) else {
         return Ok(None);
     };
@@ -332,14 +340,30 @@ fn require_gif(
     read_gif(path, color)?.ok_or_else(|| ImageError::InvalidFormat("not a GIF".to_string()))
 }
 
-/// Decode a still image in any supported format, within the `image` crate's
-/// default allocation limits.
+/// Largest still image treemd decodes, in pixels: a 48-megapixel phone
+/// photo fits.
+///
+/// The `image` crate's default limit is on memory, 512 MB, which an
+/// 11000x11000 PNG of 470 KB stays under: three seconds of decoding with
+/// input frozen, and 840 MB held, for a file anyone can drop in a folder.
+const MAX_STILL_PIXELS: u64 = 64 * 1024 * 1024;
+
+/// Decode a still image in any supported format, refusing one over
+/// [`MAX_STILL_PIXELS`] from the size in its header, before decoding it.
 fn decode_still(path: &Path) -> Result<image::DynamicImage, ImageError> {
-    image::ImageReader::new(BufReader::new(open_image_file(path)?))
-        .with_guessed_format()
-        .map_err(|error| ImageError::InvalidFormat(error.to_string()))?
-        .decode()
-        .map_err(|error| ImageError::InvalidFormat(error.to_string()))
+    let invalid = |error: &dyn std::fmt::Display| ImageError::InvalidFormat(error.to_string());
+    let reader = || -> Result<_, ImageError> {
+        image::ImageReader::new(BufReader::new(open_image_file(path)?))
+            .with_guessed_format()
+            .map_err(|e| invalid(&e))
+    };
+    let (width, height) = reader()?.into_dimensions().map_err(|e| invalid(&e))?;
+    if u64::from(width) * u64::from(height) > MAX_STILL_PIXELS {
+        return Err(ImageError::InvalidFormat(format!(
+            "{width}x{height} is too large to draw"
+        )));
+    }
+    reader()?.decode().map_err(|e| invalid(&e))
 }
 
 /// Longest side an inline image is kept at, in pixels.
@@ -504,16 +528,20 @@ impl ImageCache {
         }
     }
 
-    /// Read GIF timing without retaining decoded RGBA canvases.
+    /// Read GIF timing without decoding any frame.
     ///
-    /// The decoder reuses its frame buffer, so memory remains bounded even for
-    /// long terminal recordings that a capable terminal will animate itself.
+    /// Only the frames' headers are read: decompressing each frame just to
+    /// learn its delay cost about half a second on a 66 MB recording, on the
+    /// UI thread, as the viewer opened.
     pub fn extract_gif_frame_delays(path: &Path) -> Result<Vec<u32>, ImageError> {
-        let mut decoder = require_gif(path, gif::ColorOutput::Indexed)?;
+        let mut options = gif::DecodeOptions::new();
+        options.skip_frame_decoding(true);
+        let mut decoder = read_gif_with(path, options)?
+            .ok_or_else(|| ImageError::InvalidFormat("not a GIF".to_string()))?;
         let mut delays = Vec::new();
 
         while let Some(frame) = decoder
-            .read_next_frame()
+            .next_frame_info()
             .map_err(|error| ImageError::InvalidFormat(error.to_string()))?
         {
             delays.push((u32::from(frame.delay) * 10).max(20));
@@ -558,6 +586,28 @@ impl ImageCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A BMP header declaring 10000x10000, with no pixels behind it. The
+    /// size in the header is enough to refuse it, before any decoding.
+    #[test]
+    fn a_huge_still_is_refused_from_its_header() {
+        let mut bmp = Vec::new();
+        bmp.extend_from_slice(b"BM");
+        bmp.extend_from_slice(&54u32.to_le_bytes()); // file size
+        bmp.extend_from_slice(&0u32.to_le_bytes()); // reserved
+        bmp.extend_from_slice(&54u32.to_le_bytes()); // pixel data offset
+        bmp.extend_from_slice(&40u32.to_le_bytes()); // header size
+        bmp.extend_from_slice(&10_000i32.to_le_bytes()); // width
+        bmp.extend_from_slice(&10_000i32.to_le_bytes()); // height
+        bmp.extend_from_slice(&1u16.to_le_bytes()); // planes
+        bmp.extend_from_slice(&24u16.to_le_bytes()); // bits per pixel
+        bmp.extend_from_slice(&[0; 24]); // compression and the rest
+        let file = tempfile::Builder::new().suffix(".bmp").tempfile().unwrap();
+        std::fs::write(file.path(), &bmp).unwrap();
+
+        let error = decode_still(file.path()).unwrap_err();
+        assert!(error.to_string().contains("too large"), "{error}");
+    }
 
     #[test]
     fn clear_gif_rect_only_clears_disposal_region() {

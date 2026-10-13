@@ -40,17 +40,26 @@ struct MermaidJob {
 pub struct MermaidWorker {
     jobs: std::sync::mpsc::Sender<MermaidJob>,
     results: std::sync::mpsc::Receiver<MermaidResult>,
+    /// The width of the latest request. A queued job for any other width is
+    /// skipped: resizing the pane queued a job per width it passed through,
+    /// and each one ran to completion before the diagram at the final width.
+    width: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl MermaidWorker {
     pub fn new() -> Self {
         let (jobs, job_rx) = std::sync::mpsc::channel::<MermaidJob>();
         let (result_tx, results) = std::sync::mpsc::channel();
+        let width = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let current_width = std::sync::Arc::clone(&width);
         // The thread ends when the worker, and with it the job sender, drops.
         let _ = std::thread::Builder::new()
             .name("treemd-mermaid".to_string())
             .spawn(move || {
                 while let Ok(job) = job_rx.recv() {
+                    if job.width != current_width.load(std::sync::atomic::Ordering::Relaxed) {
+                        continue;
+                    }
                     let image = render_mermaid_to_image(&job.source, job.width);
                     let result = MermaidResult {
                         hash: job.hash,
@@ -62,11 +71,17 @@ impl MermaidWorker {
                     }
                 }
             });
-        Self { jobs, results }
+        Self {
+            jobs,
+            results,
+            width,
+        }
     }
 
     /// Queue a diagram, identified by `hash`, for drawing at `width` pixels.
     pub fn request(&self, hash: u64, source: &str, width: u32) {
+        self.width
+            .store(width, std::sync::atomic::Ordering::Relaxed);
         let _ = self.jobs.send(MermaidJob {
             hash,
             width,

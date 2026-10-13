@@ -244,6 +244,63 @@ pub fn resume_raw_mode() -> io::Result<()> {
     crossterm::terminal::enable_raw_mode()
 }
 
+/// The pane's `allow-passthrough` in tmux before the image probe, which
+/// turns it on, so [`restore`] can put it back.
+#[cfg(unix)]
+static TMUX_PASSTHROUGH: OnceLock<String> = OnceLock::new();
+
+/// Note tmux's `allow-passthrough` for this pane before probing for images.
+///
+/// ratatui-image turns it on inside tmux so the probe and the images reach
+/// the outer terminal, and leaves it on. After treemd exits, anything else
+/// run in that pane could then write escape sequences straight to the
+/// outer terminal, which tmux's default exists to prevent.
+#[cfg(unix)]
+pub fn remember_tmux_passthrough() {
+    use std::process::{Command, Stdio};
+
+    if std::env::var_os("TMUX").is_none() {
+        return;
+    }
+    let Ok(output) = Command::new("tmux")
+        .args(["show-options", "-pqv", "allow-passthrough"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return;
+    };
+    if output.status.success() {
+        let _ = TMUX_PASSTHROUGH.set(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+}
+
+#[cfg(not(unix))]
+pub fn remember_tmux_passthrough() {}
+
+/// Put the pane's `allow-passthrough` back as [`remember_tmux_passthrough`]
+/// found it: set to its old value, or unset when the pane had none of its
+/// own.
+#[cfg(unix)]
+fn restore_tmux_passthrough() {
+    use std::process::{Command, Stdio};
+
+    let Some(before) = TMUX_PASSTHROUGH.get() else {
+        return;
+    };
+    let mut command = Command::new("tmux");
+    if before.is_empty() {
+        command.args(["set-option", "-pu", "allow-passthrough"]);
+    } else {
+        command.args(["set-option", "-p", "allow-passthrough", before]);
+    }
+    let _ = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 /// Best-effort terminal restore: leave alternate screen and disable raw mode.
 ///
 /// Safe to call from a panic hook or during shutdown.
@@ -262,6 +319,8 @@ pub fn restore() {
     // terminal is dropped, which a panic or a signal exit does not reach.
     let _ = stdout().execute(crossterm::cursor::Show);
     let _ = disable_raw_mode();
+    #[cfg(unix)]
+    restore_tmux_passthrough();
 }
 
 /// Install a panic hook that restores the terminal before propagating the panic.
