@@ -168,7 +168,7 @@ the whole document.
 | Operator             | Meaning                                                     |
 | -------------------- | ----------------------------------------------------------- |
 | `==`, `!=`           | Equality; values of different types are never equal         |
-| `<`, `<=`, `>`, `>=` | Compare two numbers or two strings                          |
+| `<`, `<=`, `>`, `>=` | Compare; across types, jq's order (null < bool < number < string < array < object) |
 | `and`, `or`, `not`   | Logic                                                       |
 | `+ - * / %`          | Arithmetic; `+` also joins strings and arrays               |
 | `a // b`             | `a`, or `b` when `a` is null, false, `0` or empty           |

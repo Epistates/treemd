@@ -76,18 +76,22 @@ fn extract_section_content(
     heading_line: usize,
 ) -> (String, usize, usize) {
     let offset = doc.headings[idx].offset;
-    let content_start = doc.body_start(idx);
     let end = doc.section_end_any(idx);
+    let content_start = doc.body_start(idx).min(end);
+
+    // The body is reported trimmed, so its offset and line are those of its
+    // first non-blank text. Given the line right after the heading instead,
+    // every block's line numbers were off by the blank lines in between,
+    // which is nearly always one.
+    let body = &doc.content[content_start..end];
+    let lead = body.len() - body.trim_start().len();
+    let body_start = content_start + lead;
 
     // The body starts on the line after the heading's last line, which for a
     // setext heading is its underline, two lines down rather than one.
-    let body_line = heading_line + doc.content[offset..content_start].matches('\n').count();
+    let body_line = heading_line + doc.content[offset..body_start].matches('\n').count();
 
-    (
-        doc.content[content_start..end].trim().to_string(),
-        content_start,
-        body_line,
-    )
+    (body.trim().to_string(), body_start, body_line)
 }
 
 fn calculate_max_depth(tree: &[HeadingNode]) -> usize {
@@ -114,6 +118,40 @@ mod tests {
         let doc = parse_markdown(md);
         let out = build_json_output(&doc, None);
         out.document.sections[0].content.raw.clone()
+    }
+
+    /// Block lines were counted from the line after the heading, while the
+    /// body they were counted in had its leading blank lines trimmed off.
+    #[test]
+    fn block_lines_are_the_lines_in_the_file() {
+        for (md, start) in [
+            ("# A\n\n```rs\nx\n```\n", 3),
+            ("# A\n\n\n\n```rs\nx\n```\n", 5),
+            ("Setext\n======\n\n```rs\nx\n```\n", 4),
+        ] {
+            let out = serde_json::to_value(build_json_output(&parse_markdown(md), None)).unwrap();
+            let block = &out["document"]["sections"][0]["content"]["blocks"][0];
+            assert_eq!(block["start_line"], start, "{md:?}: {block}");
+            assert_eq!(block["end_line"], start + 2, "{md:?}: {block}");
+        }
+    }
+
+    /// A lone `\r` after a setext underline sent the body start past the
+    /// next heading, and slicing the body panicked.
+    #[test]
+    fn a_lone_carriage_return_does_not_panic() {
+        for md in ["v\n-\r#", "#\rx\n-"] {
+            let _ = build_json_output(&parse_markdown(md), None);
+        }
+    }
+
+    /// A section before a heading nested in a quote or a list item ended at
+    /// the heading's `#`, keeping the line's `>` or `-`.
+    #[test]
+    fn a_section_does_not_end_with_the_next_heading_markers() {
+        for md in ["# A\n\ntext\n\n> # Q\n> body\n", "# A\n\ntext\n\n- # Q\n"] {
+            assert_eq!(first_section_raw(md), "text", "{md:?}");
+        }
     }
 
     #[test]

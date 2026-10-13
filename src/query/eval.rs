@@ -44,7 +44,14 @@ impl EvalContext {
     /// Create a new context from a document.
     pub fn from_document(doc: &Document) -> Self {
         let headings = extract_headings(doc);
-        let extracted = extract_blocks(&doc.content);
+        // Past a byte order mark, which otherwise sits in front of the first
+        // block and keeps a leading table, quote or list from being one.
+        let body = doc.content.strip_prefix('\u{feff}').unwrap_or(&doc.content);
+        let mut extracted = extract_blocks(body);
+        // In document order, which section scoping searches.
+        extracted.code_blocks.sort_by_key(|code| code.start_line);
+        let mut links = extract_doc_links(&doc.content);
+        links.sort_by_key(|link| link.offset);
         let frontmatter = extract_frontmatter(doc);
 
         let document = DocumentValue {
@@ -57,7 +64,7 @@ impl EvalContext {
             current: Value::Document(document.clone()),
             headings,
             code_blocks: extracted.code_blocks,
-            links: extract_doc_links(&doc.content),
+            links,
             images: extracted.images,
             tables: extracted.tables,
             lists: extracted.lists,
@@ -418,12 +425,11 @@ impl Engine {
         let parent_level = parent.level;
 
         let scope_start = parent.offset;
-        let scope_end = headings
+        let end_heading = headings
             .iter()
             .skip(parent_idx + 1)
-            .find(|h| direct || h.level <= parent_level)
-            .map(|h| h.offset)
-            .unwrap_or(self.context.raw_content.len());
+            .find(|h| direct || h.level <= parent_level);
+        let scope_end = end_heading.map_or(self.context.raw_content.len(), |h| h.offset);
 
         match kind {
             ElementKind::Heading(level_filter) => {
@@ -452,33 +458,32 @@ impl Engine {
                 // A block's start_line is its opening fence's row in the
                 // document, so the global list scopes by line. Re-parsing
                 // the section instead numbered its blocks from the
-                // section's own first line.
-                let raw = self.context.raw_content.as_bytes();
-                let line_at =
-                    |offset: usize| 1 + raw[..offset].iter().filter(|&&b| b == b'\n').count();
-                let first = line_at(scope_start);
-                let past = if scope_end >= raw.len() {
-                    usize::MAX
-                } else {
-                    line_at(scope_end)
-                };
-                self.context
-                    .code_blocks
+                // section's own first line. The blocks are in document
+                // order and the headings know their lines, so this is a
+                // search: counting lines from the top of the document and
+                // scanning every block, for each heading, took 38 seconds
+                // for `.h1 >> .code` on 20,000 headings.
+                let blocks = &self.context.code_blocks;
+                let past = end_heading.map_or(usize::MAX, |h| h.line);
+                let first = blocks.partition_point(|code| code.start_line < parent.line);
+                let end = blocks.partition_point(|code| code.start_line < past);
+                blocks[first..end.max(first)]
                     .iter()
-                    .filter(|code| (first..past).contains(&code.start_line))
                     .cloned()
                     .map(Value::Code)
                     .collect()
             }
             // Links carry byte offsets, so scope by byte range.
-            ElementKind::Link => self
-                .context
-                .links
-                .iter()
-                .filter(|link| (scope_start..scope_end).contains(&link.offset))
-                .cloned()
-                .map(Value::Link)
-                .collect(),
+            ElementKind::Link => {
+                let links = &self.context.links;
+                let first = links.partition_point(|link| link.offset < scope_start);
+                let end = links.partition_point(|link| link.offset < scope_end);
+                links[first..end.max(first)]
+                    .iter()
+                    .cloned()
+                    .map(Value::Link)
+                    .collect()
+            }
             ElementKind::FrontMatter => self.all_elements(kind),
             // Images, tables, lists, paragraphs and blockquotes carry no
             // source position, so the section is parsed on its own. None of
@@ -819,10 +824,14 @@ impl Engine {
         let result = match op {
             BinaryOp::Eq => Value::Bool(values_equal(&left_val, &right_val)),
             BinaryOp::Ne => Value::Bool(!values_equal(&left_val, &right_val)),
-            BinaryOp::Lt => Value::Bool(compare_values(&left_val, &right_val) < 0),
-            BinaryOp::Le => Value::Bool(compare_values(&left_val, &right_val) <= 0),
-            BinaryOp::Gt => Value::Bool(compare_values(&left_val, &right_val) > 0),
-            BinaryOp::Ge => Value::Bool(compare_values(&left_val, &right_val) >= 0),
+            // jq's order across types, the one `sort` uses: null, booleans,
+            // numbers, strings, arrays, objects. Values of different types
+            // used to compare as equal, so `<` and `>` were false while `<=`
+            // and `>=` were true for the same pair.
+            BinaryOp::Lt => Value::Bool(left_val.sort_cmp(&right_val).is_lt()),
+            BinaryOp::Le => Value::Bool(left_val.sort_cmp(&right_val).is_le()),
+            BinaryOp::Gt => Value::Bool(left_val.sort_cmp(&right_val).is_gt()),
+            BinaryOp::Ge => Value::Bool(left_val.sort_cmp(&right_val).is_ge()),
             BinaryOp::And => Value::Bool(left_val.is_truthy() && right_val.is_truthy()),
             BinaryOp::Or => Value::Bool(left_val.is_truthy() || right_val.is_truthy()),
             BinaryOp::Add => add_values(&left_val, &right_val),
@@ -929,8 +938,8 @@ fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
 
             // Body bounds shared with the document extractor: handles CRLF,
             // setext underlines, and EOF-without-newline uniformly.
-            let content_start = doc.body_start(idx);
             let content_end = doc.section_end(idx);
+            let content_start = doc.body_start(idx).min(content_end);
 
             let content = doc.content[content_start..content_end].trim().to_string();
             let raw_md = doc.content[h.offset..content_end].to_string();
@@ -1126,13 +1135,31 @@ fn extract_doc_links(content: &str) -> Vec<LinkValue> {
         .collect()
 }
 
+/// The most YAML aliases (`*name`) a frontmatter block may use.
+///
+/// Each alias repeats what its anchor holds, and anchors can hold aliases,
+/// so a few hundred lines expand to gigabytes: a 225 KB block took 5 GB
+/// and 8 seconds, on every query, whether or not it read the frontmatter.
+/// Frontmatter written by hand has a handful at most.
+const MAX_FRONTMATTER_ALIASES: usize = 64;
+
 /// Parse the document's YAML frontmatter into an ordered, sorted-key map of
 /// query [`Value`]s. Returns `None` when there is no frontmatter.
+///
+/// Only a block at the very start of the document counts, as
+/// [`crate::parser::frontmatter_range`] finds it. Handed the whole document,
+/// the parser also took a `key: value` block between two `---` rules
+/// further down for frontmatter, over the real one if there was one, and
+/// missed the real one behind a byte order mark.
 fn extract_frontmatter(doc: &Document) -> Option<IndexMap<String, Value>> {
     use turbovault_parser::{ParseOptions, ParsedContent};
 
-    let parsed =
-        ParsedContent::parse_with_options(&doc.content, ParseOptions::none().with_frontmatter());
+    let block = &doc.content[crate::parser::frontmatter_range(&doc.content)?];
+    let block = block.strip_prefix('\u{feff}').unwrap_or(block);
+    if yaml_alias_count(block) > MAX_FRONTMATTER_ALIASES {
+        return None;
+    }
+    let parsed = ParsedContent::parse_with_options(block, ParseOptions::none().with_frontmatter());
     let fm = parsed.frontmatter?;
 
     // Sort keys for stable, deterministic output.
@@ -1145,6 +1172,26 @@ fn extract_frontmatter(doc: &Document) -> Option<IndexMap<String, Value>> {
         map.insert(k, json_to_value(v));
     }
     Some(map)
+}
+
+/// How many YAML aliases `yaml` uses: a `*` that starts a node, after a
+/// line's indentation, a `- `, a `: `, or `[`, `{` and `,` in a flow
+/// collection, followed by a name. A `*` inside text is not counted, so this
+/// can only miss aliases in odd layouts, never refuse ordinary frontmatter.
+fn yaml_alias_count(yaml: &str) -> usize {
+    let bytes = yaml.as_bytes();
+    (0..bytes.len())
+        .filter(|&i| {
+            bytes[i] == b'*'
+                && bytes
+                    .get(i + 1)
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                && match bytes[..i].iter().rposition(|b| *b != b' ' && *b != b'\t') {
+                    None => true,
+                    Some(j) => matches!(bytes[j], b'\n' | b'-' | b':' | b'[' | b'{' | b','),
+                }
+        })
+        .count()
 }
 
 /// Convert a `serde_json::Value` (from parsed frontmatter) into a query
@@ -1296,22 +1343,6 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Number(a), Value::Number(b)) => (a - b).abs() < f64::EPSILON,
         (Value::String(a), Value::String(b)) => a == b,
         _ => a.identity_key() == b.identity_key(),
-    }
-}
-
-fn compare_values(a: &Value, b: &Value) -> i32 {
-    match (a, b) {
-        (Value::Number(a), Value::Number(b)) => {
-            if a < b {
-                -1
-            } else if a > b {
-                1
-            } else {
-                0
-            }
-        }
-        (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
-        _ => 0,
     }
 }
 
@@ -1912,6 +1943,57 @@ fn main() {}
             image_srcs("- item ![a](a.png)\n\n- second ![b](b.png)"),
             ["a.png", "b.png"],
             "a loose list reports the same images as a tight one"
+        );
+    }
+
+    /// Different types compared as equal, so `<` was false while `<=` was
+    /// true for the same pair. They follow jq's order now, as `sort` does.
+    #[test]
+    fn comparisons_across_types_follow_jq_order() {
+        for (query, expected) in [
+            (r#"1 >= "a""#, "false"),
+            (r#"1 < "a""#, "true"),
+            ("null <= 1", "true"),
+            ("null > 1", "false"),
+            (r#""b" > "a""#, "true"),
+            ("[1, 2] < [1, 3]", "true"),
+        ] {
+            assert_eq!(eval("# a", query)[0].to_text(), expected, "{query}");
+        }
+    }
+
+    /// Only a block opening the document is frontmatter. A `key: value`
+    /// block between two rules further down was reported as frontmatter,
+    /// over the real one, and a byte order mark hid the real one.
+    #[test]
+    fn frontmatter_is_only_the_block_that_opens_the_document() {
+        let keys = |md: &str| -> Vec<String> {
+            eval(md, ".fm | keys")
+                .iter()
+                .flat_map(|v| match v {
+                    Value::Array(items) => items.iter().map(|v| v.to_text()).collect(),
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+        assert!(keys("# H\n\n---\ny: 2\n---\n\n## Two\n").is_empty());
+        assert_eq!(keys("---\nx: 1\n---\n# H\n\n---\ny: 2\n---\n"), ["x"]);
+        assert_eq!(keys("\u{feff}---\nx: 1\n---\n# H\n"), ["x"]);
+        assert_eq!(keys("---\nx: 1\n...\n# H\n"), ["x"]);
+    }
+
+    /// Aliases repeat their anchors, so a small block can expand to
+    /// gigabytes. Past the limit it is not parsed.
+    #[test]
+    fn frontmatter_with_too_many_aliases_is_not_parsed() {
+        let bomb: String = std::iter::once("---\np: &p [1, 2, 3]\n".to_string())
+            .chain((0..100).map(|i| format!("x{i}: &x{i} [*p, *p, *p]\n")))
+            .chain(std::iter::once("---\n# H\n".to_string()))
+            .collect();
+        assert!(eval(&bomb, ".fm").is_empty());
+        assert_eq!(
+            yaml_alias_count("a: *x\nb: [*y, *z]\nc: \"5 * 3\"\nd: **bold**\n"),
+            3
         );
     }
 

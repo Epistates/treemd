@@ -23,7 +23,7 @@ fn markdown() -> impl Strategy<Value = String> {
         "</?details>|<summary>[a-z]{0,6}</summary>",
         "\\$\\$?[a-z^]{0,6}\\$?\\$?",
         "---|\\*\\*\\*|===",
-        "[a-z \t\u{feff}\u{1b}]{0,30}",
+        "[a-z \t\r\u{feff}\u{1b}-]{0,30}",
         "",
     ];
     prop::collection::vec(line, 0..40).prop_map(|lines| lines.join("\n"))

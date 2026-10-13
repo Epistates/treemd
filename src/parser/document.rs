@@ -156,8 +156,8 @@ impl Document {
         if heading_idx >= self.headings.len() {
             return None;
         }
-        let content_start = self.body_start(heading_idx);
         let end = self.section_end(heading_idx);
+        let content_start = self.body_start(heading_idx).min(end);
         Some(self.content[content_start..end].trim().to_string())
     }
 
@@ -166,31 +166,37 @@ impl Document {
     ///
     /// The parser reports `offset + source_len` already pointing at the start of
     /// the body in the common case (the construct length includes its line
-    /// terminator, handling CRLF and setext underlines uniformly). The extra
-    /// `find('\n')` is a safety net for the rare case where the reported range
-    /// stops before the terminator; it never crosses into the next line's text.
+    /// terminator, handling CRLF and setext underlines uniformly). Otherwise the
+    /// body starts after the next line ending, which as in CommonMark is `\n`,
+    /// `\r\n` or a lone `\r`. It never passes the next heading: with a lone
+    /// `\r` ending a setext underline, looking for `\n` alone ran to the end
+    /// of the document, past the next heading, and slicing the body panicked.
     pub fn body_start(&self, idx: usize) -> usize {
         let heading = &self.headings[idx];
-        let after = (heading.offset + heading.source_len).min(self.content.len());
+        let next_heading = self
+            .headings
+            .get(idx + 1)
+            .map_or(self.content.len(), |h| h.offset);
+        let after = (heading.offset + heading.source_len).min(next_heading);
 
-        // If `after` already sits at the start of a line (or EOF), it is the
-        // body start. Otherwise advance to just past the next newline.
-        if after >= self.content.len() {
-            return self.content.len();
+        let bytes = self.content.as_bytes();
+        let at_line_start = match after.checked_sub(1).map(|i| bytes[i]) {
+            None | Some(b'\n') => true,
+            Some(b'\r') => bytes.get(after) != Some(&b'\n'),
+            _ => false,
+        };
+        if at_line_start {
+            return after;
         }
-        let preceding_is_newline = self.content[..after]
-            .chars()
-            .next_back()
-            .map(|c| c == '\n')
-            .unwrap_or(true);
-        if preceding_is_newline {
-            after
-        } else {
-            self.content[after..]
-                .find('\n')
-                .map(|i| after + i + 1)
-                .unwrap_or(self.content.len())
-        }
+        let body = match bytes[after..]
+            .iter()
+            .position(|&b| b == b'\n' || b == b'\r')
+        {
+            Some(i) if bytes[after + i..].starts_with(b"\r\n") => after + i + 2,
+            Some(i) => after + i + 1,
+            None => self.content.len(),
+        };
+        body.min(next_heading)
     }
 
     /// Byte offset where section `idx` ends: the offset of the next heading at a
@@ -204,8 +210,20 @@ impl Document {
             .iter()
             .skip(idx + 1)
             .find(|h| h.level <= level)
-            .map(|h| h.offset)
+            .map(|h| self.line_start_at(h.offset))
             .unwrap_or(self.content.len())
+    }
+
+    /// Where the line holding byte `offset` starts.
+    ///
+    /// Sections end where the next heading's line starts. A heading nested
+    /// in a quote or list item (`> # Q`, `- # Q`) begins after the markers,
+    /// and ending the section at the heading left a stray `>` or `-` at the
+    /// end of the one before.
+    fn line_start_at(&self, offset: usize) -> usize {
+        self.content[..offset]
+            .rfind(['\n', '\r'])
+            .map_or(0, |i| i + 1)
     }
 
     /// Byte offset where section `idx` ends when bounding at *any* following
@@ -215,7 +233,7 @@ impl Document {
     pub fn section_end_any(&self, idx: usize) -> usize {
         self.headings
             .get(idx + 1)
-            .map(|h| h.offset)
+            .map(|h| self.line_start_at(h.offset))
             .unwrap_or(self.content.len())
     }
 

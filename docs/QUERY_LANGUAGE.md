@@ -457,7 +457,7 @@ produce an empty stream.
 | Operator | Meaning |
 |----------|---------|
 | `==`, `!=` | Equality. Values of different types are never equal: `1 == "1"` is `false` |
-| `<`, `<=`, `>`, `>=` | Comparison of two numbers or two strings |
+| `<`, `<=`, `>`, `>=` | Comparison. Numbers and strings compare as you would expect; values of different types follow jq's order, null < booleans < numbers < strings < arrays < objects, so `1 < "a"` is `true` |
 | `and`, `or`, `not` | Logic. `not` is a prefix (`not .x`) or a pipe stage (`.x \| not`) |
 | `+` | Adds numbers, joins strings and arrays |
 | `-`, `*`, `/`, `%` | Arithmetic. `"ab" * 3` repeats a string |
