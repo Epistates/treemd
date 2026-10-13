@@ -6,7 +6,7 @@ pub mod util;
 use layout::{DynamicLayout, Section};
 
 use crate::config::CodeFences;
-use crate::tui::app::{App, AppMode, Focus, Overlay};
+use crate::tui::app::{App, AppMode, Focus, OutlineSearch, Overlay};
 use crate::tui::content_view::ContentView;
 use crate::tui::theme::Theme;
 use popups::{
@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Create dynamic main layout
     // Show search bar if: outline search is active OR in document search mode (typing or viewing results)
-    let show_search_bar = app.show_search || app.mode == AppMode::DocSearch;
+    let show_search_bar = app.outline_search.is_on() || app.mode == AppMode::DocSearch;
     let main_layout = DynamicLayout::vertical(area)
         .section(Section::Title, Constraint::Length(2))
         .section_if(show_search_bar, Section::Search, Constraint::Length(3))
@@ -197,7 +197,11 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             format!(" [{}/{} headings]", shown, total)
         };
-        (&app.search_query, app.outline_search_active, info)
+        (
+            &app.search_query,
+            app.outline_search == OutlineSearch::Typing,
+            info,
+        )
     };
 
     let theme = app.theme.clone();
@@ -272,7 +276,7 @@ fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
     use util::build_highlighted_line;
 
     let theme = &app.theme;
-    let search_query = if app.show_search && !app.search_query.is_empty() {
+    let search_query = if app.outline_search.is_on() && !app.search_query.is_empty() {
         Some(app.search_query.as_str())
     } else {
         None
@@ -1035,7 +1039,9 @@ fn mode_chip(app: &App) -> Option<(&'static str, Style)> {
         // Outline search is a panel over Normal mode rather than a mode of
         // its own. The chip used to wait for an AppMode::Search that nothing
         // ever set, so it never showed.
-        AppMode::Normal if app.show_search => Some((" FILTER ", chip_style(theme.heading_4))),
+        AppMode::Normal if app.outline_search.is_on() => {
+            Some((" FILTER ", chip_style(theme.heading_4)))
+        }
         _ => None,
     }
 }

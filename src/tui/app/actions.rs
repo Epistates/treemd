@@ -19,14 +19,11 @@ impl App {
         // Then check app mode
         match self.mode {
             AppMode::Normal => {
-                if self.show_search && self.outline_search_active {
-                    // Active input mode for typing search query
+                if self.outline_search == OutlineSearch::Typing {
                     KeybindingMode::Search
                 } else {
-                    // Normal mode (including accepted outline search state)
-                    // When show_search=true but outline_search_active=false, we're in
-                    // "accepted search" state - user can navigate filtered results with
-                    // normal keybindings (j/k, n/N for cycling, s to start new search)
+                    // An applied outline search is navigated with the
+                    // normal keys (j/k, n/N to cycle, s for a new search).
                     KeybindingMode::Normal
                 }
             }
@@ -91,11 +88,10 @@ impl App {
             // === Application ===
             Quit => {
                 // If in accepted outline search state, clear search instead of quitting
-                if self.show_search {
+                if self.outline_search.is_on() {
                     self.search_query.clear();
                     self.filter_outline();
-                    self.show_search = false;
-                    self.outline_search_active = false;
+                    self.outline_search = OutlineSearch::Off;
                 } else if self.has_unsaved_changes() {
                     // Prompt to save before quitting
                     self.mode = AppMode::ConfirmSaveBeforeQuit;
@@ -528,11 +524,10 @@ impl App {
         }
 
         // Handle outline search - clear everything
-        if self.show_search {
+        if self.outline_search.is_on() {
             self.search_query.clear();
             self.filter_outline();
-            self.show_search = false;
-            self.outline_search_active = false;
+            self.outline_search = OutlineSearch::Off;
             return;
         }
 
@@ -594,7 +589,7 @@ impl App {
     /// Returns Some(ActionResult) if the action should return early (e.g., quit)
     pub(super) fn handle_confirm_action(&mut self) -> Option<ActionResult> {
         // Handle outline search - accept and keep filtered results visible
-        if self.show_search && self.outline_search_active {
+        if self.outline_search == OutlineSearch::Typing {
             // Check if there are any matches (filtered items with matching text)
             let has_matches = if self.search_query.is_empty() {
                 true // Empty query matches everything
@@ -604,15 +599,13 @@ impl App {
             };
 
             if has_matches {
-                // Accept search - deactivate input but keep filter visible
-                self.outline_search_active = false;
-                // show_search stays true to keep highlights visible
-                // User can now navigate with j/k, n/N, or press 's' to start new search
+                // Accept the search: the filter and its highlights stay,
+                // and j/k, n/N move through it, or 's' starts a new search.
+                self.outline_search = OutlineSearch::Applied;
             } else {
                 // No matches - show status message and clear search
                 self.status_message = Some(format!("Pattern not found: {}", self.search_query));
-                self.show_search = false;
-                self.outline_search_active = false;
+                self.outline_search = OutlineSearch::Off;
                 self.search_query.clear();
                 self.filter_outline(); // Restore full outline
             }
@@ -758,7 +751,7 @@ impl App {
     /// Handle backspace in search contexts
     pub(super) fn handle_search_backspace(&mut self) {
         // Handle outline search - only if active
-        if self.show_search && self.outline_search_active {
+        if self.outline_search == OutlineSearch::Typing {
             self.search_backspace();
             return;
         }
