@@ -3044,7 +3044,7 @@ dependencies = [
 
 [[package]]
 name = "treemd"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "arboard",
  "base64",

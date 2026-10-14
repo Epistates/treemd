@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-15
+
+The TUI is redesigned: seventeen themes held to WCAG contrast, nine of them new and three light, a footer that shows the keys for whatever is open, a mouse that works on the pane under it, and a no-color mode for `NO_COLOR`.
+
+The query language now behaves like jq: query errors exit 3 or 5, arithmetic follows jq's rules, `--query-output json` always prints an array, and more. Scripts that use `-q` should check the Changed section before upgrading.
+
 ### Fixed
 
 - **Tables take their natural widths.** A column was sized at 70% of its average cell and 30% of its widest, so `Previous` wrapped in a column beside `Next` with the pane half empty. A cell holding inline code also lost the space every other cell has and sat against the border
