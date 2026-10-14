@@ -257,6 +257,26 @@ fn quoted_keys() {
     assert_eq!(run(md, r#".h["X"] | .text"#), ["X"]);
 }
 
+/// Three parser fixes from turbovault-parser 4.0.1 (Epistates/turbovault#120).
+#[test]
+fn fences_and_quoted_tables_parse_as_written() {
+    // A block's language is the first word of its info string, so rustdoc's
+    // `rust,no_run` and `python title="x"` are found by language.
+    let md = "# T\n\n```rust,no_run\nfn a() {}\n```\n\n```python title=\"x\"\nb\n```\n";
+    assert_eq!(run(md, ".code | .lang"), ["rust", "python"]);
+    assert_eq!(run(md, ".code[rust] | .text"), ["fn a() {}"]);
+
+    // An empty fence is closed, so the paragraph after it is still one.
+    let md = "# T\n\n```\n```\n\nafter\n\n```sh\nx\n```\n";
+    assert_eq!(run(md, ".para | .text"), ["after"]);
+    assert_eq!(run(md, ".code | count"), ["2"]);
+
+    // A table inside a blockquote keeps its cells.
+    let md = "# T\n\n> | q | r |\n> |---|---|\n> | 1 | 2 |\n";
+    assert_eq!(json(md, ".table | .headers"), [r#"["q","r"]"#]);
+    assert_eq!(json(md, ".table | .rows"), [r#"[["1","2"]]"#]);
+}
+
 /// A bare filter runs to the `]`. Lexed as tokens, `c++` was a parse error,
 /// `c#` an unexpected character, and `-d` lost its `-`.
 #[test]

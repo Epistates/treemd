@@ -46,7 +46,7 @@ unicode-width = "0.2"
 unicode-segmentation = "1.13"
 
 # Turbovault integration - OFM parsing with code-block awareness
-turbovault-parser = "4.0.0"
+turbovault-parser = "4.0.1"
 # The parser turbovault-parser is built on, used directly only to locate a
 # table's source range for in-place cell edits, which turbovault's blocks
 # do not carry. Same version line, so it is one copy in the build.

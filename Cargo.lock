@@ -3096,9 +3096,9 @@ dependencies = [
 
 [[package]]
 name = "turbovault-core"
-version = "4.0.0"
+version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92fddf2d2f7591811e5700ba1cca95472dc1957c4e6b85e7a44c538f9d03b7a1"
+checksum = "b76728b94dedbc2f9290367fffc8fb4ff0235ceca48b4ade83df8e67dc10749a"
 dependencies = [
  "chrono",
  "serde",
@@ -3117,9 +3117,9 @@ dependencies = [
 
 [[package]]
 name = "turbovault-parser"
-version = "4.0.0"
+version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71df75568520992895a44714a762e852096fffbcf5369bcacd3a8f59cfdc5256"
+checksum = "30c48098cb99d9345afbb517ef4ad7fa8d8a61ebc99b5b8aabf58065a7a8c33b"
 dependencies = [
  "percent-encoding",
  "pulldown-cmark",
