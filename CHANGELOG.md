@@ -124,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **rustls 0.23.46**, for four advisories published on 2026-10-14, [RUSTSEC-2026-0346](https://rustsec.org/advisories/RUSTSEC-2026-0346) to [-0349](https://rustsec.org/advisories/RUSTSEC-2026-0349). treemd uses rustls only to fetch a document by URL or `github:`
 - **A document fetched from the web reaches nothing on this machine.** Its relative links and image paths were resolved against the local filesystem, so a page could display a local image by its absolute path, or open, or offer to create, a file in the working directory when a link was followed. Those links and images name places on its own site; they are not followed or loaded now
 - **A piped document stays in the working directory.** `curl ... | treemd` could show any image on disk by its absolute path, and its links reached anywhere in the working directory's git repository. Its images and links now resolve inside the working directory only. `security.trust_piped_documents = true` in the config restores the old behavior
 - **A link to a non-markdown file is held to the same boundary as any other link.** A markdown link refused absolute paths and `..`, but a link to an existing file without a markdown extension skipped those checks and opened in `$EDITOR`, so `[x](/etc/hosts)` or `[x](../secret.txt)` in a document opened that file. Every file link now resolves through one check
