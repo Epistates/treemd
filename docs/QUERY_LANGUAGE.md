@@ -101,12 +101,8 @@ ordinary text filters, so `.h[external]` finds "External APIs".
 
 `.img` finds images written standalone, inline in a sentence, in a heading,
 inside a blockquote, wrapped in a link, and in a list item whether the list is
-tight or loose. One case is still wrong in the underlying parser:
-
-- **A heading image's alt is also copied into the heading text.**
-  `# Title ![a](a.png)` reports the image correctly but gives `.h1` a text of
-  `Title a` rather than `Title`, and the generated anchor is `title-a`. Tracked
-  at [turbovault#78](https://github.com/Epistates/turbovault/issues/78).
+tight or loose. A heading's image is not part of its text: `# Title ![a](a.png)`
+is `.h1` text `Title`, anchor `title`.
 
 `.list` reports every list in document order, a nested list right after the
 list that holds it. A nested list is its own entry rather than text in its

@@ -1922,18 +1922,18 @@ fn main() {}
             [("a".into(), "a.png".into())],
             "a heading's image keeps its alt"
         );
-        // Still wrong, and the other half of the same defect: the alt reaches
-        // the image now, but it was also left behind in the heading's own
-        // text, so a heading renders as `Title a` in the outline and in
-        // `--list`. Tracked at Epistates/turbovault#78.
-        assert_eq!(
-            eval("# Title ![a](a.png)", ".h1 | text")
+        // The other half of the same defect, fixed in turbovault-parser 3.3:
+        // the alt was also left behind in the heading's own text, so the
+        // heading read `Title a` in the outline, `--list` and its anchor
+        // (Epistates/turbovault#78).
+        let heading = |query: &str| -> Vec<String> {
+            eval("# Title ![a](a.png)", query)
                 .into_iter()
                 .map(|v| v.to_text())
-                .collect::<Vec<_>>(),
-            ["Title a"],
-            "upstream fixed the heading text, drop the note in QUERY_LANGUAGE.md"
-        );
+                .collect()
+        };
+        assert_eq!(heading(".h1 | text"), ["Title"]);
+        assert_eq!(heading(".h1 | .slug"), ["title"]);
     }
 
     /// A list item's indented continuation inside a blockquote was joined onto

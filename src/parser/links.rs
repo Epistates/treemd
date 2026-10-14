@@ -168,6 +168,10 @@ fn convert_link_type(link_type: &LinkType, target: &str) -> LinkTarget {
                 alias: None,
             }
         }
+        // A kind added after this was written. External is the one that
+        // never resolves against this machine: only web links are opened,
+        // and anything else is copied.
+        _ => LinkTarget::External(target.to_string()),
     }
 }
 

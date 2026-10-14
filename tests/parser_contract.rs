@@ -254,12 +254,11 @@ fn the_extracted_shape_of_every_construct_is_unchanged() {
 /// and code block line numbers. The `start`/`end` pairs are the opening and
 /// closing fence rows and were checked against the fixture by hand.
 ///
-/// One line is still wrong: the first heading reads `Heading with an image
-/// heading-img`, because a heading image's alt is copied into the heading text
-/// as well as onto the image. Tracked at Epistates/turbovault#78. When that
-/// lands, this test fails and the fixed line is the diff.
+/// Since 3.3 the first heading reads `Heading with an image`. It used to end
+/// in its image's alt, `heading-img`, copied into the heading text as well as
+/// onto the image (Epistates/turbovault#78).
 const EXPECTED: &str = r#"== headings ==
-h1 "Heading with an image heading-img"
+h1 "Heading with an image"
 h2 "Lists"
 h2 "Blockquotes"
 h2 "Callouts"
