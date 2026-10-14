@@ -1,4 +1,4 @@
-use clap::{Parser, ValueEnum};
+use clap::{ArgGroup, Parser, ValueEnum};
 use std::path::PathBuf;
 
 #[cfg(feature = "unstable-dynamic")]
@@ -32,12 +32,23 @@ treemd -s Installation doc.md # Extract section";
 #[command(version)]
 #[command(about = "A markdown navigator with tree-based structural navigation")]
 #[command(long_about = LONG_ABOUT)]
+// One mode at a time. Given two, all but one were silently ignored, by an
+// order of precedence nobody could see: `-l --tree` printed a tree, and
+// `--tree -s X` the whole tree.
+#[command(group(
+    ArgGroup::new("mode")
+        .args(["list", "tree", "section", "count", "at_line", "query"])
+        .multiple(false)
+))]
+// The modes that list headings, which the options shaping a listing need.
+// Without one, those options were ignored and the TUI opened.
+#[command(group(ArgGroup::new("listing").args(["list", "tree"]).multiple(false)))]
 pub struct Cli {
     /// Markdown file(s) to view (.md or .markdown), directory, URL, or '-' for stdin
     ///
-    /// Path to the markdown file(s) to open. Use '-' to read from stdin.
+    /// Path to the markdown file to open. Use '-' to read from stdin.
     /// If a directory is specified, opens file picker in that directory.
-    /// Multiple files can be specified for the file picker.
+    /// Only the first file is opened; any more are reported and ignored.
     /// If no file is specified and stdin is piped, input is read from stdin.
     /// http(s) URLs are fetched directly; `github:owner/repo` opens that
     /// repository's README.
@@ -46,7 +57,6 @@ pub struct Cli {
     ///   treemd README.md         # Open file
     ///   treemd .                 # Open file picker in current directory
     ///   treemd docs/             # Open file picker in docs directory
-    ///   treemd *.md              # Open file picker with matched files
     ///   treemd -                 # Read from stdin
     ///   cat doc.md | treemd -l   # Pipe markdown
     ///   treemd https://raw.githubusercontent.com/rust-lang/rust/HEAD/README.md
@@ -91,7 +101,7 @@ pub struct Cli {
     /// Works with --list or --tree modes.
     ///
     /// Example: --filter "install" matches "Installation" and "Installing"
-    #[arg(long = "filter", value_name = "PATTERN")]
+    #[arg(long = "filter", value_name = "PATTERN", requires = "listing")]
     pub filter: Option<String>,
 
     /// Show each heading's line range as `[start-end]` (non-interactive)
@@ -104,7 +114,7 @@ pub struct Cli {
     /// of loading the whole file.
     ///
     /// Example: -l -n prints `## Installation [12-34]`
-    #[arg(short = 'n', long = "line-numbers")]
+    #[arg(short = 'n', long = "line-numbers", requires = "listing")]
     pub line_numbers: bool,
 
     /// Show only headings at specific level (1-6)
@@ -113,16 +123,28 @@ pub struct Cli {
     ///   1 = # (h1), 2 = ## (h2), 3 = ### (h3), etc.
     ///
     /// Example: -L 2 shows only ## headings
-    #[arg(short = 'L', long = "level", value_name = "LEVEL")]
+    #[arg(
+        short = 'L',
+        long = "level",
+        value_name = "LEVEL",
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=6),
+        requires = "listing"
+    )]
     pub level: Option<usize>,
 
     /// Output format for --list and --tree modes
     ///
     /// Controls how headings are displayed:
     ///   plain - Human-readable text (default)
-    ///   json  - JSON array for scripting/parsing
-    ///   tree  - Box-drawing tree structure
-    #[arg(short = 'o', long = "output", default_value = "plain")]
+    ///   json  - JSON: with --list, the whole document as nested sections
+    ///           with their content; with --tree, an array of the headings
+    ///   tree  - Box-drawing tree structure, as --tree prints
+    #[arg(
+        short = 'o',
+        long = "output",
+        default_value = "plain",
+        requires = "listing"
+    )]
     pub output: OutputFormat,
 
     /// Extract specific section by heading name
@@ -226,6 +248,17 @@ pub struct Cli {
     /// Example: -q '.h2' --query-output json
     #[arg(long = "query-output", value_name = "FORMAT")]
     pub query_output: Option<String>,
+
+    /// Exit with status 1 when the query matches nothing
+    ///
+    /// Without it, a query that matches nothing still exits 0, as jq does,
+    /// so a script cannot tell an empty result from a match. With it, the
+    /// exit status says which. A query that does not parse exits 3 and one
+    /// that fails while running exits 5, with or without it.
+    ///
+    /// Example: treemd -q '.h2[Install]' -e README.md || echo "no install section"
+    #[arg(short = 'e', long = "exit-status", requires = "query")]
+    pub exit_status: bool,
 }
 
 #[derive(Debug, Clone, ValueEnum)]

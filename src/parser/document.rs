@@ -156,8 +156,8 @@ impl Document {
         if heading_idx >= self.headings.len() {
             return None;
         }
-        let content_start = self.body_start(heading_idx);
         let end = self.section_end(heading_idx);
+        let content_start = self.body_start(heading_idx).min(end);
         Some(self.content[content_start..end].trim().to_string())
     }
 
@@ -166,31 +166,37 @@ impl Document {
     ///
     /// The parser reports `offset + source_len` already pointing at the start of
     /// the body in the common case (the construct length includes its line
-    /// terminator, handling CRLF and setext underlines uniformly). The extra
-    /// `find('\n')` is a safety net for the rare case where the reported range
-    /// stops before the terminator; it never crosses into the next line's text.
+    /// terminator, handling CRLF and setext underlines uniformly). Otherwise the
+    /// body starts after the next line ending, which as in CommonMark is `\n`,
+    /// `\r\n` or a lone `\r`. It never passes the next heading: with a lone
+    /// `\r` ending a setext underline, looking for `\n` alone ran to the end
+    /// of the document, past the next heading, and slicing the body panicked.
     pub fn body_start(&self, idx: usize) -> usize {
         let heading = &self.headings[idx];
-        let after = (heading.offset + heading.source_len).min(self.content.len());
+        let next_heading = self
+            .headings
+            .get(idx + 1)
+            .map_or(self.content.len(), |h| h.offset);
+        let after = (heading.offset + heading.source_len).min(next_heading);
 
-        // If `after` already sits at the start of a line (or EOF), it is the
-        // body start. Otherwise advance to just past the next newline.
-        if after >= self.content.len() {
-            return self.content.len();
+        let bytes = self.content.as_bytes();
+        let at_line_start = match after.checked_sub(1).map(|i| bytes[i]) {
+            None | Some(b'\n') => true,
+            Some(b'\r') => bytes.get(after) != Some(&b'\n'),
+            _ => false,
+        };
+        if at_line_start {
+            return after;
         }
-        let preceding_is_newline = self.content[..after]
-            .chars()
-            .next_back()
-            .map(|c| c == '\n')
-            .unwrap_or(true);
-        if preceding_is_newline {
-            after
-        } else {
-            self.content[after..]
-                .find('\n')
-                .map(|i| after + i + 1)
-                .unwrap_or(self.content.len())
-        }
+        let body = match bytes[after..]
+            .iter()
+            .position(|&b| b == b'\n' || b == b'\r')
+        {
+            Some(i) if bytes[after + i..].starts_with(b"\r\n") => after + i + 2,
+            Some(i) => after + i + 1,
+            None => self.content.len(),
+        };
+        body.min(next_heading)
     }
 
     /// Byte offset where section `idx` ends: the offset of the next heading at a
@@ -204,8 +210,20 @@ impl Document {
             .iter()
             .skip(idx + 1)
             .find(|h| h.level <= level)
-            .map(|h| h.offset)
+            .map(|h| self.line_start_at(h.offset))
             .unwrap_or(self.content.len())
+    }
+
+    /// Where the line holding byte `offset` starts.
+    ///
+    /// Sections end where the next heading's line starts. A heading nested
+    /// in a quote or list item (`> # Q`, `- # Q`) begins after the markers,
+    /// and ending the section at the heading left a stray `>` or `-` at the
+    /// end of the one before.
+    fn line_start_at(&self, offset: usize) -> usize {
+        self.content[..offset]
+            .rfind(['\n', '\r'])
+            .map_or(0, |i| i + 1)
     }
 
     /// Byte offset where section `idx` ends when bounding at *any* following
@@ -215,8 +233,37 @@ impl Document {
     pub fn section_end_any(&self, idx: usize) -> usize {
         self.headings
             .get(idx + 1)
-            .map(|h| h.offset)
+            .map(|h| self.line_start_at(h.offset))
             .unwrap_or(self.content.len())
+    }
+
+    /// Every heading's anchor slug in `style`, in document order.
+    pub fn heading_slugs(&self, style: super::content::SlugStyle) -> Vec<String> {
+        style.slugs(self.headings.iter().map(|h| h.text.as_str()))
+    }
+
+    /// The 1-indexed line each heading sits on, in heading order.
+    ///
+    /// One sequential pass, counting newlines between consecutive headings.
+    /// Counting from the start of the document for each heading instead is
+    /// quadratic, which on a file with a few thousand headings made every
+    /// query and `-o json` take seconds. Counting newlines rather than
+    /// `lines()` also gets a heading that does not start its line right, such
+    /// as `> # quoted`, where a `lines()` count over the prefix includes the
+    /// partial line and is one too many.
+    pub fn heading_lines(&self) -> Vec<usize> {
+        let mut lines = Vec::with_capacity(self.headings.len());
+        let mut line = 1usize;
+        let mut prev_offset = 0usize;
+        for heading in &self.headings {
+            line += self.content.as_bytes()[prev_offset..heading.offset]
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count();
+            lines.push(line);
+            prev_offset = heading.offset;
+        }
+        lines
     }
 
     /// Compute the 1-indexed `(start_line, end_line)` for every heading,
@@ -228,23 +275,7 @@ impl Document {
     /// offsets — or the document's last line when no such heading follows.
     pub fn heading_line_ranges(&self) -> HashMap<usize, (usize, usize)> {
         let n = self.headings.len();
-
-        // Single sequential pass: count newlines between consecutive heading
-        // offsets rather than re-scanning from the start of the document for
-        // each heading.
-        let mut start_lines = Vec::with_capacity(n);
-        let mut prev_line = 1usize;
-        let mut prev_offset = 0usize;
-        for heading in &self.headings {
-            let line = prev_line
-                + self.content[prev_offset..heading.offset]
-                    .matches('\n')
-                    .count();
-            start_lines.push(line);
-            prev_line = line;
-            prev_offset = heading.offset;
-        }
-
+        let start_lines = self.heading_lines();
         let total_lines = self.content.lines().count();
 
         let mut ranges = HashMap::with_capacity(n);

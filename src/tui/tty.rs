@@ -244,6 +244,63 @@ pub fn resume_raw_mode() -> io::Result<()> {
     crossterm::terminal::enable_raw_mode()
 }
 
+/// The pane's `allow-passthrough` in tmux before the image probe, which
+/// turns it on, so [`restore`] can put it back.
+#[cfg(unix)]
+static TMUX_PASSTHROUGH: OnceLock<String> = OnceLock::new();
+
+/// Note tmux's `allow-passthrough` for this pane before probing for images.
+///
+/// ratatui-image turns it on inside tmux so the probe and the images reach
+/// the outer terminal, and leaves it on. After treemd exits, anything else
+/// run in that pane could then write escape sequences straight to the
+/// outer terminal, which tmux's default exists to prevent.
+#[cfg(unix)]
+pub fn remember_tmux_passthrough() {
+    use std::process::{Command, Stdio};
+
+    if std::env::var_os("TMUX").is_none() {
+        return;
+    }
+    let Ok(output) = Command::new("tmux")
+        .args(["show-options", "-pqv", "allow-passthrough"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return;
+    };
+    if output.status.success() {
+        let _ = TMUX_PASSTHROUGH.set(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+}
+
+#[cfg(not(unix))]
+pub fn remember_tmux_passthrough() {}
+
+/// Put the pane's `allow-passthrough` back as [`remember_tmux_passthrough`]
+/// found it: set to its old value, or unset when the pane had none of its
+/// own.
+#[cfg(unix)]
+fn restore_tmux_passthrough() {
+    use std::process::{Command, Stdio};
+
+    let Some(before) = TMUX_PASSTHROUGH.get() else {
+        return;
+    };
+    let mut command = Command::new("tmux");
+    if before.is_empty() {
+        command.args(["set-option", "-pu", "allow-passthrough"]);
+    } else {
+        command.args(["set-option", "-p", "allow-passthrough", before]);
+    }
+    let _ = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 /// Best-effort terminal restore: leave alternate screen and disable raw mode.
 ///
 /// Safe to call from a panic hook or during shutdown.
@@ -258,18 +315,52 @@ pub fn restore() {
     let _ = stdout().execute(DisableBracketedPaste);
     let _ = stdout().execute(DisableMouseCapture);
     let _ = stdout().execute(LeaveAlternateScreen);
+    // The TUI hides the cursor while drawing. Ratatui shows it again when its
+    // terminal is dropped, which a panic or a signal exit does not reach.
+    let _ = stdout().execute(crossterm::cursor::Show);
     let _ = disable_raw_mode();
+    #[cfg(unix)]
+    restore_tmux_passthrough();
 }
 
 /// Install a panic hook that restores the terminal before propagating the panic.
 ///
 /// Mirrors `ratatui::init`'s behavior but uses our piped-stdin-aware restore.
+/// A panic inside [`catch_isolated`] is left alone: the hook runs before
+/// `catch_unwind` regains control, so restoring there would drop the TUI out
+/// of the alternate screen and raw mode for a panic that is about to be
+/// handled, and print its message over the frame.
 pub fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if panic_is_isolated() {
+            return;
+        }
         restore();
         prev(info);
     }));
+}
+
+thread_local! {
+    /// How many [`catch_isolated`] calls are live on this thread.
+    static ISOLATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn panic_is_isolated() -> bool {
+    ISOLATED.with(|depth| depth.get() > 0)
+}
+
+/// Run `f`, turning a panic into `Err` without disturbing the terminal.
+///
+/// For third-party work that is allowed to fail (image encoding, mermaid
+/// layout and rasterization), where a panic should become an error for that
+/// one item rather than end the session. Plain `catch_unwind` is not enough
+/// here, see [`install_panic_hook`].
+pub fn catch_isolated<R>(f: impl FnOnce() -> R) -> std::thread::Result<R> {
+    ISOLATED.with(|depth| depth.set(depth.get() + 1));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    ISOLATED.with(|depth| depth.set(depth.get() - 1));
+    result
 }
 
 /// Read a terminal event. fd 0 already points at /dev/tty when stdin was piped
@@ -282,4 +373,27 @@ pub fn read_event() -> io::Result<Event> {
 /// `read_event`.
 pub fn poll_event(timeout: Duration) -> io::Result<bool> {
     poll(timeout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catch_isolated_marks_its_own_extent_and_returns_the_panic() {
+        assert!(!panic_is_isolated());
+
+        let inside = catch_isolated(panic_is_isolated);
+        assert_eq!(inside.ok(), Some(true));
+
+        // Nested, and unwinding through both, still leaves nothing marked.
+        let result = catch_isolated(|| {
+            let inner: std::thread::Result<()> = catch_isolated(|| panic!("inner"));
+            assert!(inner.is_err());
+            assert!(panic_is_isolated());
+            panic!("outer");
+        });
+        assert!(result.is_err());
+        assert!(!panic_is_isolated());
+    }
 }

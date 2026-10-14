@@ -38,6 +38,18 @@ use std::process;
 use treemd::{Document, parser};
 
 fn main() -> Result<()> {
+    // Rust ignores SIGPIPE, so writing into `treemd -l doc.md | head -1`
+    // after `head` exits panicked with "failed printing to stdout". The
+    // default disposition ends the process quietly, as for any other filter.
+    // Remote fetching is unaffected: std's TCP sockets write with
+    // MSG_NOSIGNAL or SO_NOSIGPIPE, so a dropped server is still an error.
+    #[cfg(unix)]
+    // SAFETY: called first in main, before any other thread exists, and
+    // SIG_DFL is a valid disposition for SIGPIPE.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     color_eyre::install()?;
 
     // Handle dynamic shell completions
@@ -97,9 +109,7 @@ fn main() -> Result<()> {
         .file
         .first()
         .map(|p| p.to_string_lossy().to_string())
-        .filter(|s| {
-            s.starts_with("http://") || s.starts_with("https://") || s.starts_with("github:")
-        });
+        .filter(|s| treemd::input::is_remote_spec(s));
 
     // Determine input source - check for remote and file picker cases first
     let (input_source, needs_file_picker, file_picker_dir) = if let Some(ref spec) = remote_spec {
@@ -111,125 +121,114 @@ fn main() -> Result<()> {
             }
         }
     } else {
-        match args.file.len() {
-            0 => {
-                // No file provided - check for .md files in cwd
-                use std::fs;
+        let picker_placeholder = || {
+            treemd::input::InputSource::Stdin(
+                "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
+            )
+        };
+        let cli_mode = !launches_tui(&args);
+        if args.file.len() > 1 {
+            eprintln!(
+                "warning: only the first file is opened; {} more ignored",
+                args.file.len() - 1
+            );
+        }
+
+        match args.file.first() {
+            // No file, but something is piped in: that is the document, as in
+            // `cat doc.md | treemd -q '.h'` or `tree | treemd`. This has to
+            // come before the file picker, which would otherwise take over
+            // whenever the working directory holds a markdown file.
+            None if treemd::input::is_stdin_piped() => {
+                match treemd::input::determine_input_source(None) {
+                    Ok(source) => (source, false, None),
+                    Err(e) => {
+                        eprintln!("Error reading input: {}", e);
+                        process::exit(1);
+                    }
+                }
+            }
+            // Nothing to read. The TUI can offer the directory's markdown
+            // files; a listing or a query has no document, which is a usage
+            // error rather than an empty success.
+            None if cli_mode => {
+                eprintln!("error: no input: name a markdown file, or pipe one in");
+                print_usage_hint();
+                process::exit(2);
+            }
+            None => {
                 let cwd = std::env::current_dir().unwrap_or_default();
-                let md_files: Vec<_> = fs::read_dir(&cwd)
-                    .ok()
+                let has_markdown = std::fs::read_dir(&cwd)
                     .into_iter()
                     .flatten()
                     .filter_map(|entry| entry.ok())
-                    .filter(|entry| {
+                    .any(|entry| {
                         let path = entry.path();
                         path.is_file()
                             && path
                                 .extension()
                                 .and_then(|ext| ext.to_str())
-                                .map(|ext| ext == "md" || ext == "markdown")
-                                .unwrap_or(false)
-                    })
-                    .collect();
-
-                if md_files.is_empty() {
+                                .is_some_and(|ext| ext == "md" || ext == "markdown")
+                    });
+                if !has_markdown {
                     eprintln!("No markdown files found in current directory.");
-                    eprintln!("\nUsage: treemd [OPTIONS] <FILE>");
-                    eprintln!("       treemd [OPTIONS] -");
-                    eprintln!("       treemd [OPTIONS] .           # Open file picker");
-                    eprintln!("       tree | treemd [OPTIONS]\n");
+                    print_usage_hint();
+                    process::exit(2);
+                }
+                (picker_placeholder(), true, None)
+            }
+            Some(path) if path.is_dir() => {
+                if cli_mode {
                     eprintln!(
-                        "Tip: Navigate to a directory with .md files, or specify a file path."
+                        "error: {} is a directory; name a markdown file",
+                        path.display()
                     );
-                    eprintln!("\nFor shell completion setup, use:");
-                    eprintln!("  treemd --setup-completions");
-                    std::process::exit(0);
+                    process::exit(1);
                 }
-
-                // Create dummy document to show file picker
-                (
-                    treemd::input::InputSource::Stdin(
-                        "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
-                    ),
-                    true,
-                    None,
-                )
+                (picker_placeholder(), true, Some(path.clone()))
             }
-            1 => {
-                let file_path = &args.file[0];
-                // Check if it's a directory
-                if file_path.is_dir() {
-                    // Directory provided - open file picker in that directory
-                    (
-                        treemd::input::InputSource::Stdin(
-                            "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
-                        ),
-                        true,
-                        Some(file_path.clone()),
-                    )
-                } else {
-                    // Single file path was provided - use existing logic
-                    match treemd::input::determine_input_source(Some(file_path.as_path())) {
-                        Ok(source) => (source, false, None),
-                        Err(treemd::input::InputError::NoTty) => {
-                            eprintln!("Error: markdown file argument is required");
-                            eprintln!("\nUsage: treemd [OPTIONS] <FILE>");
-                            eprintln!("       treemd [OPTIONS] -");
-                            eprintln!("       treemd [OPTIONS] .           # Open file picker");
-                            eprintln!("       tree | treemd [OPTIONS]\n");
-                            eprintln!(
-                                "Use '-' to explicitly read from stdin, or pipe input with CLI flags."
-                            );
-                            eprintln!("\nFor shell completion setup, use:");
-                            eprintln!("  treemd --setup-completions");
-                            std::process::exit(1);
-                        }
-                        Err(e) => {
-                            eprintln!("Error reading input: {}", e);
-                            process::exit(1);
-                        }
-                    }
+            Some(path) => match treemd::input::determine_input_source(Some(path.as_path())) {
+                Ok(source) => (source, false, None),
+                Err(e) => {
+                    eprintln!("Error reading {}: {}", path.display(), e);
+                    process::exit(1);
                 }
-            }
-            _ => {
-                // Multiple files provided - open first file, others available in file picker
-                // For now, just open the first file (file picker will show all files in same dir)
-                let file_path = &args.file[0];
-                if file_path.is_dir() {
-                    // If first arg is a directory, use it for file picker
-                    (
-                        treemd::input::InputSource::Stdin(
-                            "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
-                        ),
-                        true,
-                        Some(file_path.clone()),
-                    )
-                } else {
-                    match treemd::input::determine_input_source(Some(file_path.as_path())) {
-                        Ok(source) => (source, false, None),
-                        Err(treemd::input::InputError::NoTty) => {
-                            eprintln!("Error: markdown file argument is required");
-                            std::process::exit(1);
-                        }
-                        Err(e) => {
-                            eprintln!("Error reading input: {}", e);
-                            process::exit(1);
-                        }
-                    }
-                }
-            }
+            },
         }
     };
+
+    // No terminal to draw on, as in `treemd doc.md > out` or `| cat`: print
+    // the document, as bat and less do, instead of writing the TUI's escape
+    // sequences into a file or a pipe.
+    if launches_tui(&args) && !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        if needs_file_picker {
+            eprintln!("error: stdout is not a terminal, and there is no document to print");
+            process::exit(2);
+        }
+        let (treemd::input::InputSource::File(content)
+        | treemd::input::InputSource::Stdin(content)) = input_source;
+        print!("{content}");
+        return Ok(());
+    }
 
     // Check if stdin was piped (before consuming input_source)
     let stdin_was_piped = matches!(input_source, treemd::input::InputSource::Stdin(_));
 
-    // Process input (handles tree format conversion, markdown passthrough, etc.)
-    let markdown_content = match treemd::input::process_input(input_source) {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("Error processing input: {}", e);
-            process::exit(1);
+    // Process input (handles tree format conversion, markdown passthrough,
+    // etc.). Only for the TUI: the heading it gives a heading-less document is
+    // there so the outline has something to select, and in CLI output it is a
+    // heading the document does not have, shifting every line number by two.
+    let markdown_content = if launches_tui(&args) {
+        match treemd::input::process_input(input_source) {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("Error processing input: {}", e);
+                process::exit(1);
+            }
+        }
+    } else {
+        match input_source {
+            treemd::input::InputSource::File(c) | treemd::input::InputSource::Stdin(c) => c,
         }
     };
 
@@ -238,22 +237,16 @@ fn main() -> Result<()> {
 
     // Handle query mode
     if let Some(ref query_str) = args.query {
-        return handle_query_mode(&doc, query_str, args.query_output.as_deref());
+        return handle_query_mode(
+            &doc,
+            query_str,
+            args.query_output.as_deref(),
+            args.exit_status,
+        );
     }
 
-    #[cfg(feature = "unstable-dynamic")]
-    let setup_completions_requested = args.setup_completions;
-    #[cfg(not(feature = "unstable-dynamic"))]
-    let setup_completions_requested = false;
-
     // If no flags, launch TUI
-    if !args.list
-        && !args.tree
-        && !args.count
-        && args.section.is_none()
-        && args.at_line.is_none()
-        && !setup_completions_requested
-    {
+    if launches_tui(&args) {
         // Load configuration
         let mut config = treemd::Config::load();
 
@@ -312,6 +305,9 @@ fn main() -> Result<()> {
         // Install panic hook before entering raw mode so the terminal is
         // restored if anything below panics.
         treemd::tui::tty::install_panic_hook();
+        // And signals, so one arriving while the terminal is set up (the image
+        // probe can take seconds) does not leave it in raw mode.
+        treemd::tui::signals::install();
 
         // Manually initialize to get better error messages
         // Use our custom enable_raw_mode that handles piped stdin
@@ -343,11 +339,22 @@ fn main() -> Result<()> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("stdin")
                 .to_string();
-            let path = file.canonicalize().unwrap_or_else(|_| file.clone());
+            // A URL or `github:` spec is kept as given: canonicalized, it
+            // resolved against a directory named `http:` in the working
+            // directory, if there was one, and the fetched page was then
+            // treated as a local file, its links and images included.
+            let path = if remote_spec.is_some() {
+                file.clone()
+            } else {
+                file.canonicalize().unwrap_or_else(|_| file.clone())
+            };
             (name, path)
         } else {
             // Stdin input or directory
-            ("stdin".to_string(), std::path::PathBuf::from("<stdin>"))
+            (
+                "stdin".to_string(),
+                std::path::PathBuf::from(treemd::input::STDIN_PATH),
+            )
         };
 
         // Determine if images are enabled
@@ -370,13 +377,8 @@ fn main() -> Result<()> {
         }
         let result = treemd::tui::run(&mut terminal, app);
 
-        // Cleanup terminal state
-        use crossterm::event::{DisableBracketedPaste, DisableMouseCapture};
-        use crossterm::terminal::LeaveAlternateScreen;
-        stdout().execute(DisableBracketedPaste).ok();
-        stdout().execute(DisableMouseCapture).ok();
-        stdout().execute(LeaveAlternateScreen).ok();
-        treemd::tui::tty::disable_raw_mode().ok();
+        // Cleanup terminal state, the same way a panic or a signal does
+        treemd::tui::tty::restore();
 
         return result;
     }
@@ -389,38 +391,102 @@ fn main() -> Result<()> {
 /// Fetch a remote document. http(s) URLs are fetched directly;
 /// `github:owner/repo` resolves to the repository's README on the default
 /// branch via raw.githubusercontent.com.
+/// How to give treemd input, for the errors that mean there was none.
+fn print_usage_hint() {
+    eprintln!("\nUsage: treemd [OPTIONS] <FILE>");
+    eprintln!("       treemd [OPTIONS] -");
+    eprintln!("       treemd [OPTIONS] .           # Open file picker");
+    eprintln!("       tree | treemd [OPTIONS]\n");
+    eprintln!("Tip: Navigate to a directory with .md files, or specify a file path.");
+    eprintln!("\nFor shell completion setup, use:");
+    eprintln!("  treemd --setup-completions");
+}
+
+/// Whether these arguments open the TUI rather than printing and exiting.
+fn launches_tui(args: &Cli) -> bool {
+    args.query.is_none()
+        && !args.list
+        && !args.tree
+        && !args.count
+        && args.section.is_none()
+        && args.at_line.is_none()
+}
+
 fn fetch_remote(spec: &str) -> Result<String, String> {
-    let url = if let Some(repo) = spec.strip_prefix("github:") {
-        let repo = repo.trim_matches('/');
-        if repo.split('/').filter(|s| !s.is_empty()).count() != 2 {
-            return Err(format!(
-                "Invalid GitHub spec '{}': expected github:owner/repo",
-                spec
-            ));
+    // ureq sets no timeouts of its own, so a server that accepts and never
+    // answers hung treemd for good. An https request also stays on https
+    // through its redirects rather than following one down to plain http.
+    let agent = |url: &str| -> ureq::Agent {
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(10)))
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .https_only(url.starts_with("https://"))
+            .build()
+            .into()
+    };
+    let fetch = |url: &str, accept: Option<&str>| -> Result<String, String> {
+        let mut request = agent(url).get(url);
+        if let Some(accept) = accept {
+            request = request.header("Accept", accept);
         }
-        format!("https://raw.githubusercontent.com/{}/HEAD/README.md", repo)
-    } else {
-        spec.to_string()
+        let mut response = request
+            .call()
+            .map_err(|e| format!("Failed to fetch {}: {}", url, e))?;
+        // ureq's limit counts the bytes received, before decompression, so
+        // a 40 KB gzip body expanding to gigabytes passed it. The text is
+        // held to the same size after decoding.
+        const MAX_FETCH_BYTES: u64 = 10 * 1024 * 1024;
+        let mut text = String::new();
+        std::io::Read::read_to_string(
+            &mut std::io::Read::take(
+                response
+                    .body_mut()
+                    .with_config()
+                    .limit(MAX_FETCH_BYTES)
+                    .reader(),
+                MAX_FETCH_BYTES + 1,
+            ),
+            &mut text,
+        )
+        .map_err(|e| format!("Failed to read response from {}: {}", url, e))?;
+        if text.len() as u64 > MAX_FETCH_BYTES {
+            return Err(format!("{url} is larger than the 10 MB limit"));
+        }
+        Ok(text)
     };
 
-    let mut response = ureq::get(&url)
-        .call()
-        .map_err(|e| format!("Failed to fetch {}: {}", url, e))?;
-    response
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| format!("Failed to read response from {}: {}", url, e))
+    let Some(repo) = spec.strip_prefix("github:") else {
+        return fetch(spec, None);
+    };
+    let repo = repo.trim_matches('/');
+    if repo.split('/').filter(|s| !s.is_empty()).count() != 2 {
+        return Err(format!(
+            "Invalid GitHub spec '{}': expected github:owner/repo",
+            spec
+        ));
+    }
+
+    // GitHub's own answer to "what is this repository's README", whatever
+    // it is named: readme.md, README.markdown, docs/README.md. Asking for
+    // README.md at the root by name missed all of those. The API allows 60
+    // unauthenticated requests an hour, so past that the name is tried.
+    let api = format!("https://api.github.com/repos/{repo}/readme");
+    fetch(&api, Some("application/vnd.github.raw+json")).or_else(|api_error| {
+        let raw = format!("https://raw.githubusercontent.com/{repo}/HEAD/README.md");
+        fetch(&raw, None).map_err(|raw_error| format!("{api_error}; then {raw_error}"))
+    })
 }
 
 fn handle_cli_mode(args: &Cli, doc: &Document) {
-    // Apply filters
-    let headings: Vec<_> = if let Some(level) = args.level {
-        doc.headings_at_level(level)
-    } else if let Some(ref filter) = args.filter {
-        doc.filter_headings(filter)
-    } else {
-        doc.headings.iter().collect()
+    // Apply filters. Both apply when both are given: `-L 2 --filter api` is
+    // the level-2 headings mentioning api, not every level-2 heading.
+    let mut headings: Vec<_> = match args.filter {
+        Some(ref filter) => doc.filter_headings(filter),
+        None => doc.headings.iter().collect(),
     };
+    if let Some(level) = args.level {
+        headings.retain(|h| h.level == level);
+    }
 
     // --at-line takes precedence over the other flag-based modes.
     if let Some(line) = args.at_line {
@@ -436,6 +502,16 @@ fn handle_cli_mode(args: &Cli, doc: &Document) {
     } else if let Some(ref section_name) = args.section {
         extract_section(doc, section_name);
     } else if args.list {
+        // `-o json` is the nested document, always whole. Say so rather than
+        // print every heading as if the filters had been applied.
+        if matches!(args.output, OutputFormat::Json)
+            && (args.level.is_some() || args.filter.is_some())
+        {
+            eprintln!(
+                "note: -L and --filter do not apply to -o json, which is the whole document; \
+                 for filtered JSON use -q, e.g. -q '.h2' --query-output json"
+            );
+        }
         print_headings(&headings, &args.output, doc, args.line_numbers);
     }
 }
@@ -469,7 +545,7 @@ fn print_heading_at_line(doc: &Document, target_line: usize) {
     match best {
         Some(h) => {
             let prefix = "#".repeat(h.level);
-            println!("{} {}", prefix, h.text);
+            println!("{} {}", prefix, cli::terminal::display(&h.text));
         }
         None => {
             eprintln!("No heading at or before line {}", target_line);
@@ -491,23 +567,27 @@ fn print_headings(
                 let prefix = "#".repeat(heading.level);
                 match ranges.as_ref().and_then(|r| r.get(&heading.offset)) {
                     Some(&(start, end)) => {
-                        println!("{} {} [{}-{}]", prefix, heading.text, start, end)
+                        println!(
+                            "{} {} [{}-{}]",
+                            prefix,
+                            cli::terminal::display(&heading.text),
+                            start,
+                            end
+                        )
                     }
-                    None => println!("{} {}", prefix, heading.text),
+                    None => println!("{} {}", prefix, cli::terminal::display(&heading.text)),
                 }
             }
         }
         OutputFormat::Json => {
             // Use new nested JSON output with markdown intelligence
-            let json_output = parser::build_json_output(doc, None);
+            let slug_style = treemd::Config::load().content.slug_style;
+            let json_output = parser::build_json_output_with(doc, None, slug_style);
             let json = serde_json::to_string_pretty(&json_output)
                 .expect("JSON serialization of document output should not fail");
             println!("{}", json);
         }
-        OutputFormat::Tree => {
-            eprintln!("Use --tree for tree output");
-            process::exit(1);
-        }
+        OutputFormat::Tree => print_tree(doc, format, headings, line_numbers),
     }
 }
 
@@ -541,7 +621,7 @@ fn print_tree(
                     Some(ranges) => node.render_box_tree_with_lines("", is_last, compact, ranges),
                     None => node.render_box_tree_styled("", is_last, compact),
                 };
-                print!("{}", rendered);
+                print!("{}", cli::terminal::display(&rendered));
             }
         }
         OutputFormat::Json => {
@@ -585,18 +665,22 @@ fn extract_section(doc: &Document, section_name: &str) {
     // String search is wrong when the heading source has inline markdown
     // (e.g. `## **Bold** Section`) since heading.text is the stripped form.
     let start = heading.offset;
-    let level = heading.level;
-    let end = doc
+    let index = doc
         .headings
         .iter()
-        .find(|h| h.offset > start && h.level <= level)
-        .map(|h| h.offset)
-        .unwrap_or(doc.content.len());
+        .position(|h| h.offset == start)
+        .expect("a found heading is one of the document's");
+    let end = doc.section_end(index);
 
-    println!("{}", doc.content[start..end].trim());
+    println!("{}", cli::terminal::display(doc.content[start..end].trim()));
 }
 
-fn handle_query_mode(doc: &Document, query_str: &str, output_format: Option<&str>) -> Result<()> {
+fn handle_query_mode(
+    doc: &Document,
+    query_str: &str,
+    output_format: Option<&str>,
+    exit_status: bool,
+) -> Result<()> {
     use treemd::query::{self, OutputFormat};
 
     // Parse output format
@@ -605,24 +689,40 @@ fn handle_query_mode(doc: &Document, query_str: &str, output_format: Option<&str
         .transpose()
         .map_err(|e| {
             eprintln!("Error: {}", e);
-            process::exit(1);
+            process::exit(2);
         })?
         .unwrap_or(OutputFormat::Plain);
 
-    // Execute query
-    match query::execute(doc, query_str) {
+    // jq's exit codes: 3 for a query that does not parse, 5 for one that
+    // fails while running. Both were 1, which `--exit-status` also uses for
+    // no results, so a script could not tell a typo from an empty match.
+    let parsed = query::parse(query_str).unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        process::exit(3);
+    });
+    let slug_style = treemd::Config::load().content.slug_style;
+    match query::engine(doc)
+        .with_slug_style(slug_style)
+        .execute(&parsed)
+    {
         Ok(results) => {
-            if results.is_empty() {
-                // No results - exit silently like jq
-                return Ok(());
+            // No results prints nothing, like jq, except as JSON, which is
+            // always one array so a consumer can parse it the same way
+            // whatever the count: `[]` when nothing matched.
+            if !results.is_empty()
+                || matches!(format, OutputFormat::Json | OutputFormat::JsonPretty)
+            {
+                let output = query::format_output(&results, format);
+                println!("{}", cli::terminal::display(&output));
             }
-            let output = query::format_output(&results, format);
-            println!("{}", output);
+            if exit_status && results.is_empty() {
+                process::exit(1);
+            }
             Ok(())
         }
         Err(e) => {
             eprintln!("{}", e);
-            process::exit(1);
+            process::exit(5);
         }
     }
 }
@@ -632,124 +732,183 @@ fn print_query_help() {
 treemd Query Language (tql)
 
 A jq-like query language for navigating and extracting markdown structure.
+Results print one per line; a selector that matches nothing prints nothing
+(`[]` with --query-output json) and exits 0. A query that does not parse
+exits 3, and one that fails while running exits 5.
 
 ELEMENT SELECTORS
-    .h, .heading    All headings (any level)
-    .h1 - .h6       Headings by level
-    .code           All code blocks
-    .code[rust]     Code blocks by language
-    .link, .a       All links
-    .link[external] External links only
-    .img            All images
-    .table          All tables
-    .list           All lists
-    .blockquote     All blockquotes
+    .h, .heading        All headings (any level)
+    .h1 - .h6           Headings by level
+    .code               All code blocks
+    .link, .a           All links
+    .img, .image        All images
+    .table              All tables
+    .list               All lists (a nested list is its own entry)
+    .blockquote, .quote All blockquotes
+    .para, .p           All paragraphs
+    .frontmatter, .fm   YAML front matter, as an object
+    .                   The whole document
+
+    After a pipe, a selector applied to a heading looks only inside that
+    heading's section: `.h2[0] | .code` is the code under the first h2.
+    On an input that has a key or property of the same name, `.name` reads
+    it instead: `.fm | .image` is the front matter's `image`.
 
 FILTERS & INDEXING
-    .h2[Features]       Heading containing "Features" (fuzzy)
-    .h2["Installation"] Heading with exact text
+    .h2[Features]       h2s whose text contains "Features" (case-insensitive)
+    .h2[Getting Started] A bare filter runs to the ], spaces included
+    .h2["Install"]      h2s whose whole text is "Install" (case-insensitive)
+    .code[rust]         Code blocks by language (whole name, case-insensitive)
+    .code[c++]          Also .code[c#], .code[objective-c]
+    .link[external]     Links by type: external, anchor, relative, wikilink
     .h2[0]              First h2
     .h2[-1]             Last h2
     .h2[1:3]            h2s at index 1 and 2
     .h2[:3]             First 3 h2s
+    .h2[]               Every h2
+    .table[0].rows[][0] After a stream of arrays, an index applies to each
+    .fm.tags[1:]        A slice of an array is an array, as in jq
+    .fm["draft-of"]     A key with a dash; also .fm."draft-of"
 
 HIERARCHY
-    .h1 > .h2           Direct child h2s under h1s
-    .h1 >> .code        Code blocks anywhere under h1s
+    .h1 > .h2           h2s directly under each h1
+    .h1 > .code         Code in each h1's own body, before its first subheading
+    .h1 >> .code        Code anywhere in each h1's section
+    Works for every element kind except front matter, which is document-wide.
+
+PROPERTIES
+    headings    .text .level .line .slug .content .md .children .parent
+                (.content and .md include subsections; .line is the
+                heading's own line)
+    code        .lang .text .lines .start_line .end_line
+    links       .text .url .type
+    images      .alt .src .title
+    tables      .headers .rows .cols .alignments
+    lists       .items .ordered
+    paragraphs  .text        blockquotes  .text
+    document    .heading_count .word_count .text
+    objects     .key, for any key (also front matter); a missing key is null
 
 PIPES
-    .h2 | text          Get heading text (strips ##)
-    [.h2] | count       Count all h2s
-    .code | lang        Get code block languages
-    .link | url         Get link URLs
+    .h2 | text          Heading text (strips ##)
+    .h2 | count         Number of h2s
+    .code | lang        Code block languages
+    .link | url         Link URLs
+
+    A collection function after a selector (or anything else that yields
+    several values) runs once on all of them: count, length, first, last,
+    nth, limit, skip, sort, sort_by, unique, reverse, group_by, join, min,
+    max, add, any, all, levels, langs, types. Given a single array, as in
+    `[.h2] | count`, they work on that array. Ordering functions (sort,
+    sort_by, unique, reverse, limit, skip) hand back a stream. A stage that
+    starts with one works on the whole stream too: `.h | count > 3`.
 
 COLLECTION FUNCTIONS
-    count, length       Count elements (alias: len, size)
-    first, last         First/last element (alias: head)
-    limit(n), take(n)   First n elements
-    skip(n), drop(n)    Skip first n elements
-    nth(n)              Get element at index
+    count, length       Count values (alias: len, size)
+    first, last         First/last value (alias: head)
+    nth(n)              Value at index n (negative counts from the end)
+    limit(n), take(n)   First n values
+    skip(n), drop(n)    All but the first n values
     reverse             Reverse order
-    sort                Sort alphabetically
-    sort_by(key)        Sort by property
-    unique              Remove duplicates
-    flatten             Flatten nested arrays
-    group_by(key)       Group elements by key
-    min, max            Min/max numeric value
-    add                 Sum numbers or concat strings
+    sort                Sort (null, booleans, numbers, strings, arrays, objects)
+    sort_by(f)          Sort by f, e.g. sort_by(.level) or sort_by("level")
+    unique              Drop repeated values, keeping the first
+    group_by(f)         Object of arrays keyed by f (alias: group)
+    flatten             Flatten one level of nested arrays
+    min, max            Smallest/largest number
+    add                 Sum numbers, or concatenate as text
+    keys, values        Keys/values of an object (indices/items of an array)
 
 STRING FUNCTIONS
-    text                Get text representation
+    text                Text of a value (a heading's text, a code body)
     upper, lower        Case conversion
-    trim                Strip whitespace
-    split(sep)          Split by separator
-    join(sep)           Join with separator
-    replace(a, b)       Replace substring
+    trim                Strip surrounding whitespace
+    split(sep)          Split into an array
+    join(sep)           Join values with sep
+    replace(a, b)       Replace every a with b
     slugify             URL-friendly slug
-    lines, words, chars Count lines/words/chars
+    lines, words, chars Count lines/words/characters
 
-FILTER FUNCTIONS
-    select(cond)        Keep if condition true (alias: where, filter)
-    contains(s)         Contains substring (alias: includes)
-    startswith(s)       Starts with prefix
-    endswith(s)         Ends with suffix
-    matches(regex)      Matches regex pattern
-    any, all            Check if any/all truthy
-    not                 Negate boolean
+TESTS
+    select(cond)        Keep the input when cond is true (alias: where, filter)
+    contains(s)         Text contains s, case-insensitive (alias: includes)
+    startswith(s)       Text starts with s, case-insensitive
+    endswith(s)         Text ends with s, case-insensitive
+    matches(regex)      Text matches a regex (case-sensitive)
+    has(key)            Object has key
+    any(cond), all(cond) Whether cond holds for any/every value
+    empty               Whether the input is null or an empty string,
+                        array or object
+    type                Type name: heading, code, string, number, ...
+    not                 Negation: `not .x` or `.x | not`
 
 CONTENT FUNCTIONS
-    content             Section content (for headings)
-    md                  Raw markdown
-    url, href, src      Get URL/link/image source
+    content             Section body under a heading
+    md                  Raw markdown of a heading's section
+    url, href, src      Link URL or image source
     lang                Code block language
 
 AGGREGATION FUNCTIONS
     stats               Document statistics
     levels              Heading count by level
     langs               Code block count by language
-    types               Link types count
+    types               Link count by type
+    levels, langs and types count the elements they are given (`.h2 |
+    levels`), or the whole document's when given none; stats is always
+    the whole document.
+
+OPERATORS
+    ==, !=              Equality; values of different types are never equal
+    <, <=, >, >=        Comparison; across types, jq's order: null <
+                        booleans < numbers < strings < arrays < objects
+    and, or, not        Logic; `not .level == 2` is `not (.level == 2)`
+    +, -, *, /, %       Arithmetic as in jq: + joins strings, arrays and
+                        objects, - removes array items, / splits a string,
+                        "ab" * 3 repeats it. Other types are an error:
+                        "x" + (.level | tostring)
+    a // b              a, or b when a is null, false, 0 or empty
+    ( )                 Grouping
+
+CONSTRUCTION & CONDITIONALS
+    {title: .text, n: (.h | count)}     Object
+    [.h2 | .text]                       Array
+    if .level == 1 then "top" elif .level == 2 then "sub" else "deep" end
+    With no else, a false condition passes the input through unchanged.
+    `,` separates whole queries (`.h1, .h2`); it is not allowed inside ( ).
 
 EXAMPLES
     # List all h2 headings
     treemd -q '.h2' doc.md
 
-    # Get heading text only
-    treemd -q '.h2 | text' doc.md
-
     # Count headings
-    treemd -q '[.h2] | count' doc.md
-
-    # First 5 headings
-    treemd -q '[.h] | limit(5)' doc.md
+    treemd -q '.h2 | count' doc.md
 
     # Filter headings (three equivalent ways)
     treemd -q '.h | select(contains("API"))' doc.md
     treemd -q '.h | where(contains("API"))' doc.md
     treemd -q '.h[API]' doc.md
 
-    # All Rust code blocks
-    treemd -q '.code[rust]' doc.md
+    # Rust code under the "Install" section
+    treemd -q '.h2[Install] | .code[rust]' doc.md
 
     # External link URLs
     treemd -q '.link[external] | url' doc.md
 
-    # h2s under "Features" section
-    treemd -q '.h1[Features] > .h2' doc.md
+    # Headings sorted by level, and grouped by level
+    treemd -q '.h | sort_by(.level) | text' doc.md
+    treemd -q '.h | group_by(.level)' doc.md
 
-    # Group headings by level
-    treemd -q '[.h] | group_by("level")' doc.md
-
-    # Document statistics
-    treemd -q '. | stats' doc.md
+    # Outline with each heading's direct children
+    treemd -q '.h1 | {title: .text, sections: [.children[] | .text]}' doc.md
 
     # JSON output
     treemd -q '.h2' --query-output json doc.md
 
 OUTPUT FORMATS (--query-output)
     plain       Human-readable text (default)
-    json        Compact JSON
-    json-pretty Pretty-printed JSON (alias: jsonp)
-    jsonl       Line-delimited JSON (one per line)
+    json        Compact JSON, always an array
+    json-pretty Pretty-printed JSON array (alias: jsonp)
+    jsonl       One JSON value per line
     md          Raw markdown
     tree        Tree structure
 

@@ -11,6 +11,17 @@ pub struct Config {
     #[serde(skip)]
     pub path: Option<PathBuf>,
 
+    /// Problems found loading the file, such as a key or action name that
+    /// does not exist. The TUI shows them, since anything printed before it
+    /// starts is gone behind the alternate screen.
+    #[serde(skip)]
+    pub warnings: Vec<String>,
+
+    /// The settings as loaded, which [`save`](Self::save) compares against to
+    /// write only what changed.
+    #[serde(skip)]
+    baseline: Option<toml::Table>,
+
     #[serde(default)]
     pub ui: UiConfig,
 
@@ -34,6 +45,22 @@ pub struct Config {
     /// Content filtering options
     #[serde(default)]
     pub content: ContentConfig,
+
+    /// What a document from outside may reach on this machine
+    #[serde(default)]
+    pub security: SecurityConfig,
+}
+
+/// What a document from outside may reach on this machine.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// Treat a piped document (`curl ... | treemd`) like a local file
+    /// (default: false). Untrusted, its links and images stay inside the
+    /// working directory and it loads no image by absolute path. Trusted, it
+    /// may load any local image, and its links reach anywhere in the working
+    /// directory's git repository.
+    #[serde(default)]
+    pub trust_piped_documents: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +132,12 @@ pub struct ContentConfig {
     /// How to mark the edges of a fenced code block (default: full)
     #[serde(default)]
     pub code_fences: CodeFences,
+
+    /// How heading anchors are made, for copied anchors, `-l -o json` ids
+    /// and the query language's `.slug` (default: treemd). `github` keeps
+    /// `_` and numbers repeated headings, as github.com does
+    #[serde(default)]
+    pub slug_style: crate::parser::SlugStyle,
 }
 
 /// How fenced code blocks are delimited in the rendered content pane.
@@ -135,6 +168,7 @@ impl Default for ContentConfig {
             hide_latex: default_hide_latex(),
             latex_aggressive: default_latex_aggressive(),
             code_fences: CodeFences::default(),
+            slug_style: crate::parser::SlugStyle::default(),
         }
     }
 }
@@ -330,8 +364,14 @@ impl Config {
     /// Get the XDG-style config file path (~/.config/treemd/config.toml)
     /// This is preferred on macOS for CLI tools and cross-platform dotfiles
     #[cfg(target_os = "macos")]
+    /// `$XDG_CONFIG_HOME/treemd/config.toml` when that is set to an absolute
+    /// path, as the XDG spec has it, else `~/.config/treemd/config.toml`.
     fn xdg_config_path() -> Option<PathBuf> {
-        dirs::home_dir().map(|p| p.join(".config").join("treemd").join("config.toml"))
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| dirs::home_dir().map(|home| home.join(".config")))?;
+        Some(base.join("treemd").join("config.toml"))
     }
 
     /// Get the platform-specific config file path
@@ -360,50 +400,119 @@ impl Config {
     }
 
     /// Load the configuration file, falling back to `Default` on error.
+    ///
+    /// The path is kept, so a later [`save`](Self::save) writes there, only
+    /// when there is nothing at it yet or it was read and parsed. A file that
+    /// could not be used is still the user's: saving defaults over it the
+    /// first time they changed the theme lost every setting in it over one
+    /// typo, a Latin-1 comment, a UTF-16 file or a permission bit.
+    ///
+    /// `[keybindings]` is read entry by entry: a key that does not parse or
+    /// an action that does not exist is skipped with a warning. Read as part
+    /// of the whole file, one such entry failed the parse, so every setting
+    /// fell back to its default over a single misspelled action name.
     fn load_from_path(path: &Path) -> Self {
-        let Ok(content) = fs::read_to_string(path) else {
-            return Self::default();
+        let unusable = |e: &dyn std::fmt::Display| {
+            let warning = format!(
+                "could not use config {}: {} (using defaults; \
+                 settings changed this session will not be saved over it)",
+                path.display(),
+                e
+            );
+            eprintln!("warning: {warning}");
+            Self {
+                warnings: vec![warning],
+                ..Self::default()
+            }
         };
 
-        match toml::from_str::<Self>(&content) {
-            Ok(config) => config,
-            Err(e) => {
-                eprintln!(
-                    "warning: failed to parse config {}: {} (using defaults)",
-                    path.display(),
-                    e
-                );
-                Self::default()
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let mut config = Self::default();
+                config.baseline = config.settings_table().ok();
+                config.path = Some(path.to_path_buf());
+                return config;
             }
+            Err(e) => return unusable(&e),
+        };
+
+        let mut table = match content.parse::<toml::Table>() {
+            Ok(table) => table,
+            Err(e) => return unusable(&e),
+        };
+        let keybindings = table.remove("keybindings");
+        let mut config = match toml::Value::Table(table).try_into::<Self>() {
+            Ok(config) => config,
+            Err(e) => return unusable(&e),
+        };
+
+        let mut warnings = Vec::new();
+        if let Some(keybindings) = keybindings {
+            config.keybindings = KeybindingsConfig::from_toml_lenient(keybindings, &mut warnings);
         }
+        for warning in &warnings {
+            eprintln!("warning: {}: {warning}", path.display());
+        }
+        config.warnings = warnings;
+        config.baseline = config.settings_table().ok();
+        config.path = Some(path.to_path_buf());
+        config
+    }
+
+    /// The settings as a TOML table, without the keybindings, which a save
+    /// never rewrites.
+    fn settings_table(&self) -> Result<toml::Table, toml::ser::Error> {
+        let mut table = toml::Table::try_from(self)?;
+        table.remove("keybindings");
+        Ok(table)
     }
 
     /// Resolve and load the configuration file, falling back to `Default` if any step fails.
     pub fn load() -> Self {
         Self::resolve_config_path()
-            .map(|path| {
-                let mut config = Self::load_from_path(&path);
-                config.path = Some(path);
-                config
-            })
+            .map(|path| Self::load_from_path(&path))
             .unwrap_or_default()
     }
 
-    /// Save config to file
-    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Save config to file.
+    ///
+    /// The user's file is edited in place, writing only the settings that
+    /// changed since it was loaded or last saved. Serializing the whole
+    /// config over it dropped every comment and unknown key, and wrote out
+    /// every default the user had left unset, which then stopped following
+    /// the defaults. With no file yet, only settings that differ from the
+    /// defaults are written. A file that can no longer be read or parsed is
+    /// left alone.
+    pub fn save(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let path = self
             .path
-            .as_ref()
-            .ok_or("Could not determine config directory")?;
+            .clone()
+            .ok_or("config not saved: no config directory, or the config file could not be used")?;
 
         // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        let contents = toml::to_string_pretty(self)?;
-        fs::write(path, contents)?;
+        let mut document = match fs::read_to_string(&path) {
+            Ok(text) => text.parse::<toml_edit::DocumentMut>()?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml_edit::DocumentMut::new(),
+            Err(e) => return Err(e.into()),
+        };
+        let current = self.settings_table()?;
+        let baseline = match self.baseline.take() {
+            Some(baseline) => baseline,
+            None => Self::default().settings_table()?,
+        };
+        let applied = apply_changes(document.as_table_mut(), &baseline, &current);
+        self.baseline = Some(baseline);
+        applied?;
+        crate::fsutil::write_atomic(&path, document.to_string().as_bytes())?;
 
+        // What is on disk now is what the next save compares against, so
+        // changing a setting back to its loaded value is saved too.
+        self.baseline = Some(current);
         Ok(())
     }
 
@@ -469,6 +578,52 @@ impl Config {
             .and_then(|path| path.parent())
             .map(|parent| parent.join("code-themes"))
     }
+}
+
+/// Write into `document` every value of `new` that differs from `baseline`,
+/// recursing into tables, and leave everything else as it is.
+fn apply_changes(
+    document: &mut dyn toml_edit::TableLike,
+    baseline: &toml::Table,
+    new: &toml::Table,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (key, value) in new {
+        let before = baseline.get(key);
+        if before == Some(value) {
+            continue;
+        }
+        match value {
+            toml::Value::Table(table) => {
+                let empty = toml::Table::new();
+                let before = match before {
+                    Some(toml::Value::Table(before)) => before,
+                    _ => &empty,
+                };
+                // `ui = { theme = "Nord" }` is a table too. Taken for a
+                // missing one, it was replaced and lost its other keys.
+                if !document
+                    .get(key)
+                    .is_some_and(toml_edit::Item::is_table_like)
+                {
+                    document.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
+                }
+                let section = document
+                    .get_mut(key)
+                    .and_then(toml_edit::Item::as_table_like_mut)
+                    .ok_or_else(|| format!("config key `{key}` is not a table"))?;
+                apply_changes(section, before, table)?;
+            }
+            other => {
+                let mut value = other.to_string().parse::<toml_edit::Value>()?;
+                // Keep the spacing and any comment after the old value.
+                if let Some(old) = document.get(key).and_then(toml_edit::Item::as_value) {
+                    *value.decor_mut() = old.decor().clone();
+                }
+                document.insert(key, toml_edit::value(value));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -686,9 +841,8 @@ heading_1 = { rgb = [10, 20, 30] }
 
     #[test]
     fn save_then_load_round_trip() {
-        let dir = std::env::temp_dir().join(format!("treemd-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
 
         let mut c = Config::default();
         c.ui.theme = "Gruvbox".into();
@@ -699,25 +853,133 @@ heading_1 = { rgb = [10, 20, 30] }
         let loaded = Config::load_from_path(&path);
         assert_eq!(loaded.ui.theme, "Gruvbox");
         assert_eq!(loaded.ui.outline_width, 55);
+    }
 
-        // Cleanup
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
+    const USER_CONFIG: &str = r#"# my settings
+[ui]
+theme = "Gruvbox" # the good one
+outline_width = 40
+something_new = "kept"
+
+[keybindings.Normal]
+"j" = "Next"
+"x" = "NoSuchAction"
+"Ctrl+Nope" = "Quit"
+"#;
+
+    /// One misspelled action used to fail the whole file, so every setting,
+    /// the theme included, fell back to its default. Each bad binding is a
+    /// warning now, and everything else still applies.
+    #[test]
+    fn a_bad_keybinding_is_skipped_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, USER_CONFIG).unwrap();
+
+        let c = Config::load_from_path(&path);
+        assert_eq!(c.ui.theme, "Gruvbox");
+        assert_eq!(c.ui.outline_width, 40);
+        assert_eq!(c.warnings.len(), 2, "{:?}", c.warnings);
+        assert!(c.warnings.iter().any(|w| w.contains("NoSuchAction")));
+        assert!(c.warnings.iter().any(|w| w.contains("Ctrl+Nope")));
+        let normal = &c.keybindings.0[&crate::keybindings::KeybindingMode::Normal];
+        assert_eq!(normal.get("j"), Some(&crate::keybindings::Action::Next));
+        assert!(c.path.is_some(), "a usable config can still be saved");
+    }
+
+    /// A save rewrote the whole file from the struct, which dropped comments,
+    /// unknown keys, and any binding it could not read. Only what changed is
+    /// written now.
+    #[test]
+    fn a_save_changes_only_the_setting_that_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, USER_CONFIG).unwrap();
+
+        let mut c = Config::load_from_path(&path);
+        c.set_theme(ThemeName::Nord).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(saved, USER_CONFIG.replace(r#""Gruvbox""#, r#""Nord""#));
+
+        // And the result loads back with the new value.
+        assert_eq!(Config::load_from_path(&path).ui.theme, "Nord");
+    }
+
+    /// A file that could not be read (here not UTF-8, as a Latin-1 comment
+    /// or a UTF-16 file is) was treated as no file yet and replaced with
+    /// defaults on the first save.
+    #[test]
+    fn an_unreadable_config_is_never_saved_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let bytes = b"# caf\xe9\n[ui]\ntheme = \"Nord\"\n";
+        std::fs::write(&path, bytes).unwrap();
+
+        let mut c = Config::load_from_path(&path);
+        assert_eq!(c.warnings.len(), 1, "{:?}", c.warnings);
+        assert!(c.set_outline_width(40).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    /// The comparison point for a save was fixed at load, so changing a
+    /// setting and then changing it back left the changed value on disk.
+    #[test]
+    fn changing_a_setting_back_is_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\ntheme = \"Nord\"\n").unwrap();
+
+        let mut c = Config::load_from_path(&path);
+        c.set_outline_width(40).unwrap();
+        c.set_outline_width(30).unwrap();
+        assert_eq!(Config::load_from_path(&path).ui.outline_width, 30);
+    }
+
+    /// `ui = { ... }` was taken for a missing table and replaced.
+    #[test]
+    fn an_inline_table_keeps_its_other_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "ui = { theme = \"Nord\", outline_width = 30 }\n").unwrap();
+
+        let mut c = Config::load_from_path(&path);
+        c.set_outline_width(40).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "ui = { theme = \"Nord\", outline_width = 40 }\n"
+        );
+    }
+
+    /// With no file yet, the first save wrote every default, pinning them.
+    #[test]
+    fn a_first_save_writes_only_what_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("treemd").join("config.toml");
+
+        let mut c = Config::load_from_path(&path);
+        c.set_outline_width(40).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[ui]\noutline_width = 40\n"
+        );
     }
 
     #[test]
     fn load_from_path_invalid_toml_falls_back_to_default() {
-        let dir = std::env::temp_dir().join(format!("treemd-test-bad-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
         std::fs::write(&path, "this is not valid = = = toml [[[").unwrap();
 
         // Suppress the eprintln in the test output by just checking the result.
-        let c = Config::load_from_path(&path);
+        let mut c = Config::load_from_path(&path);
         assert_eq!(c.ui.theme, Config::default().ui.theme);
 
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
+        // Changing a setting must not save defaults over the user's file.
+        assert!(c.set_theme(ThemeName::Nord).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "this is not valid = = = toml [[["
+        );
     }
 
     // ---------- code_theme_dir_path ----------

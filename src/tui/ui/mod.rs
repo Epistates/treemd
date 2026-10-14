@@ -6,7 +6,8 @@ pub mod util;
 use layout::{DynamicLayout, Section};
 
 use crate::config::CodeFences;
-use crate::tui::app::{App, AppMode, Focus};
+use crate::tui::app::{App, AppMode, Focus, OutlineSearch, Overlay};
+use crate::tui::content_view::ContentView;
 use crate::tui::theme::Theme;
 use popups::{
     render_cell_edit_overlay, render_command_palette, render_file_create_confirm,
@@ -19,10 +20,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Wrap,
+    ScrollbarState,
 };
 use table::render_table;
-use util::{detect_checkbox_in_text, filter_content};
+use util::detect_checkbox_in_text;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     // Re-index interactive elements if mermaid image dimensions arrived last frame.
@@ -39,7 +40,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Create dynamic main layout
     // Show search bar if: outline search is active OR in document search mode (typing or viewing results)
-    let show_search_bar = app.show_search || app.mode == AppMode::DocSearch;
+    let show_search_bar = app.outline_search.is_on() || app.mode == AppMode::DocSearch;
     let main_layout = DynamicLayout::vertical(area)
         .section(Section::Title, Constraint::Length(2))
         .section_if(show_search_bar, Section::Search, Constraint::Length(3))
@@ -98,14 +99,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Render keybinding hints footer
     render_footer(frame, app, main_layout.require(Section::Footer));
 
-    // Render help popup if shown
-    if app.show_help {
-        render_help_popup(frame, app, area);
-    }
-
-    // Render theme picker if shown
-    if app.show_theme_picker {
-        render_theme_picker(frame, app, area);
+    // Render the popup in front, if any
+    match app.overlay {
+        Some(Overlay::Help) => render_help_popup(frame, app, area),
+        Some(Overlay::ThemePicker) => render_theme_picker(frame, app, area),
+        None => {}
     }
 
     // Render cell edit overlay if in cell edit mode
@@ -122,7 +120,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     // Render file picker modal (FileSearch is only used as a fallback for old code)
-    if matches!(app.mode, AppMode::FilePicker | AppMode::FileSearch) {
+    if app.mode == AppMode::FilePicker {
         render_file_picker(frame, app, area);
     }
 
@@ -199,7 +197,11 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             format!(" [{}/{} headings]", shown, total)
         };
-        (&app.search_query, app.outline_search_active, info)
+        (
+            &app.search_query,
+            app.outline_search == OutlineSearch::Typing,
+            info,
+        )
     };
 
     let theme = app.theme.clone();
@@ -274,7 +276,7 @@ fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
     use util::build_highlighted_line;
 
     let theme = &app.theme;
-    let search_query = if app.show_search && !app.search_query.is_empty() {
+    let search_query = if app.outline_search.is_on() && !app.search_query.is_empty() {
         Some(app.search_query.as_str())
     } else {
         None
@@ -294,11 +296,7 @@ fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
             };
 
             // Show bookmark indicator if this item's text matches the bookmark
-            let bookmark_indicator = if app.bookmark_position.as_deref() == Some(&item.text) {
-                "⚑ "
-            } else {
-                ""
-            };
+            let bookmark_indicator = if app.is_bookmarked(item) { "⚑ " } else { "" };
 
             // Color headings by level using theme
             let color = theme.heading_color(item.level);
@@ -370,129 +368,47 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme.clone();
     let block_style = theme.border_style(app.focus == Focus::Content);
 
-    // Get content for selected section and determine title
-    let (content_text, title) = if let Some(heading_text) = app.selected_heading_text() {
-        let content = app
-            .selected_heading_index()
-            .and_then(|idx| app.document.extract_section_at_index(idx))
-            .unwrap_or_else(|| app.document.content.clone());
-
-        // Build title with various indicators
-        let raw_indicator = if app.show_raw_source { "[RAW] " } else { "" };
-        let title = if app.mode == AppMode::LinkFollow && !app.links_in_view.is_empty() {
-            format!(
-                " {}{} [Links: {}] ",
-                raw_indicator,
-                heading_text,
-                app.links_in_view.len()
-            )
-        } else {
-            format!(" {}{} ", raw_indicator, heading_text)
-        };
-
-        (content, title)
-    } else {
-        let raw_indicator = if app.show_raw_source { "[RAW] " } else { "" };
-        let title = if app.mode == AppMode::LinkFollow && !app.links_in_view.is_empty() {
-            format!(
-                " {}Content [Links: {}] ",
-                raw_indicator,
-                app.links_in_view.len()
-            )
-        } else {
-            format!(" {}Content ", raw_indicator)
-        };
-        (app.document.content.clone(), title)
-    };
-
-    // Apply content filtering (frontmatter, LaTeX) based on config
-    // Only filter when not showing raw source - raw view shows everything
-    let content_text = if !app.show_raw_source {
-        filter_content(
-            &content_text,
-            app.should_hide_frontmatter(),
-            app.should_hide_latex(),
-            app.should_latex_aggressive(),
+    let raw_indicator = if app.show_raw_source { "[RAW] " } else { "" };
+    let heading = app
+        .selected_heading_text()
+        .map_or_else(|| "Content".to_string(), str::to_string);
+    let title = if app.mode == AppMode::LinkFollow && !app.links_in_view.is_empty() {
+        format!(
+            " {}{} [Links: {}] ",
+            raw_indicator,
+            heading,
+            app.links_in_view.len()
         )
     } else {
-        content_text
+        format!(" {}{} ", raw_indicator, heading)
     };
 
-    // Check if we should render raw source or enhanced markdown
-    let mut rendered_text = if app.show_raw_source {
-        // Raw source view - show unprocessed markdown
-        render_raw_markdown(&content_text, &theme)
-    } else {
-        // Enhanced markdown rendering with syntax highlighting
-        // Pre-extract what we need before passing app as mutable to avoid borrow conflicts
-        let selected_element_id = if app.mode == AppMode::Interactive {
-            app.interactive_state.current_element().map(|elem| elem.id)
-        } else {
-            None
-        };
-        // Clone interactive state to avoid keeping a borrow when passing app as mutable
-        let interactive_state = app.interactive_state.clone();
-
-        // Calculate available width for tables (content area minus borders and padding)
-        let content_width = area.width.saturating_sub(2); // 2 for left/right borders
-
-        #[cfg(all(feature = "mermaid", unix))]
-        let mermaid_rows_ref = &app.mermaid_placeholder_rows;
-        #[cfg(not(all(feature = "mermaid", unix)))]
-        let mermaid_rows_ref = &std::collections::HashMap::new();
-
-        render_markdown_enhanced(
-            &content_text,
-            &app.highlighter,
-            &theme,
-            selected_element_id,
-            Some(&interactive_state), // Pass cloned copy to release borrow
-            Some(content_width),
-            mermaid_rows_ref,
-            app.code_fences,
-        )
-    };
-
-    // Apply search highlighting only for document/content search mode
-    // Outline search (s) only filters headings, it doesn't highlight content
-    if app.mode == AppMode::DocSearch && !app.doc_search.query.is_empty() {
-        rendered_text = apply_search_highlighting(
-            rendered_text,
-            &app.doc_search.query,
-            app.doc_search.current_idx,
-            app.doc_search.matches.len(),
-            &theme,
-        );
-    }
-
-    // Build paragraph with wrapping to get accurate visual line count
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(block_style)
-        .title(title);
-    let paragraph = Paragraph::new(rendered_text)
-        .block(block)
-        .style(theme.content_style())
-        .wrap(Wrap { trim: false });
-
-    // Use line_count() for accurate visual line count after wrapping
-    // (requires ratatui "unstable-rendered-line-info" feature)
+    // The section, wrapped to the pane: built only when something it depends
+    // on changed, so a frame that only scrolls slices rows out of it.
     let inner_width = area.width.saturating_sub(2); // subtract block borders
-    let visual_line_count = paragraph.line_count(inner_width);
-    if app.content_height != visual_line_count {
-        app.content_height = visual_line_count;
-    }
+    let view = content_view(app, &theme, inner_width);
+    app.content_height = view.rows.len();
+    app.apply_element_scroll();
 
     // Clamp scroll so we stop when last line reaches viewport bottom
     let max_scroll = app.max_content_scroll();
     if app.content_scroll > max_scroll {
         app.content_scroll = max_scroll;
     }
-    app.content_scroll_state =
-        ScrollbarState::new(max_scroll as usize).position(app.content_scroll as usize);
+    app.content_scroll_state = ScrollbarState::new(max_scroll).position(app.content_scroll);
 
-    // Apply scroll and render
-    let paragraph = paragraph.scroll((app.content_scroll, 0));
+    // Only the visible rows are drawn. They are already wrapped to the pane,
+    // so the paragraph does no wrapping of its own.
+    let visible = usize::from(area.height.saturating_sub(2));
+    let start = app.content_scroll.min(view.rows.len());
+    let end = (start + visible).min(view.rows.len());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(block_style)
+        .title(title);
+    let paragraph = Paragraph::new(view.rows[start..end].to_vec())
+        .block(block)
+        .style(theme.content_style());
     frame.render_widget(paragraph, area);
 
     // Render inline images (first image in content)
@@ -518,6 +434,109 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
         }),
         &mut app.content_scroll_state.clone(),
     );
+}
+
+/// Hash of anything with a `Hash` impl, for a cache key.
+fn key_of(parts: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    parts.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The current section as the content pane shows it, wrapped to `width`.
+///
+/// Three stages, each cached on everything it reads, so a frame only redoes
+/// the stages whose inputs changed: the displayed text (frontmatter and
+/// LaTeX filtering, a set of regexes over the whole section), the rendered
+/// lines (parsing, highlighting, tables), and the wrapped rows with any
+/// search highlighting. Re-running all three every frame took about a
+/// second on a 50k-line document, so every keypress and scroll step did.
+fn content_view(app: &mut App, theme: &Theme, width: u16) -> std::sync::Arc<ContentView> {
+    use crate::tui::app::AppMode;
+    use std::sync::Arc;
+
+    let displayed = app.displayed_section_content();
+
+    let selected_element_id = if app.mode == AppMode::Interactive {
+        app.interactive_state.current_element().map(|elem| elem.id)
+    } else {
+        None
+    };
+    #[cfg(all(feature = "mermaid", unix))]
+    let mermaid_rows = app.mermaid_placeholder_rows.clone();
+    #[cfg(not(all(feature = "mermaid", unix)))]
+    let mermaid_rows = std::collections::HashMap::new();
+    let mut mermaid_key: Vec<_> = mermaid_rows.iter().collect();
+    mermaid_key.sort_unstable();
+
+    let render_key = key_of((
+        displayed.as_str(),
+        width,
+        format!("{theme:?}"),
+        app.show_raw_source,
+        format!("{:?}", app.code_fences),
+        selected_element_id,
+        format!(
+            "{:?}{:?}",
+            app.interactive_state.element_states, app.interactive_state.detail_mode
+        ),
+        &mermaid_key,
+    ));
+    let rendered = match &app.content_cache.rendered {
+        Some((key, rendered)) if *key == render_key => Arc::clone(rendered),
+        _ => {
+            let rendered = Arc::new(if app.show_raw_source {
+                (render_raw_markdown(&displayed, theme).lines, Vec::new())
+            } else {
+                render_markdown_with_blocks(
+                    &displayed,
+                    &app.highlighter,
+                    theme,
+                    selected_element_id,
+                    Some(&app.interactive_state),
+                    Some(width),
+                    &mermaid_rows,
+                    app.code_fences,
+                )
+            });
+            app.content_cache.rendered = Some((render_key, Arc::clone(&rendered)));
+            rendered
+        }
+    };
+
+    // Search highlighting only for document/content search mode; outline
+    // search (s) only filters headings.
+    let searching = app.mode == AppMode::DocSearch && !app.doc_search.query.is_empty();
+    let view_key = key_of((
+        render_key,
+        searching.then_some((&app.doc_search.query, app.doc_search.current_idx)),
+    ));
+    if let Some((key, view)) = &app.content_cache.view
+        && *key == view_key
+    {
+        let view = Arc::clone(view);
+        app.content_view = Arc::clone(&view);
+        return view;
+    }
+
+    let (lines, block_lines) = rendered.as_ref().clone();
+    let lines = if searching {
+        apply_search_highlighting(
+            Text::from(lines),
+            &app.doc_search.query,
+            app.doc_search.current_idx,
+            app.doc_search.matches.len(),
+            theme,
+        )
+        .lines
+    } else {
+        lines
+    };
+    let view = Arc::new(ContentView::new(lines, width, block_lines));
+    app.content_cache.view = Some((view_key, Arc::clone(&view)));
+    app.content_view = Arc::clone(&view);
+    view
 }
 
 fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -563,7 +582,11 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
         .elements
         .iter()
         .filter_map(|element| match &element.element_type {
-            ElementType::Image { src, .. } => Some((element.id, element.line_range, src.clone())),
+            // Where the element was drawn, in screen rows, which is not where
+            // it was counted once anything above it wraps.
+            ElementType::Image { src, .. } => app
+                .element_rows(element)
+                .map(|rows| (element.id, rows, src.clone())),
             _ => None,
         })
         .collect();
@@ -578,7 +601,7 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         // Check if this image is visible in current scroll window
-        let scroll = app.content_scroll as usize;
+        let scroll = app.content_scroll;
         let viewport_height = app.content_viewport_height as usize;
         let viewport_end = scroll + viewport_height;
 
@@ -587,15 +610,12 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
             continue;
         }
 
-        // Calculate Y position: convert line number to screen coordinate
-        // Line positions are relative to the full document, need to account for scroll
-        let y_offset = if line_start >= scroll {
-            (line_start - scroll) as u16
-        } else {
-            0
-        };
-
-        let image_y = inner.y + y_offset;
+        // An image whose top has scrolled off is not drawn. Pinning it to the
+        // top of the pane at full height put it over the text below it.
+        if line_start < scroll {
+            continue;
+        }
+        let image_y = inner.y + (line_start - scroll) as u16;
 
         // Only render if there's space on screen
         if image_y >= inner.bottom() {
@@ -607,14 +627,12 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
             continue; // Not enough space for image
         }
 
-        let image_height = available_height.min(max_image_height);
+        // No taller than the rows reserved for it, or it covers what follows.
+        let reserved = u16::try_from(line_end - line_start).unwrap_or(u16::MAX);
+        let image_height = available_height.min(max_image_height).min(reserved);
 
         // Resolve image path and use cached protocol
         if let Ok(image_path) = app.resolve_image_path(&src) {
-            if !app.image_protocol_cache.contains_key(&image_path) {
-                continue;
-            }
-
             // Check if this image is selected
             let is_selected = selected_image_id == Some(element_id);
 
@@ -630,6 +648,17 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
                 vertical: 1,
                 horizontal: 1,
             });
+
+            if !app.image_protocol_cache.contains_key(&image_path) {
+                // Still being read from disk on the image worker.
+                if app.image_decoding.contains_key(&image_path) {
+                    let loading = Paragraph::new("Loading image…")
+                        .alignment(ratatui::layout::Alignment::Center)
+                        .style(Style::default().fg(theme.blockquote_fg));
+                    frame.render_widget(loading, render_area);
+                }
+                continue;
+            }
 
             // If selected, render a selection border around the image
             if is_selected {
@@ -714,7 +743,9 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
             } = &elem.element_type
                 && language.as_deref() == Some("mermaid")
             {
-                return Some((elem.id, elem.line_range, content.clone()));
+                return app
+                    .element_rows(elem)
+                    .map(|rows| (elem.id, rows, content.clone()));
             }
             None
         })
@@ -727,7 +758,7 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
             continue;
         }
 
-        let scroll = app.content_scroll as usize;
+        let scroll = app.content_scroll;
         let viewport_height = app.content_viewport_height as usize;
         let viewport_end = scroll + viewport_height;
 
@@ -846,6 +877,18 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
                 height: 1,
             };
             frame.render_widget(Paragraph::new(error_line), error_area);
+        } else if app.mermaid_pending.contains(&hash) {
+            let pending_line = Line::from(Span::styled(
+                "⧗ rendering mermaid diagram…",
+                Style::default().fg(Color::DarkGray),
+            ));
+            let pending_area = Rect {
+                x: inner.x,
+                y: image_y,
+                width: inner.width,
+                height: 1,
+            };
+            frame.render_widget(Paragraph::new(pending_line), pending_area);
         }
     }
 }
@@ -889,27 +932,9 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
         height: modal_area.height.saturating_sub(2),
     };
 
-    // Try to start Kitty native animation for multi-frame GIFs.
-    // Kitty handles frame timing internally - no flicker!
-    // Only start when animation is playing (not paused) - this allows:
-    // 1. Manual frame stepping to work via software rendering
-    // 2. Kitty animation to restart when user resumes playback
-    if is_multi_frame
-        && !app.has_kitty_animation()
-        && app.use_kitty_animation
-        && !app.image_modal.animation_paused
-    {
-        // Start animation at center of inner area
-        let image_col = inner_area.x + inner_area.width / 4;
-        let image_row = inner_area.y + inner_area.height / 4;
-        app.start_kitty_animation(image_col, image_row);
-    }
-
-    // Check if Kitty is handling animation
-    let kitty_animating = app.has_kitty_animation();
     let iterm_animating = app.has_native_iterm_modal_animation();
 
-    // Get the active protocol for sizing (even Kitty needs this for layout)
+    // Get the active protocol for sizing
     if let Some(protocol_state) = &mut app.image_modal.state {
         // Calculate image area
         let resize = Resize::Scale(Some(FilterType::Triangle));
@@ -939,13 +964,7 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 "▶"
             };
-            let mode = if kitty_animating {
-                "Kitty"
-            } else if iterm_animating {
-                "iTerm"
-            } else {
-                "GIF"
-            };
+            let mode = if iterm_animating { "iTerm" } else { "GIF" };
             format!(
                 " {} {}/{} {} | ←/→:step Space:play/pause q:close ",
                 mode,
@@ -976,10 +995,8 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
         // takes over. Removing them would make the diff engine print clearing
         // cells across the native animation on the following title redraw.
         // Because the encoded still is unchanged, Ratatui emits it only once.
-        if !kitty_animating {
-            let img_widget = StatefulImage::new().resize(resize);
-            frame.render_stateful_widget(img_widget, image_area, protocol_state);
-        }
+        let img_widget = StatefulImage::new().resize(resize);
+        frame.render_stateful_widget(img_widget, image_area, protocol_state);
 
         if first_frame_ready && let Some(path) = modal_path {
             app.stage_iterm_animation(
@@ -1016,10 +1033,15 @@ fn mode_chip(app: &App) -> Option<(&'static str, Style)> {
         }
         AppMode::LinkFollow => Some((" LINKS ", chip_style(theme.heading_3))),
         AppMode::DocSearch => Some((" SEARCH ", chip_style(theme.heading_4))),
-        AppMode::Search => Some((" FILTER ", chip_style(theme.heading_4))),
         AppMode::CellEdit => Some((" EDIT ", chip_style(theme.heading_5))),
         AppMode::CommandPalette => Some((" PALETTE ", chip_style(theme.heading_1))),
-        AppMode::FilePicker | AppMode::FileSearch => Some((" FILES ", chip_style(theme.heading_3))),
+        AppMode::FilePicker => Some((" FILES ", chip_style(theme.heading_3))),
+        // Outline search is a panel over Normal mode rather than a mode of
+        // its own. The chip used to wait for an AppMode::Search that nothing
+        // ever set, so it never showed.
+        AppMode::Normal if app.outline_search.is_on() => {
+            Some((" FILTER ", chip_style(theme.heading_4)))
+        }
         _ => None,
     }
 }
@@ -1138,7 +1160,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             }
             Focus::Content => {
                 // Show content scroll position
-                let scroll_pos = app.content_scroll as usize;
+                let scroll_pos = app.content_scroll;
                 let content_height = app.content_height;
                 let viewport = app.content_viewport_height as usize;
                 let bottom_line = (scroll_pos + viewport).min(content_height);
@@ -1179,7 +1201,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     let theme_name = format!(" • Theme:{}", app.theme.name);
     let raw_indicator = if app.show_raw_source { " [RAW]" } else { "" };
-    let latex_indicator = if app.latex_detected && app.should_hide_latex() {
+    let latex_indicator = if app.latex_filter_active() {
         " [LaTeX filtered]"
     } else {
         ""
@@ -1398,6 +1420,7 @@ fn render_raw_markdown(content: &str, theme: &Theme) -> Text<'static> {
     Text::from(lines)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn render_markdown_enhanced(
     content: &str,
@@ -1406,15 +1429,43 @@ fn render_markdown_enhanced(
     selected_element_id: Option<crate::tui::interactive::ElementId>,
     interactive_state: Option<&crate::tui::interactive::InteractiveState>,
     available_width: Option<u16>,
-    _mermaid_placeholder_rows: &std::collections::HashMap<u64, usize>,
+    mermaid_placeholder_rows: &std::collections::HashMap<u64, usize>,
     fences: CodeFences,
 ) -> Text<'static> {
+    let (lines, _) = render_markdown_with_blocks(
+        content,
+        highlighter,
+        theme,
+        selected_element_id,
+        interactive_state,
+        available_width,
+        mermaid_placeholder_rows,
+        fences,
+    );
+    Text::from(lines)
+}
+
+/// [`render_markdown_enhanced`], also returning the line each top-level block
+/// starts on, which is what places interactive elements on screen.
+#[allow(clippy::too_many_arguments)]
+fn render_markdown_with_blocks(
+    content: &str,
+    highlighter: &SyntaxHighlighter,
+    theme: &Theme,
+    selected_element_id: Option<crate::tui::interactive::ElementId>,
+    interactive_state: Option<&crate::tui::interactive::InteractiveState>,
+    available_width: Option<u16>,
+    _mermaid_placeholder_rows: &std::collections::HashMap<u64, usize>,
+    fences: CodeFences,
+) -> (Vec<Line<'static>>, Vec<usize>) {
     let mut lines = Vec::new();
 
     // Parse content into structured blocks
     let blocks = parse_content(content, 0);
+    let mut block_lines = Vec::with_capacity(blocks.len());
 
     for (block_idx, block) in blocks.iter().enumerate() {
+        block_lines.push(lines.len());
         // Check if any element in this block is selected (block-level or inline)
         let is_block_selected = selected_element_id
             .map(|id| id.block_idx == block_idx)
@@ -1605,6 +1656,7 @@ fn render_markdown_enhanced(
                     } else {
                         selected_line_offset
                     };
+                    let item_first_row = lines.len();
 
                     // Check if content has nested items (contains newlines with indentation)
                     let has_nested = item.content.contains('\n');
@@ -1701,9 +1753,12 @@ fn render_markdown_enhanced(
                             }
                         }
                     } else {
-                        // Simple single-line item (or item with nested blocks)
-                        let formatted = if !item.inline.is_empty() {
-                            render_inline_elements(&item.inline, theme, selected_link_inline_idx)
+                        // Simple single-line item (or item with nested blocks).
+                        // Only the item's own run: the rest of `inline` is its
+                        // nested blocks, which are drawn below it.
+                        let own = crate::parser::content::own_inline(item);
+                        let formatted = if !own.is_empty() {
+                            render_inline_elements(own, theme, selected_link_inline_idx)
                         } else {
                             format_inline_markdown(&item.content, theme)
                         };
@@ -1711,7 +1766,7 @@ fn render_markdown_enhanced(
                         let mut spans = vec![];
 
                         // Pointer replaces leading spaces, not prepended
-                        if pointer_line.is_some() {
+                        if pointer_line == Some(0) {
                             spans.push(Span::styled(
                                 "→ ",
                                 Style::default()
@@ -1802,6 +1857,28 @@ fn render_markdown_enhanced(
                             indented_spans.extend(nested_line.spans);
                             lines.push(Line::from(indented_spans));
                         }
+                    }
+
+                    // A selected link in a nested item sits `line_offset` rows
+                    // below the item's own, drawn by the nested list above, so
+                    // the pointer goes over that row's indent.
+                    if let Some(row) = pointer_line
+                        .filter(|&offset| !has_nested && offset > 0)
+                        .map(|offset| item_first_row + offset)
+                        && let Some(line) = lines.get_mut(row)
+                        && line.spans.first().is_some_and(|s| s.content == "     ")
+                    {
+                        line.spans[0] = Span::raw("   ");
+                        line.spans.insert(
+                            0,
+                            Span::styled(
+                                "→ ",
+                                Style::default()
+                                    .fg(theme.selection_indicator_fg)
+                                    .bg(theme.selection_indicator_bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        );
                     }
                 }
             }
@@ -2093,7 +2170,7 @@ fn render_markdown_enhanced(
         lines.push(Line::from(""));
     }
 
-    Text::from(lines)
+    (lines, block_lines)
 }
 
 /// Apply search highlighting to rendered text while preserving original span styles.
@@ -2109,7 +2186,6 @@ fn apply_search_highlighting(
         return text;
     }
 
-    let query_lower = query.to_lowercase();
     let mut new_lines = Vec::new();
     let mut match_counter = 0usize;
 
@@ -2125,27 +2201,9 @@ fn apply_search_highlighting(
 
         // Join all spans to get the full line text for searching
         let full_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        let full_text_lower = full_text.to_lowercase();
 
         // Find all occurrences of the query in this line (non-overlapping)
-        let mut matches_in_line: Vec<(usize, usize)> = Vec::new();
-        let mut search_start = 0;
-        let query_len = query.len();
-
-        while let Some(rel_pos) = full_text_lower[search_start..].find(&query_lower) {
-            let byte_start = search_start + rel_pos;
-            let byte_end = byte_start + query_len;
-
-            // Verify we're on valid char boundaries
-            if full_text.is_char_boundary(byte_start) && full_text.is_char_boundary(byte_end) {
-                matches_in_line.push((byte_start, byte_end));
-            }
-
-            search_start = byte_end;
-            if search_start >= full_text_lower.len() {
-                break;
-            }
-        }
+        let matches_in_line = util::find_ignore_case(&full_text, query);
 
         if matches_in_line.is_empty() {
             // No matches in this line - keep original
@@ -2580,15 +2638,17 @@ fn render_block_to_lines(
         }
         ContentBlock::List { ordered, items } => {
             for (i, item) in items.iter().enumerate() {
-                let marker = if *ordered {
-                    format!("{}. ", i + 1)
-                } else {
-                    "• ".to_string()
+                let marker = match item.checked {
+                    Some(true) => "☑ ".to_string(),
+                    Some(false) => "☐ ".to_string(),
+                    None if *ordered => format!("{}. ", i + 1),
+                    None => "• ".to_string(),
                 };
 
-                // Render item content
-                let item_spans = if !item.inline.is_empty() {
-                    render_inline_elements(&item.inline, theme, None)
+                // Render the item's own content; its nested blocks follow.
+                let own = crate::parser::content::own_inline(item);
+                let item_spans = if !own.is_empty() {
+                    render_inline_elements(own, theme, None)
                 } else {
                     format_inline_markdown(&item.content, theme)
                 };
@@ -3041,9 +3101,8 @@ mod tests {
                     .sum();
                 assert_eq!(row, usize::from(width), "selected={selected}: {line:?}");
             }
-            let rendered = Paragraph::new(Text::from(lines))
-                .wrap(Wrap { trim: false })
-                .line_count(width);
+            // The rows the content pane wraps these lines into.
+            let rendered = ContentView::new(lines, width, Vec::new()).rows.len();
             assert_eq!(rendered, logical, "selected={selected}: block wrapped");
         }
     }
@@ -3354,6 +3413,11 @@ mod tests {
             "- item\n\n  | a |\n  |---|\n  | 1 |\n",
             "> - step\n>\n>   text\n",
             "> - step\n>\n> ```bash\n> cmd\n> ```\n",
+            "- [ ] outer\n  - [x] inner\n    - [ ] deep\n- [x] second\n",
+            "1. one\n   1. sub a\n   2. sub b\n2. two\n",
+            "- a\n  - b\n\n  para under a\n",
+            "> - q\n>   - qi\n",
+            "- [Features](#f)\n  - [TUI](#t)\n  - [CLI](#c)\n",
             // No `<details>` here. Its height depends on whether it is
             // expanded, and the counter takes no state, so the two can only be
             // compared with an InteractiveState to agree on. `index_elements`
@@ -3403,5 +3467,335 @@ mod tests {
             "the counter and the renderer disagree, so scrolling mispositions:\n{}",
             wrong.join("\n")
         );
+    }
+
+    // ---------- nested lists ----------
+
+    fn drawn_rows(md: &str, selected: Option<crate::tui::interactive::ElementId>) -> Vec<String> {
+        let hl = SyntaxHighlighter::new(
+            "base16-ocean.dark",
+            None,
+            CodeBlockBackground::Off,
+            ColorMode::Rgb,
+        );
+        render_markdown_enhanced(
+            md,
+            &hl,
+            &Theme::ocean_dark(),
+            selected,
+            None,
+            Some(80),
+            &std::collections::HashMap::new(),
+            CodeFences::Full,
+        )
+        .lines
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect()
+    }
+
+    /// Since turbovault-parser 2.2.0 a nested list is its own block in the
+    /// item, and the item's inline run also carries everything nested in it.
+    /// Drawing that whole run on the item's row printed `☐ outerinnerdeep`, so
+    /// each row has to carry only its own text, and a nested task keeps its
+    /// checkbox rather than becoming a bullet.
+    #[test]
+    fn a_nested_list_draws_each_item_on_its_own_row() {
+        assert_eq!(
+            drawn_rows(
+                "- [ ] outer\n  - [x] inner\n    - [ ] deep\n- [x] second\n",
+                None
+            ),
+            [
+                "  ☐ outer",
+                "     ☑ inner",
+                "       ☐ deep",
+                "  ☑ second",
+                ""
+            ]
+        );
+        assert_eq!(
+            drawn_rows("1. one\n   1. sub a\n   2. sub b\n2. two\n", None),
+            ["  1. one", "     1. sub a", "     2. sub b", "  2. two", ""]
+        );
+        assert_eq!(
+            drawn_rows("- a\n  - b\n\n  para under a\n", None),
+            ["  • a", "     • b", "     para under a", ""]
+        );
+        assert_eq!(
+            drawn_rows("> - q\n>   - qi\n", None),
+            ["│ • q", "│   • qi", ""]
+        );
+    }
+
+    /// A table of contents is the common nested list, and following one of
+    /// its links is the point of interactive mode. The selected link's pointer
+    /// belongs on the row the link is drawn on, not on the top-level item.
+    #[test]
+    fn a_selected_nested_link_points_at_its_own_row() {
+        use crate::tui::interactive::{ElementId, LINK_OFFSET};
+
+        let md = "- [Features](#features)\n  - [Interactive TUI](#interactive-tui)\n  - [CLI Mode](#cli-mode)\n";
+        let blocks = crate::parser::content::parse_content(md, 0);
+        let Some(ContentBlock::List { items, .. }) = blocks.first() else {
+            panic!("expected a list, got {blocks:?}");
+        };
+        let link_idx = |label: &str| {
+            items[0]
+                .inline
+                .iter()
+                .position(|e| matches!(e, InlineElement::Link { text, .. } if text == label))
+                .unwrap_or_else(|| panic!("no link {label:?}"))
+        };
+        let select = |label: &str| {
+            Some(ElementId {
+                block_idx: 0,
+                sub_idx: Some(link_idx(label) + LINK_OFFSET),
+            })
+        };
+        let pointed = |rows: Vec<String>| -> Vec<usize> {
+            rows.iter()
+                .enumerate()
+                .filter(|(_, r)| r.contains('→'))
+                .map(|(i, _)| i)
+                .collect()
+        };
+
+        assert_eq!(pointed(drawn_rows(md, select("Features"))), [0]);
+        assert_eq!(pointed(drawn_rows(md, select("Interactive TUI"))), [1]);
+        assert_eq!(pointed(drawn_rows(md, select("CLI Mode"))), [2]);
+    }
+}
+
+/// The content pane drawn the way a user sees it, through a test terminal,
+/// for the behaviors that only exist once a section is laid out on screen.
+#[cfg(test)]
+mod screen_tests {
+    use super::*;
+    use crate::tui::terminal_compat::ColorMode;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn app_with(md: &str) -> App {
+        App::new(
+            crate::parser::parse_markdown(md),
+            "t.md".into(),
+            std::path::PathBuf::from("<stdin>"),
+            crate::Config::default(),
+            ColorMode::Rgb,
+            false,
+        )
+    }
+
+    /// Draw a frame and return the screen, one string per row.
+    fn draw(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| render(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn long_paragraph(words: usize) -> String {
+        (0..words).map(|i| format!("word{i} ")).collect()
+    }
+
+    /// The selection was placed by counting a paragraph as one line, so a
+    /// link below a paragraph that wraps onto many rows was thought to be
+    /// on screen and never scrolled to.
+    #[test]
+    fn a_selection_below_a_wrapped_paragraph_is_scrolled_into_view() {
+        let md = format!(
+            "# T\n\n{}\n\n[target link](https://example.com)\n",
+            long_paragraph(400)
+        );
+        let mut app = app_with(&md);
+        draw(&mut app, 80, 20);
+        app.enter_interactive_mode();
+        app.scroll_to_interactive_element(app.content_viewport_height);
+        let screen = draw(&mut app, 80, 20).join("\n");
+        assert!(screen.contains("target link"), "{screen}");
+    }
+
+    /// With frontmatter hidden, the index parsed the unfiltered section while
+    /// the renderer drew the filtered one, so the pointer marked a different
+    /// link from the one Enter followed.
+    #[test]
+    fn with_frontmatter_hidden_the_pointer_marks_the_selected_link() {
+        let md = "---\ntitle: x\nother: y\n---\n\n[one](https://a.example)\n\n[two](https://b.example)\n";
+        let mut app = app_with(md);
+        draw(&mut app, 80, 20);
+        app.enter_interactive_mode();
+        let selected = match &app
+            .interactive_state
+            .current_element()
+            .unwrap()
+            .element_type
+        {
+            crate::tui::interactive::ElementType::Link { link, .. } => link.text.clone(),
+            other => panic!("expected a link, got {other:?}"),
+        };
+        let screen = draw(&mut app, 80, 20);
+        let pointed: Vec<_> = screen.iter().filter(|row| row.contains('▸')).collect();
+        assert_eq!(pointed.len(), 1, "{screen:#?}");
+        assert!(
+            pointed[0].contains(&selected),
+            "selected {selected:?}: {pointed:?}"
+        );
+    }
+
+    /// A frame that changes nothing reuses the laid-out section instead of
+    /// rendering and wrapping it again.
+    #[test]
+    fn an_unchanged_frame_reuses_the_layout() {
+        let mut app = app_with(&format!("# T\n\n{}\n", long_paragraph(50)));
+        draw(&mut app, 80, 20);
+        let first = std::sync::Arc::clone(&app.content_view);
+        app.content_scroll = 1;
+        draw(&mut app, 80, 20);
+        assert!(std::sync::Arc::ptr_eq(&first, &app.content_view));
+        // A different width is a different layout.
+        draw(&mut app, 60, 20);
+        assert!(!std::sync::Arc::ptr_eq(&first, &app.content_view));
+    }
+
+    /// The scroll offset was a u16, so nothing past row 65,535 could be
+    /// reached.
+    #[test]
+    fn content_past_row_65535_is_reachable() {
+        let body: String = (0..70_000).map(|i| format!("row {i}\n")).collect();
+        let mut app = app_with(&format!("# T\n\n```\n{body}```\n"));
+        draw(&mut app, 80, 20);
+        app.content_scroll = usize::MAX;
+        let screen = draw(&mut app, 80, 20).join("\n");
+        assert!(app.content_scroll > 65_535);
+        assert!(screen.contains("row 69999"), "{screen}");
+    }
+
+    /// Frame cost on a large section, first frame and then a scroll. Run with
+    /// `cargo test --release frame_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn frame_cost_on_a_large_document() {
+        let mut md = String::from("# Big\n\n");
+        for i in 0..3_500 {
+            md.push_str(&format!(
+                "Paragraph {i} with **bold**, `code` and a [link](https://x.example/{i}) and $x^2$.\n\n```rust\nfn f{i}() {{ let v = {i}; }}\n```\n\n"
+            ));
+        }
+        let mut app = app_with(&md);
+        let start = std::time::Instant::now();
+        draw(&mut app, 120, 40);
+        let first = start.elapsed();
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            app.content_scroll += 1;
+            draw(&mut app, 120, 40);
+        }
+        let scroll = start.elapsed() / 20;
+        println!(
+            "{} lines: first frame {first:?}, scroll frame {scroll:?}",
+            md.lines().count()
+        );
+    }
+
+    /// The palette drew every command in one paragraph, so on a small
+    /// terminal the selection moved out of sight after a few steps.
+    #[test]
+    fn the_command_palette_keeps_its_selection_in_view() {
+        let mut app = app_with("# T\n");
+        app.open_command_palette();
+        let count = app.command_palette.filtered.len();
+        assert!(count > 10, "need more commands than fit: {count}");
+        for _ in 1..count {
+            app.command_palette_next();
+        }
+        let selected = &crate::tui::app::PALETTE_COMMANDS
+            [app.command_palette.filtered[app.command_palette.selected]];
+        let screen = draw(&mut app, 80, 24).join("\n");
+        assert!(
+            screen.contains(&format!("▸ {}", selected.name)),
+            "{} not on screen:\n{screen}",
+            selected.name
+        );
+    }
+
+    /// The link picker scrolled by lines while it wrapped them, so with long
+    /// links above it the selection was scrolled past.
+    #[test]
+    fn the_link_picker_keeps_a_selection_below_long_links_in_view() {
+        let mut md = String::from("# T\n\n");
+        for i in 0..20 {
+            md.push_str(&format!(
+                "[{} {i}](https://example.com/{i})\n\n",
+                "a long link label that wraps ".repeat(8)
+            ));
+        }
+        md.push_str("[last one](https://example.com/last)\n");
+        let mut app = app_with(&md);
+        draw(&mut app, 80, 24);
+        app.enter_link_follow_mode();
+        for _ in 0..20 {
+            app.next_link();
+        }
+        // The selection marker is the popup's own; the content pane behind
+        // it can show the same text.
+        let screen = draw(&mut app, 80, 24);
+        assert!(
+            screen
+                .iter()
+                .any(|row| row.contains('▶') && row.contains("last one")),
+            "{screen:#?}"
+        );
+    }
+
+    /// Help scrolled by unwrapped lines and paged by the content pane's
+    /// height, so it could stop before its last rows or run past them.
+    #[test]
+    fn help_scrolls_exactly_to_its_last_row() {
+        let mut app = app_with("# T\n");
+        app.toggle_help();
+        draw(&mut app, 80, 24);
+        for _ in 0..1000 {
+            app.scroll_help_down();
+        }
+        let max = app.help_max_scroll;
+        assert!(max > 0 && max < u16::MAX, "{max}");
+        assert_eq!(app.help_scroll, max);
+        // At the end, the last row is drawn and nothing after it is blank.
+        let screen = draw(&mut app, 80, 24);
+        let popup_bottom = screen
+            .iter()
+            .rposition(|row| row.contains('└') || row.contains('╰'))
+            .unwrap();
+        assert!(
+            !screen[popup_bottom - 1]
+                .trim_matches(|c| c == ' ' || c == '│' || c == '┃')
+                .is_empty(),
+            "the popup ends in blank rows:\n{}",
+            screen.join("\n")
+        );
+    }
+
+    /// Search matched a plain-text conversion of the source and scrolled to
+    /// that line's number, so a match late in a wrapped paragraph stayed off
+    /// screen.
+    #[test]
+    fn search_scrolls_to_the_row_a_match_is_drawn_on() {
+        let md = format!("# T\n\n{} needle\n", long_paragraph(400));
+        let mut app = app_with(&md);
+        draw(&mut app, 80, 20);
+        app.enter_doc_search();
+        for c in "needle".chars() {
+            app.apply_text_input_edit(crate::tui::app::TextInputEdit::Insert(c));
+        }
+        let screen = draw(&mut app, 80, 20).join("\n");
+        assert_eq!(app.doc_search.matches.len(), 1);
+        assert!(screen.contains("needle"), "{screen}");
     }
 }

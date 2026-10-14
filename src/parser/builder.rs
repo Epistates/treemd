@@ -1,12 +1,21 @@
 //! Build nested JSON output from document structure
 
-use super::content::{parse_content, slugify};
+use super::content::{SlugStyle, parse_content};
 use super::document::{Document, HeadingNode};
 use super::output::*;
 use std::path::Path;
 
 /// Build complete JSON output with nested sections and markdown intelligence
 pub fn build_json_output(doc: &Document, source_path: Option<&Path>) -> DocumentOutput {
+    build_json_output_with(doc, source_path, SlugStyle::default())
+}
+
+/// [`build_json_output`], with each section's `id` and `slug` in `slug_style`.
+pub fn build_json_output_with(
+    doc: &Document,
+    source_path: Option<&Path>,
+    slug_style: SlugStyle,
+) -> DocumentOutput {
     let tree = doc.build_tree();
 
     // Calculate metadata
@@ -21,18 +30,32 @@ pub fn build_json_output(doc: &Document, source_path: Option<&Path>) -> Document
     };
 
     // Build sections with content
-    let sections = tree.iter().map(|node| build_section(node, doc)).collect();
+    let headings = HeadingFacts {
+        lines: doc.heading_lines(),
+        slugs: doc.heading_slugs(slug_style),
+    };
+    let sections = tree
+        .iter()
+        .map(|node| build_section(node, doc, &headings))
+        .collect();
 
     DocumentOutput {
         document: DocumentRoot { metadata, sections },
     }
 }
 
-fn build_section(node: &HeadingNode, doc: &Document) -> Section {
+/// What each heading needs from the whole document, by heading index.
+struct HeadingFacts {
+    lines: Vec<usize>,
+    slugs: Vec<String>,
+}
+
+fn build_section(node: &HeadingNode, doc: &Document, headings: &HeadingFacts) -> Section {
     let heading = &node.heading;
+    let lines = &headings.lines;
 
     // Extract content for this section
-    let (raw_content, offset, line) = extract_section_content(doc, node.index);
+    let (raw_content, offset, line) = extract_section_content(doc, node.index, lines[node.index]);
 
     // Parse content into blocks
     let blocks = parse_content(&raw_content, line);
@@ -41,14 +64,15 @@ fn build_section(node: &HeadingNode, doc: &Document) -> Section {
     let children = node
         .children
         .iter()
-        .map(|child| build_section(child, doc))
+        .map(|child| build_section(child, doc, headings))
         .collect();
 
+    let slug = &headings.slugs[node.index];
     Section {
-        id: slugify(&heading.text),
+        id: slug.clone(),
         level: heading.level,
         title: heading.text.clone(),
-        slug: slugify(&heading.text),
+        slug: slug.clone(),
         position: Position { line, offset },
         content: Content {
             raw: raw_content,
@@ -64,22 +88,30 @@ fn build_section(node: &HeadingNode, doc: &Document) -> Section {
 /// emitted separately in the `children` array), and shares `Document::body_start`
 /// so CRLF, setext underlines, and EOF headings are handled correctly.
 ///
-/// Returns `(raw_body, body_offset, body_line)`.
-fn extract_section_content(doc: &Document, idx: usize) -> (String, usize, usize) {
+/// Returns `(raw_body, body_offset, body_line)`, given the 1-indexed line the
+/// heading sits on.
+fn extract_section_content(
+    doc: &Document,
+    idx: usize,
+    heading_line: usize,
+) -> (String, usize, usize) {
     let offset = doc.headings[idx].offset;
-
-    // Line number of the heading itself (1-indexed); body starts on the line
-    // after the heading.
-    let line = doc.content[..offset].lines().count() + 1;
-
-    let content_start = doc.body_start(idx);
     let end = doc.section_end_any(idx);
+    let content_start = doc.body_start(idx).min(end);
 
-    (
-        doc.content[content_start..end].trim().to_string(),
-        content_start,
-        line + 1,
-    )
+    // The body is reported trimmed, so its offset and line are those of its
+    // first non-blank text. Given the line right after the heading instead,
+    // every block's line numbers were off by the blank lines in between,
+    // which is nearly always one.
+    let body = &doc.content[content_start..end];
+    let lead = body.len() - body.trim_start().len();
+    let body_start = content_start + lead;
+
+    // The body starts on the line after the heading's last line, which for a
+    // setext heading is its underline, two lines down rather than one.
+    let body_line = heading_line + doc.content[offset..body_start].matches('\n').count();
+
+    (body.trim().to_string(), body_start, body_line)
 }
 
 fn calculate_max_depth(tree: &[HeadingNode]) -> usize {
@@ -106,6 +138,40 @@ mod tests {
         let doc = parse_markdown(md);
         let out = build_json_output(&doc, None);
         out.document.sections[0].content.raw.clone()
+    }
+
+    /// Block lines were counted from the line after the heading, while the
+    /// body they were counted in had its leading blank lines trimmed off.
+    #[test]
+    fn block_lines_are_the_lines_in_the_file() {
+        for (md, start) in [
+            ("# A\n\n```rs\nx\n```\n", 3),
+            ("# A\n\n\n\n```rs\nx\n```\n", 5),
+            ("Setext\n======\n\n```rs\nx\n```\n", 4),
+        ] {
+            let out = serde_json::to_value(build_json_output(&parse_markdown(md), None)).unwrap();
+            let block = &out["document"]["sections"][0]["content"]["blocks"][0];
+            assert_eq!(block["start_line"], start, "{md:?}: {block}");
+            assert_eq!(block["end_line"], start + 2, "{md:?}: {block}");
+        }
+    }
+
+    /// A lone `\r` after a setext underline sent the body start past the
+    /// next heading, and slicing the body panicked.
+    #[test]
+    fn a_lone_carriage_return_does_not_panic() {
+        for md in ["v\n-\r#", "#\rx\n-"] {
+            let _ = build_json_output(&parse_markdown(md), None);
+        }
+    }
+
+    /// A section before a heading nested in a quote or a list item ended at
+    /// the heading's `#`, keeping the line's `>` or `-`.
+    #[test]
+    fn a_section_does_not_end_with_the_next_heading_markers() {
+        for md in ["# A\n\ntext\n\n> # Q\n> body\n", "# A\n\ntext\n\n- # Q\n"] {
+            assert_eq!(first_section_raw(md), "text", "{md:?}");
+        }
     }
 
     #[test]
@@ -222,6 +288,24 @@ mod tests {
             "child body leaked into parent raw"
         );
         assert_eq!(a.children[0].content.raw.trim(), "A1-body");
+    }
+
+    /// With GitHub's slugs, repeated headings get unique ids, and the ids
+    /// are GitHub's. The default keeps treemd's, where they repeat.
+    #[test]
+    fn github_slugs_number_repeated_headings() {
+        let doc = parse_markdown("# Setup\n## snake_case\n# Setup\n");
+        let ids = |style| -> Vec<String> {
+            let out = build_json_output_with(&doc, None, style);
+            let mut ids = Vec::new();
+            for section in &out.document.sections {
+                ids.push(section.id.clone());
+                ids.extend(section.children.iter().map(|c| c.slug.clone()));
+            }
+            ids
+        };
+        assert_eq!(ids(SlugStyle::Github), ["setup", "snake_case", "setup-1"]);
+        assert_eq!(ids(SlugStyle::Treemd), ["setup", "snakecase", "setup"]);
     }
 
     #[test]

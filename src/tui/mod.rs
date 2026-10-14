@@ -1,12 +1,13 @@
 mod app;
+mod content_view;
 mod edits;
 mod help_text;
 mod image_cache;
 mod interactive;
 mod iterm_animation;
-mod kitty_animation;
 #[cfg(all(feature = "mermaid", unix))]
 mod mermaid;
+pub mod signals;
 mod syntax;
 pub mod terminal_compat;
 pub mod theme;
@@ -19,7 +20,7 @@ pub use interactive::InteractiveState;
 pub use terminal_compat::{ColorMode, TerminalCapabilities};
 pub use theme::ThemeName;
 
-use crate::keybindings::Action;
+use crate::keybindings::{Action, KeybindingMode};
 use crate::tui::image_cache::IMAGE_WORK_POLL_INTERVAL;
 use color_eyre::Result;
 use crossterm::ExecutableCommand;
@@ -30,6 +31,49 @@ use ratatui::DefaultTerminal;
 use std::io::stdout;
 use std::path::Path;
 use std::time::Duration;
+
+/// Hand the terminal back: leave the alternate screen, drop raw mode, and
+/// release the mouse, so whatever runs next (an editor, the shell) gets a
+/// normal terminal. A program inheriting mouse-reporting mode misbehaves.
+/// The cursor is shown too: frames hide it, and the shell and editors that
+/// do not show it themselves were left without one.
+fn release_terminal(mouse_captured: bool) -> Result<()> {
+    use crossterm::event::{DisableBracketedPaste, DisableMouseCapture};
+
+    let _ = stdout().execute(DisableBracketedPaste);
+    stdout().execute(LeaveAlternateScreen)?;
+    let _ = stdout().execute(crossterm::cursor::Show);
+    if mouse_captured {
+        let _ = stdout().execute(DisableMouseCapture);
+    }
+    tty::suspend_raw_mode()?;
+    Ok(())
+}
+
+/// Take the terminal back after [`release_terminal`] and repaint everything.
+fn reclaim_terminal(terminal: &mut DefaultTerminal, mouse_captured: bool) -> Result<()> {
+    use crossterm::event::{EnableBracketedPaste, EnableMouseCapture};
+
+    stdout().execute(EnterAlternateScreen)?;
+    let _ = stdout().execute(EnableBracketedPaste);
+    if mouse_captured {
+        let _ = stdout().execute(EnableMouseCapture);
+    }
+    tty::resume_raw_mode()?;
+    repaint(terminal)
+}
+
+/// Clear the screen and redraw all of it on the next frame.
+///
+/// `Terminal::clear` asks the terminal where its cursor is first and fails
+/// when no answer comes, which ended the session on Ctrl+L, on resuming
+/// after Ctrl+Z, and after the editor, in a terminal that does not answer.
+/// Resizing to the current size clears the same way without asking.
+fn repaint(terminal: &mut DefaultTerminal) -> Result<()> {
+    let area = terminal.size()?.into();
+    terminal.resize(area)?;
+    Ok(())
+}
 
 /// Suspend the TUI, run an external editor, then restore the TUI.
 ///
@@ -42,19 +86,7 @@ fn run_editor(
     editor_config: &EditorConfig,
     mouse_captured: bool,
 ) -> Result<()> {
-    use crossterm::event::{
-        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    };
-
-    // Leave alternate screen, disable raw mode and release the mouse so the
-    // editor gets full terminal control (a child editor inheriting
-    // mouse-reporting mode behaves erratically)
-    let _ = stdout().execute(DisableBracketedPaste);
-    stdout().execute(LeaveAlternateScreen)?;
-    if mouse_captured {
-        let _ = stdout().execute(DisableMouseCapture);
-    }
-    tty::suspend_raw_mode()?;
+    release_terminal(mouse_captured)?;
 
     // Build editor command with config
     let mut builder = Editor::builder()
@@ -66,17 +98,24 @@ fn run_editor(
     }
 
     let result = builder.open();
+    signals::forget_interrupt();
 
-    // Restore terminal state
-    stdout().execute(EnterAlternateScreen)?;
-    let _ = stdout().execute(EnableBracketedPaste);
-    if mouse_captured {
-        let _ = stdout().execute(EnableMouseCapture);
-    }
-    tty::resume_raw_mode()?;
-    terminal.clear()?;
-
+    reclaim_terminal(terminal, mouse_captured)?;
     result.map_err(|e| color_eyre::eyre::eyre!("{}", e))
+}
+
+/// Stop the process the way Ctrl+Z stops any other program, and pick up
+/// where it left off when the shell resumes it. Raw mode turns Ctrl+Z into an
+/// ordinary key, so the terminal never sends the signal itself.
+#[cfg(unix)]
+fn suspend_to_shell(terminal: &mut DefaultTerminal, mouse_captured: bool) -> Result<()> {
+    release_terminal(mouse_captured)?;
+    // SAFETY: raising a signal on our own process has no memory-safety
+    // preconditions; SIGTSTP stops it here until SIGCONT.
+    unsafe {
+        libc::raise(libc::SIGTSTP);
+    }
+    reclaim_terminal(terminal, mouse_captured)
 }
 
 /// Run the TUI application.
@@ -107,22 +146,24 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     }
 
     let mut needs_redraw = true;
+    // A change on disk that arrived while edits were pending.
+    let mut reload_deferred = false;
 
     loop {
+        if signals::should_exit() {
+            return Ok(());
+        }
         if app.sync_native_animation_activation() {
             // Direct terminal images outlive Ratatui buffer cells. Clear once
             // when their target changes so a deselected or moved GIF cannot
             // remain painted at its old location.
-            terminal.clear()?;
+            repaint(terminal)?;
             needs_redraw = true;
         }
         if app.process_image_results() {
             needs_redraw = true;
         }
         if app.advance_modal_animation() {
-            needs_redraw = true;
-        }
-        if app.advance_inline_animations() {
             needs_redraw = true;
         }
 
@@ -134,7 +175,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
             let mut output = stdout();
             if let Err(error) = app.transmit_staged_iterm_animation(&mut output) {
                 app.disable_iterm_animation(&error);
-                terminal.clear()?;
+                repaint(terminal)?;
                 needs_redraw = true;
                 continue;
             }
@@ -193,28 +234,41 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         if app.has_pending_image_work() {
             poll_timeout = poll_timeout.min(IMAGE_WORK_POLL_INTERVAL);
         }
+        // Wake when a timed status message is due to go, so it goes then
+        // rather than at the next keypress.
+        if let Some(remaining) = app.status_message_expires_in() {
+            poll_timeout = poll_timeout.min(remaining.max(Duration::from_millis(1)));
+        }
         let event_ready = tty::poll_event(poll_timeout)?;
 
         // Check the file watcher every iteration, regardless of whether there
         // was a keyboard event. Otherwise a debounced reload could stall
         // behind a stream of keypresses indefinitely.
-        if app.suppress_file_watch {
+        let changed_on_disk = if app.suppress_file_watch {
             app.suppress_file_watch = false;
             if let Some(ref mut watcher) = file_watcher {
                 watcher.check_for_changes(); // Drain events, ignore result
             }
-        } else if let Some(ref mut watcher) = file_watcher
-            && watcher.check_for_changes()
-        {
-            if app.has_unsaved_changes {
-                // Never clobber buffered edits with an external reload; the
-                // user must save or undo first, then the file can be reloaded.
-                app.status_message = Some(
-                    "⚠ File changed on disk — reload skipped to protect unsaved edits (save or undo first)"
-                        .to_string(),
-                );
-                needs_redraw = true;
-            } else {
+            false
+        } else {
+            file_watcher
+                .as_mut()
+                .is_some_and(|watcher| watcher.check_for_changes())
+        };
+        if changed_on_disk && app.has_unsaved_changes() {
+            // Never clobber buffered edits with an external reload. It is
+            // remembered and runs once they are saved or undone; dropped,
+            // the change never appeared and every later save was refused
+            // as a change made on disk.
+            reload_deferred = true;
+            app.status_message = Some(
+                "⚠ File changed on disk — reload waits until the unsaved edits are saved or undone"
+                    .to_string(),
+            );
+            needs_redraw = true;
+        } else if changed_on_disk || (reload_deferred && !app.has_unsaved_changes()) {
+            reload_deferred = false;
+            {
                 // Save state before reload
                 let was_interactive = app.mode == app::AppMode::Interactive;
                 let saved_scroll = app.content_scroll;
@@ -230,6 +284,11 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                     // own save arriving after the suppression window) — ignore.
                     Ok(false) => {}
                     Ok(true) => {
+                        // Lay the reloaded section out as any section is,
+                        // which indexes its elements: skipping this left the
+                        // whole document's elements, which inline images
+                        // were placed by. The scroll is put back after.
+                        app.update_content_metrics();
                         // Re-index interactive elements if in interactive mode
                         if was_interactive {
                             app.reindex_interactive_elements();
@@ -242,11 +301,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         }
                         // Restore scroll position
                         app.content_scroll = saved_scroll.min(app.max_content_scroll());
-                        app.content_scroll_state = app
-                            .content_scroll_state
-                            .position(app.content_scroll as usize);
-                        // Sync previous_selection to prevent update_content_metrics() from resetting scroll
-                        app.sync_previous_selection();
+                        app.content_scroll_state =
+                            app.content_scroll_state.position(app.content_scroll);
 
                         app.status_message = Some("↻ File reloaded (external change)".to_string());
                         needs_redraw = true;
@@ -263,6 +319,9 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
             }
             // GIF animation needs redraw on timeout
             if app.is_image_modal_open() && app.image_modal_frame_count() > 1 {
+                needs_redraw = true;
+            }
+            if app.status_message_expires_in() == Some(Duration::ZERO) {
                 needs_redraw = true;
             }
             continue;
@@ -287,28 +346,6 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         }
 
         if let Some(key) = event.as_key_press_event() {
-            // When image modal is open, handle modal-specific keys
-            if app.is_image_modal_open() {
-                match key.code {
-                    KeyCode::Esc | KeyCode::Char('q') => {
-                        app.close_image_modal();
-                    }
-                    // Manual frame stepping for GIFs
-                    KeyCode::Left | KeyCode::Char('h') => {
-                        app.modal_prev_frame();
-                    }
-                    KeyCode::Right | KeyCode::Char('l') => {
-                        app.modal_next_frame();
-                    }
-                    // Toggle play/pause for GIF animation
-                    KeyCode::Char(' ') => {
-                        app.modal_toggle_animation();
-                    }
-                    _ => {}
-                }
-                continue;
-            }
-
             // A sticky message (error set without a timestamp) stays visible
             // until the user presses a key; dismiss it now. Track the message
             // state so anything set directly during this keypress is marked
@@ -327,7 +364,10 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                 let digit_handled = if let KeyCode::Char(c) = key.code {
                     if c.is_ascii_digit()
                         && key.modifiers.is_empty()
-                        && matches!(app.mode, app::AppMode::Normal | app::AppMode::Interactive)
+                        && matches!(
+                            app.current_keybinding_mode(),
+                            KeybindingMode::Normal | KeybindingMode::Interactive
+                        )
                     {
                         // Special case: '0' without existing count goes to start (like vim)
                         if c == '0' && !app.has_count() {
@@ -356,6 +396,9 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                             } else {
                                 app.execute_action(action)
                             };
+                            // A count applies to the action right after it.
+                            // Left over, `3`, Enter, `j` moved three rows.
+                            app.clear_count();
                             match result {
                                 ActionResult::Quit => return Ok(()),
                                 ActionResult::RunEditor(path, line) => {
@@ -370,7 +413,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                         Ok(_) => {
                                             // The user deliberately edited the file externally,
                                             // so the on-disk version wins over any buffered edits.
-                                            let had_pending = app.has_unsaved_changes;
+                                            let had_pending = app.has_unsaved_changes();
                                             match app.reload_current_file() {
                                                 Err(e) => {
                                                     app.status_message =
@@ -400,7 +443,18 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                     }
                                 }
                                 ActionResult::Redraw => {
-                                    terminal.clear()?;
+                                    repaint(terminal)?;
+                                }
+                                ActionResult::Suspend => {
+                                    #[cfg(unix)]
+                                    suspend_to_shell(terminal, app.mouse_capture)?;
+                                    #[cfg(not(unix))]
+                                    {
+                                        app.status_message = Some(
+                                            "Suspending is not supported on this platform"
+                                                .to_string(),
+                                        );
+                                    }
                                 }
                                 ActionResult::Continue => {}
                             }
@@ -426,14 +480,30 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
 /// outline/content panes would require knowing the laid-out rects, which the
 /// renderer hasn't published yet.
 fn handle_mouse(app: &mut App, mouse: MouseEvent) {
-    use crate::keybindings::Action;
-
-    // Scroll wheel maps to existing actions so keybindings stay authoritative.
-    let action = match mouse.kind {
-        MouseEventKind::ScrollDown => Some(Action::Next),
-        MouseEventKind::ScrollUp => Some(Action::Previous),
-        _ => None,
+    // The wheel is the arrow keys of whatever is in front, so keybindings
+    // stay authoritative and a modal scrolls itself. Mapped to Normal mode's
+    // Next and Previous, it moved the content behind an open help screen,
+    // palette or picker.
+    if app.is_image_modal_open() {
+        return;
+    }
+    // In search, Up and Down step through the matches, which is not what a
+    // wheel is for; it scrolls the text there.
+    if app.mode == app::AppMode::DocSearch {
+        let action = match mouse.kind {
+            MouseEventKind::ScrollDown => crate::keybindings::Action::ScrollDown,
+            MouseEventKind::ScrollUp => crate::keybindings::Action::ScrollUp,
+            _ => return,
+        };
+        let _ = app.execute_action(action);
+        return;
+    }
+    let key = match mouse.kind {
+        MouseEventKind::ScrollDown => KeyCode::Down,
+        MouseEventKind::ScrollUp => KeyCode::Up,
+        _ => return,
     };
+    let action = app.get_action_for_key(key, crossterm::event::KeyModifiers::NONE);
 
     if let Some(a) = action {
         // Bypass quit/editor/redraw return paths — scroll never produces them.
@@ -467,4 +537,52 @@ fn handle_text_input(
     };
 
     app.apply_text_input_edit(edit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+    fn wheel_down() -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// The wheel was mapped to Normal mode's Next whatever was open, so it
+    /// moved the content behind the help screen instead of scrolling help.
+    #[test]
+    fn the_wheel_scrolls_whatever_is_in_front() {
+        let md: String = (0..40).map(|i| format!("# H{i}\n\nbody\n\n")).collect();
+        let mut app = App::new(
+            crate::parser::parse_markdown(&md),
+            "t.md".into(),
+            std::path::PathBuf::from("<stdin>"),
+            crate::Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+
+        let selected = app.outline_state.selected();
+        app.toggle_help();
+        handle_mouse(&mut app, wheel_down());
+        assert_eq!(app.help_scroll, 1, "help scrolls");
+        assert_eq!(
+            app.outline_state.selected(),
+            selected,
+            "the outline stays put"
+        );
+
+        app.toggle_help();
+        handle_mouse(&mut app, wheel_down());
+        assert_ne!(
+            app.outline_state.selected(),
+            selected,
+            "without help it moves"
+        );
+    }
 }

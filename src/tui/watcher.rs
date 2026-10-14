@@ -16,6 +16,10 @@ pub struct FileWatcher {
     watcher: RecommendedWatcher,
     receiver: Receiver<Result<Event, notify::Error>>,
     current_path: Option<PathBuf>,
+    /// `current_path` and its directory resolved through symlinks, once, so
+    /// events are not resolved against them one by one.
+    canonical_path: Option<PathBuf>,
+    canonical_dir: Option<PathBuf>,
     /// The directory path actually being watched (parent of current_path)
     watched_dir: Option<PathBuf>,
     /// Timestamp of the first relevant event in the current debounce window
@@ -33,6 +37,8 @@ impl FileWatcher {
             watcher,
             receiver: rx,
             current_path: None,
+            canonical_path: None,
+            canonical_dir: None,
             watched_dir: None,
             debounce_start: None,
             debounce_duration: Duration::from_millis(100),
@@ -53,6 +59,8 @@ impl FileWatcher {
         })?;
         self.watcher.watch(dir_path, RecursiveMode::NonRecursive)?;
         self.current_path = Some(path.to_path_buf());
+        self.canonical_path = path.canonicalize().ok();
+        self.canonical_dir = dir_path.canonicalize().ok();
         self.watched_dir = Some(dir_path.to_path_buf());
         self.debounce_start = None;
 
@@ -66,6 +74,8 @@ impl FileWatcher {
             let _ = self.watcher.unwatch(dir);
         }
         self.current_path = None;
+        self.canonical_path = None;
+        self.canonical_dir = None;
         self.watched_dir = None;
         self.debounce_start = None;
     }
@@ -117,47 +127,34 @@ impl FileWatcher {
             return false;
         };
 
-        // Check if event path matches our watched file
-        // Use multiple strategies to handle platform differences
-        let matches_path =
-            event.paths.iter().any(|event_path| {
-                // Strategy 1: Exact path match
-                if event_path == watched_path {
-                    return true;
+        // Check if event path matches our watched file. Every event in the
+        // watched directory comes through here, so the name is compared
+        // first: anything else in the directory is rejected without a
+        // system call. Canonicalizing both sides of every event cost two.
+        let matches_path = event.paths.iter().any(|event_path| {
+            if event_path == watched_path || self.canonical_path.as_ref() == Some(event_path) {
+                return true;
+            }
+            let same_name = match (event_path.file_name(), watched_path.file_name()) {
+                (Some(event_name), Some(watched_name)) => {
+                    event_name == watched_name || event_name.eq_ignore_ascii_case(watched_name)
                 }
-
-                // Strategy 2: Canonicalized path match (handles symlinks, case differences)
-                if let (Ok(event_canonical), Ok(watched_canonical)) =
-                    (event_path.canonicalize(), watched_path.canonicalize())
-                    && event_canonical == watched_canonical
-                {
-                    return true;
-                }
-
-                // Strategy 3: File name match (fallback for FSEvents quirks)
-                // Only match if event is in same directory
-                if let (
-                    Some(event_name),
-                    Some(watched_name),
-                    Some(event_parent),
-                    Some(watched_parent),
-                ) = (
-                    event_path.file_name(),
-                    watched_path.file_name(),
-                    event_path.parent(),
-                    watched_path.parent(),
-                ) && event_name == watched_name
-                {
-                    // Verify same directory (canonicalize to handle . and ..)
-                    if let (Ok(ep), Ok(wp)) =
-                        (event_parent.canonicalize(), watched_parent.canonicalize())
-                    {
-                        return ep == wp;
-                    }
-                }
-
-                false
-            });
+                _ => false,
+            };
+            if !same_name {
+                return false;
+            }
+            // The same file through a symlink or a different case; or, when
+            // it does not exist at this instant (an atomic save between its
+            // rename steps), a file of that name in the same directory.
+            match event_path.canonicalize() {
+                Ok(canonical) => self.canonical_path.as_ref() == Some(&canonical),
+                Err(_) => event_path
+                    .parent()
+                    .and_then(|parent| parent.canonicalize().ok())
+                    .is_some_and(|parent| self.canonical_dir.as_ref() == Some(&parent)),
+            }
+        });
 
         if !matches_path {
             return false;
@@ -200,5 +197,37 @@ mod tests {
     fn test_watcher_creation() {
         let watcher = FileWatcher::new();
         assert!(watcher.is_ok());
+    }
+
+    fn modified(path: &std::path::Path) -> Event {
+        Event::new(EventKind::Modify(ModifyKind::Data(
+            notify::event::DataChange::Content,
+        )))
+        .add_path(path.to_path_buf())
+    }
+
+    #[test]
+    fn only_events_for_the_watched_file_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("note.md");
+        let other = dir.path().join("other.md");
+        std::fs::write(&note, "a").unwrap();
+        std::fs::write(&other, "b").unwrap();
+
+        let mut watcher = FileWatcher::new().unwrap();
+        watcher.watch(&note).unwrap();
+
+        assert!(watcher.is_relevant_event(&modified(&note)));
+        assert!(!watcher.is_relevant_event(&modified(&other)));
+        // Reported through a symlinked directory, still the same file.
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("link");
+            std::os::unix::fs::symlink(dir.path(), &link).unwrap();
+            assert!(watcher.is_relevant_event(&modified(&link.join("note.md"))));
+        }
+        // Not a write.
+        let read = Event::new(EventKind::Access(AccessKind::Read)).add_path(note.clone());
+        assert!(!watcher.is_relevant_event(&read));
     }
 }

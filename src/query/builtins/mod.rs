@@ -2,25 +2,32 @@
 //!
 //! This module provides all the standard functions available in queries.
 
-mod collection;
-mod string;
-
 use super::ast::Span;
 use super::error::{QueryError, QueryErrorKind};
 use super::eval::EvalContext;
-use super::registry::{Function, Registry};
+use super::registry::{Function, Registry, StreamMode};
 use super::value::Value;
+
+/// A function that sees a piped stream whole and returns one value.
+fn reduce(func: Function) -> Function {
+    func.with_stream(StreamMode::Reduce)
+}
+
+/// A function that sees a piped stream whole and returns it as a stream.
+fn reorder(func: Function) -> Function {
+    func.with_stream(StreamMode::Reorder)
+}
 
 /// Register all built-in functions.
 pub fn register_all(registry: &mut Registry) {
     // Collection functions
-    registry.register_function("count", Function::new(fn_count, 0..=0));
-    registry.register_function("length", Function::new(fn_count, 0..=0));
-    registry.register_function("first", Function::new(fn_first, 0..=0));
-    registry.register_function("last", Function::new(fn_last, 0..=0));
-    registry.register_function("reverse", Function::new(fn_reverse, 0..=0));
-    registry.register_function("sort", Function::new(fn_sort, 0..=0));
-    registry.register_function("unique", Function::new(fn_unique, 0..=0));
+    registry.register_function("count", reduce(Function::new(fn_count, 0..=0)));
+    registry.register_function("length", reduce(Function::new(fn_count, 0..=0)));
+    registry.register_function("first", reduce(Function::new(fn_first, 0..=0)));
+    registry.register_function("last", reduce(Function::new(fn_last, 0..=0)));
+    registry.register_function("reverse", reorder(Function::new(fn_reverse, 0..=0)));
+    registry.register_function("sort", reorder(Function::new(fn_sort, 0..=0)));
+    registry.register_function("unique", reorder(Function::new(fn_unique, 0..=0)));
     registry.register_function("flatten", Function::new(fn_flatten, 0..=0));
     registry.register_function("keys", Function::new(fn_keys, 0..=0));
     registry.register_function("values", Function::new(fn_values, 0..=0));
@@ -32,7 +39,7 @@ pub fn register_all(registry: &mut Registry) {
     registry.register_function("lower", Function::new(fn_lower, 0..=0));
     registry.register_function("trim", Function::new(fn_trim, 0..=0));
     registry.register_function("split", Function::new(fn_split, 1..=1));
-    registry.register_function("join", Function::new(fn_join, 1..=1));
+    registry.register_function("join", reduce(Function::new(fn_join, 1..=1)));
     registry.register_function("replace", Function::new(fn_replace, 2..=2));
     registry.register_function("lines", Function::new(fn_lines, 0..=0));
     registry.register_function("words", Function::new(fn_words, 0..=0));
@@ -58,25 +65,25 @@ pub fn register_all(registry: &mut Registry) {
     registry.register_function("lang", Function::new(fn_lang, 0..=0));
 
     // Aggregation functions
-    registry.register_function("stats", Function::new(fn_stats, 0..=0));
-    registry.register_function("levels", Function::new(fn_levels, 0..=0));
-    registry.register_function("langs", Function::new(fn_langs, 0..=0));
-    registry.register_function("types", Function::new(fn_types, 0..=0));
+    registry.register_function("stats", reduce(Function::new(fn_stats, 0..=0)));
+    registry.register_function("levels", reduce(Function::new(fn_levels, 0..=0)));
+    registry.register_function("langs", reduce(Function::new(fn_langs, 0..=0)));
+    registry.register_function("types", reduce(Function::new(fn_types, 0..=0)));
 
     // Utility functions
-    registry.register_function("limit", Function::new(fn_limit, 1..=1));
-    registry.register_function("skip", Function::new(fn_skip, 1..=1));
-    registry.register_function("nth", Function::new(fn_nth, 1..=1));
-    registry.register_function("any", Function::new(fn_any, 1..=1).with_takes_input(true));
-    registry.register_function("all", Function::new(fn_all, 1..=1).with_takes_input(true));
-    registry.register_function("min", Function::new(fn_min, 0..=0));
-    registry.register_function("max", Function::new(fn_max, 0..=0));
-    registry.register_function("add", Function::new(fn_add, 0..=0));
+    registry.register_function("limit", reorder(Function::new(fn_limit, 1..=1)));
+    registry.register_function("skip", reorder(Function::new(fn_skip, 1..=1)));
+    registry.register_function("nth", reduce(Function::new(fn_nth, 1..=1)));
+    registry.register_function("any", reduce(Function::new(fn_special_form, 1..=1)));
+    registry.register_function("all", reduce(Function::new(fn_special_form, 1..=1)));
+    registry.register_function("min", reduce(Function::new(fn_min, 0..=0)));
+    registry.register_function("max", reduce(Function::new(fn_max, 0..=0)));
+    registry.register_function("add", reduce(Function::new(fn_add, 0..=0)));
     registry.register_function("not", Function::new(fn_not, 0..=0));
     registry.register_function("null", Function::new(fn_null, 0..=0));
     registry.register_function("debug", Function::new(fn_debug, 0..=0));
-    registry.register_function("group_by", Function::new(fn_group_by, 1..=1));
-    registry.register_function("sort_by", Function::new(fn_sort_by, 1..=1));
+    registry.register_function("group_by", reduce(Function::new(fn_special_form, 1..=1)));
+    registry.register_function("sort_by", reorder(Function::new(fn_special_form, 1..=1)));
 
     // Aliases - comprehensive for discoverability
     // Length/count
@@ -103,6 +110,7 @@ pub fn register_all(registry: &mut Registry) {
     // jq compatibility
     registry.register_alias("ascii_downcase", "lower");
     registry.register_alias("ascii_upcase", "upper");
+    registry.register_alias("tostring", "text");
 
     // Content extraction
     registry.register_alias("markdown", "md");
@@ -118,6 +126,8 @@ pub fn register_all(registry: &mut Registry) {
 fn fn_count(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
     let count = match input {
+        // As in jq: `.parent | length` on a top-level heading is 0, not 1.
+        Value::Null => 0,
         Value::Array(a) => a.len(),
         // jq counts Unicode codepoints, not bytes.
         Value::String(s) => s.chars().count(),
@@ -173,7 +183,7 @@ fn fn_sort(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
     match input {
         Value::Array(a) => {
             let mut sorted = a.clone();
-            sorted.sort_by_key(|a| a.to_text());
+            sorted.sort_by(Value::sort_cmp);
             Ok(vec![Value::Array(sorted)])
         }
         _ => Ok(vec![input.clone()]),
@@ -184,10 +194,13 @@ fn fn_unique(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryErro
     let input = args.first().unwrap_or(&Value::Null);
     match input {
         Value::Array(a) => {
+            // Keep the first of each distinct value, in order. Comparing
+            // text merged distinct headings that shared a title, and `1`
+            // with `"1"`.
             let mut seen = std::collections::HashSet::new();
             let unique: Vec<Value> = a
                 .iter()
-                .filter(|v| seen.insert(v.to_text()))
+                .filter(|v| seen.insert(v.identity_key()))
                 .cloned()
                 .collect();
             Ok(vec![Value::Array(unique)])
@@ -279,12 +292,7 @@ fn fn_trim(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
 fn fn_split(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
     let sep = args.get(1).map(|v| v.to_text()).unwrap_or_default();
-    let parts: Vec<Value> = input
-        .to_text()
-        .split(&sep)
-        .map(|s| Value::String(s.to_string()))
-        .collect();
-    Ok(vec![Value::Array(parts)])
+    Ok(vec![super::eval::split_text(&input.to_text(), &sep)])
 }
 
 fn fn_join(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
@@ -322,11 +330,10 @@ fn fn_chars(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
     Ok(vec![Value::Number(count as f64)])
 }
 
-fn fn_slugify(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
+fn fn_slugify(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    // Delegate to the canonical (turbovault) slugify for consistency with
-    // heading slugs everywhere else.
-    let slug = crate::parser::content::slugify(&input.to_text());
+    // The same style as heading slugs, `.slug`, so the two agree.
+    let slug = ctx.slug_style.slug(&input.to_text());
     Ok(vec![Value::String(slug)])
 }
 
@@ -475,11 +482,33 @@ fn fn_stats(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
     Ok(vec![Value::Object(obj)])
 }
 
+/// What `levels`, `langs` and `types` count: the matching elements of the
+/// input when it is an array, such as the collected stream in `.h2 |
+/// levels`, and the whole document's otherwise (`. | levels`, or `levels`
+/// on its own).
+fn counted<'a, T>(
+    input: Option<&'a Value>,
+    pick: impl Fn(&'a Value) -> Option<T>,
+    document: impl Iterator<Item = T>,
+) -> Vec<T> {
+    match input {
+        Some(Value::Array(items)) => items.iter().filter_map(pick).collect(),
+        _ => document.collect(),
+    }
+}
+
 fn fn_levels(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let _ = args;
+    let levels = counted(
+        args.first(),
+        |v| match v {
+            Value::Heading(h) => Some(h.level),
+            _ => None,
+        },
+        ctx.headings.iter().map(|h| h.level),
+    );
     let mut counts = std::collections::HashMap::new();
-    for h in &ctx.headings {
-        *counts.entry(h.level).or_insert(0) += 1;
+    for level in levels {
+        *counts.entry(level).or_insert(0) += 1;
     }
 
     let mut obj = indexmap::IndexMap::new();
@@ -492,11 +521,20 @@ fn fn_levels(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError
 }
 
 fn fn_langs(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let _ = args;
-    let mut counts = std::collections::HashMap::new();
-    for code in &ctx.code_blocks {
-        let lang = code.language.as_deref().unwrap_or("none");
-        *counts.entry(lang.to_string()).or_insert(0) += 1;
+    let langs = counted(
+        args.first(),
+        |v| match v {
+            Value::Code(c) => Some(c.language.as_deref()),
+            _ => None,
+        },
+        ctx.code_blocks.iter().map(|c| c.language.as_deref()),
+    );
+    // Sorted, so the same document always prints the same object.
+    let mut counts = std::collections::BTreeMap::new();
+    for lang in langs {
+        *counts
+            .entry(lang.unwrap_or("none").to_string())
+            .or_insert(0) += 1;
     }
 
     let mut obj = indexmap::IndexMap::new();
@@ -507,12 +545,18 @@ fn fn_langs(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
 }
 
 fn fn_types(args: &[Value], ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let _ = args;
-    let mut counts = std::collections::HashMap::new();
-    for link in &ctx.links {
-        *counts
-            .entry(link.link_type.as_str().to_string())
-            .or_insert(0) += 1;
+    let types = counted(
+        args.first(),
+        |v| match v {
+            Value::Link(l) => Some(l.link_type.as_str()),
+            _ => None,
+        },
+        ctx.links.iter().map(|l| l.link_type.as_str()),
+    );
+    // Sorted, so the same document always prints the same object.
+    let mut counts = std::collections::BTreeMap::new();
+    for typ in types {
+        *counts.entry(typ.to_string()).or_insert(0) += 1;
     }
 
     let mut obj = indexmap::IndexMap::new();
@@ -566,67 +610,36 @@ fn fn_skip(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError>
     }
 }
 
+/// Position `n` within a sequence of `len`, counting from the end when
+/// negative, or `None` when it falls outside.
+///
+/// Worked in f64 throughout: `nth(-1e300)` cast to i64 saturated, and then
+/// negating it overflowed, which panicked in a debug build and wrapped to
+/// the first element in a release one. An index too far back gave the
+/// first element too, through a saturating subtraction.
+fn resolve_index(n: f64, len: usize) -> Option<usize> {
+    let n = n.trunc();
+    let idx = if n < 0.0 { len as f64 + n } else { n };
+    (idx >= 0.0 && idx < len as f64).then_some(idx as usize)
+}
+
 fn fn_nth(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
     let input = args.first().unwrap_or(&Value::Null);
-    let n = args
-        .get(1)
-        .and_then(|v| {
-            if let Value::Number(n) = v {
-                Some(*n as i64)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(0);
+    let n = match args.get(1) {
+        Some(Value::Number(n)) => *n,
+        _ => 0.0,
+    };
 
     match input {
-        Value::Array(a) => {
-            let idx = if n < 0 {
-                a.len().saturating_sub((-n) as usize)
-            } else {
-                n as usize
-            };
-            Ok(a.get(idx).cloned().map(|v| vec![v]).unwrap_or_default())
-        }
-        Value::String(s) => {
-            let idx = if n < 0 {
-                s.chars().count().saturating_sub((-n) as usize)
-            } else {
-                n as usize
-            };
-            Ok(s.chars()
-                .nth(idx)
-                .map(|c| vec![Value::String(c.to_string())])
-                .unwrap_or_default())
-        }
+        Value::Array(a) => Ok(resolve_index(n, a.len())
+            .map(|i| vec![a[i].clone()])
+            .unwrap_or_default()),
+        Value::String(s) => Ok(resolve_index(n, s.chars().count())
+            .and_then(|i| s.chars().nth(i))
+            .map(|c| vec![Value::String(c.to_string())])
+            .unwrap_or_default()),
         _ => Ok(vec![]),
     }
-}
-
-// NOTE: `any`/`all`/`sort_by`/`group_by` are intercepted as special forms in
-// `Engine::eval_function` so their predicate/key argument is evaluated *per
-// element* (the registry path evaluates arguments only once). These registry
-// entries exist solely so calling them with the wrong number of arguments
-// produces an arity error; with the correct single argument they never reach
-// these bodies. The fallbacks below cover only the degenerate
-// already-truthy-input case.
-
-fn fn_any(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let input = args.first().unwrap_or(&Value::Null);
-    let result = match input {
-        Value::Array(a) => a.iter().any(|v| v.is_truthy()),
-        other => other.is_truthy(),
-    };
-    Ok(vec![Value::Bool(result)])
-}
-
-fn fn_all(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let input = args.first().unwrap_or(&Value::Null);
-    let result = match input {
-        Value::Array(a) => a.iter().all(|v| v.is_truthy()),
-        other => other.is_truthy(),
-    };
-    Ok(vec![Value::Bool(result)])
 }
 
 fn fn_min(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
@@ -723,63 +736,14 @@ fn fn_debug(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError
     Ok(vec![input.clone()])
 }
 
-fn fn_group_by(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let input = args.first().unwrap_or(&Value::Null);
-    let key_name = args
-        .get(1)
-        .map(|v| v.to_text())
-        .unwrap_or_else(|| "key".to_string());
-
-    match input {
-        Value::Array(a) => {
-            let mut groups: indexmap::IndexMap<String, Vec<Value>> = indexmap::IndexMap::new();
-            for item in a {
-                let key = match item {
-                    Value::Object(o) => o.get(&key_name).map(|v| v.to_text()).unwrap_or_default(),
-                    Value::Heading(h) => format!("h{}", h.level),
-                    Value::Code(c) => c.language.clone().unwrap_or_else(|| "none".to_string()),
-                    _ => item.to_text(),
-                };
-                groups.entry(key).or_default().push(item.clone());
-            }
-
-            let result: indexmap::IndexMap<String, Value> = groups
-                .into_iter()
-                .map(|(k, v)| (k, Value::Array(v)))
-                .collect();
-            Ok(vec![Value::Object(result)])
-        }
-        _ => Ok(vec![input.clone()]),
-    }
-}
-
-fn fn_sort_by(args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
-    let input = args.first().unwrap_or(&Value::Null);
-    let key_name = args
-        .get(1)
-        .map(|v| v.to_text())
-        .unwrap_or_else(|| "key".to_string());
-
-    match input {
-        Value::Array(a) => {
-            let mut sorted = a.clone();
-            sorted.sort_by(|a, b| {
-                let a_key = match a {
-                    Value::Object(o) => o.get(&key_name).map(|v| v.to_text()).unwrap_or_default(),
-                    Value::Heading(h) if key_name == "level" => h.level.to_string(),
-                    Value::Heading(h) if key_name == "text" => h.text.clone(),
-                    _ => a.to_text(),
-                };
-                let b_key = match b {
-                    Value::Object(o) => o.get(&key_name).map(|v| v.to_text()).unwrap_or_default(),
-                    Value::Heading(h) if key_name == "level" => h.level.to_string(),
-                    Value::Heading(h) if key_name == "text" => h.text.clone(),
-                    _ => b.to_text(),
-                };
-                a_key.cmp(&b_key)
-            });
-            Ok(vec![Value::Array(sorted)])
-        }
-        _ => Ok(vec![input.clone()]),
-    }
+/// Body for `any`, `all`, `sort_by` and `group_by`.
+///
+/// `Engine::eval_function` evaluates these itself, because their argument
+/// is an expression to run against each element rather than a value to
+/// compute once. They are registered so that arity errors, suggestions and
+/// stream collection treat them like any other function; with one argument
+/// the engine never calls this, and with any other count the arity check
+/// rejects the call first.
+fn fn_special_form(_args: &[Value], _ctx: &EvalContext) -> Result<Vec<Value>, QueryError> {
+    Ok(Vec::new())
 }

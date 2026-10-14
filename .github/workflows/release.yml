@@ -9,19 +9,35 @@ on:
 permissions:
   contents: read
 
+# Actions are pinned to full commit SHAs, as in rust.yml, which says why.
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  # The full CI suite (rust.yml) on the exact commit being released. Nothing
+  # is built for release until it passes, so a tag pushed on a red or
+  # untested commit stops here instead of publishing.
+  ci:
+    name: CI
+    uses: ./.github/workflows/rust.yml
+
   # A pushed tag is immutable (see the "Version tags are immutable" ruleset), so
   # a bad one cannot be re-cut. Catch the mismatches here, before any artifact
   # exists, rather than after downstream packagers have hashed the tarball.
   preflight:
     name: Preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
 
       - name: Tag, Cargo.toml, and CHANGELOG must agree
         if: startsWith(github.ref, 'refs/tags/v')
@@ -43,250 +59,337 @@ jobs:
           echo "$GITHUB_REF_NAME matches Cargo.toml and CHANGELOG.md"
         shell: bash
 
+      # Everything `cargo publish` checks short of uploading, so the
+      # crates.io publish of this tag is known to go through.
+      - name: crates.io publish dry run
+        run: cargo publish --dry-run --locked
+
   build:
     name: Build for ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    needs: preflight
+    needs: [ci, preflight]
+    timeout-minutes: 60
     strategy:
       fail-fast: false
+      # builder: how the target is compiled.
+      #   cargo     natively on the runner
+      #   cross     in cross's container, for the static musl builds
+      #   zigbuild  cargo-zigbuild against glibc 2.28, so the binary runs on
+      #             RHEL 8, Debian 10, Ubuntu 18.10 and anything newer. Built
+      #             on the runner, it needed the runner's glibc: the 0.9.1
+      #             binaries needed 2.39, and failed on Debian 12, Ubuntu
+      #             22.04 and RHEL 9.
+      # smoke: how the built binary is run before it ships.
+      #   native   directly on the runner
+      #   alpine   in an Alpine container, the musl users' platform (#42)
+      #   glibc    in a Debian 10 container, which has glibc 2.28
+      #   rosetta  under Rosetta 2, an x86_64 binary on an arm64 runner
+      #   none     the runner cannot execute it (aarch64 Linux on x86_64)
       matrix:
         include:
           # Linux x86_64 (glibc)
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
-            use_cross: false
+            builder: zigbuild
+            smoke: glibc
           # Linux x86_64 (musl - for Alpine/static linking)
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
-            use_cross: true
+            builder: cross
+            smoke: alpine
           # Linux ARM64 (glibc)
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
-            use_cross: true
+            builder: zigbuild
+            smoke: none
           # Linux ARM64 (musl - for Alpine/static linking)
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-latest
-            use_cross: true
+            builder: cross
+            smoke: none
           # macOS x86_64
           - target: x86_64-apple-darwin
             runner: macos-latest
-            use_cross: false
+            builder: cargo
+            smoke: rosetta
           # macOS ARM64 (Apple Silicon)
           - target: aarch64-apple-darwin
             runner: macos-latest
-            use_cross: false
+            builder: cargo
+            smoke: native
           # Windows x86_64
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
-            use_cross: false
+            builder: cargo
+            smoke: native
 
+    # No build cache here. A tag run can only restore caches saved on its
+    # own ref or the default branch, so it would almost never hit, and what
+    # it did restore would be compiled into a signed, published binary.
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-          shared-key: ${{ matrix.target }}
-
-      # Install cross for Linux ARM builds
-      # Using cargo install from git since there are no recent releases
-      # (last release v0.2.5 was in Feb 2023, but development is active)
+      # cross is installed from a pinned git rev: its last release, v0.2.5,
+      # dates from February 2023.
       - name: Install cross
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross --rev 8633ec65ab914015c2444c732568b414bd3c47cf
+        if: matrix.builder == 'cross'
+        run: cargo install cross --git https://github.com/cross-rs/cross --rev 8633ec65ab914015c2444c732568b414bd3c47cf --locked
 
-      # For Linux ARM, we need proper configuration
-      - name: Create .cargo/config.toml for Linux ARM
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        shell: bash
+      # Zig provides the glibc 2.28 headers and stubs to link against.
+      - name: Install cargo-zigbuild
+        if: matrix.builder == 'zigbuild'
         run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          ar = "aarch64-linux-gnu-ar"
-          EOF
+          # In a venv: the runner's system Python is externally managed.
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install ziglang==0.15.2
+          echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
+          cargo install cargo-zigbuild --version 0.23.4 --locked
 
       - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+          BUILDER: ${{ matrix.builder }}
         run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --locked --target ${{ matrix.target }}
-          else
-            cargo build --release --locked --target ${{ matrix.target }}
+          case "$BUILDER" in
+            cross) cross build --release --locked --target "$TARGET" ;;
+            zigbuild) cargo zigbuild --release --locked --target "$TARGET.2.28" ;;
+            *) cargo build --release --locked --target "$TARGET" ;;
+          esac
+        shell: bash
+
+      # Every glibc symbol the binary uses has to exist in 2.28, the oldest
+      # glibc it claims to run on. This also covers aarch64, which is not run.
+      - name: Check the glibc floor
+        if: matrix.builder == 'zigbuild'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          newest=$(objdump -T "target/$TARGET/release/treemd" \
+            | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "newest glibc symbol: $newest"
+          if [ "$(printf '%s\n2.28\n' "$newest" | sort -V | tail -1)" != "2.28" ]; then
+            echo "::error::$TARGET needs glibc $newest, newer than the 2.28 it is built for"
+            exit 1
           fi
         shell: bash
 
-      # Create artifact name based on target
-      - name: Determine artifact name
-        id: artifact
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            echo "bin=treemd.exe" >> $GITHUB_OUTPUT
-          else
-            echo "bin=treemd" >> $GITHUB_OUTPUT
-          fi
-        shell: bash
-
-      # macOS Code Signing (optional - requires secrets to be configured)
-      - name: Import Apple Code Signing Certificate
+      # A tagged release must be Developer ID signed and notarized, so on a
+      # tag a failed import fails the job. A manual run without the signing
+      # secrets carries on and is ad-hoc signed below.
+      - name: Import Apple code signing certificate
         if: runner.os == 'macOS'
-        continue-on-error: true
-        uses: Apple-Actions/import-codesign-certs@v7
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: Apple-Actions/import-codesign-certs@77ba2a2a8f5cfc8c405ebf3159f767c323e238f9 # v7.1.0
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
-      - name: Code sign and notarize macOS binary
+      - name: Sign and notarize the macOS binary
         if: runner.os == 'macOS'
+        env:
+          TARGET: ${{ matrix.target }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          CERT_IMPORTED=false
+          bin="target/$TARGET/release/treemd"
 
-          # Check if certificate was imported (if secrets exist, cert should be imported)
           if security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
-            CERT_IMPORTED=true
-          fi
+            echo "Signing with Developer ID"
+            codesign --force --timestamp --options runtime \
+              --sign "$APPLE_DEVELOPER_ID" "$bin"
+            codesign --verify --strict --verbose=2 "$bin"
 
-          if [ "$CERT_IMPORTED" = "true" ]; then
-            echo "Signing with Developer ID..."
-            codesign --deep --force --verify --verbose \
-              --timestamp --options runtime \
-              --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
-              target/${{ matrix.target }}/release/treemd
-            codesign -v target/${{ matrix.target }}/release/treemd
-
-            echo "Notarizing with Apple..."
-            ditto -c -k --sequesterRsrc target/${{ matrix.target }}/release/treemd treemd-notarize.zip
-
-            xcrun notarytool submit treemd-notarize.zip \
-              --apple-id "${{ secrets.APPLE_ID }}" \
-              --password "${{ secrets.APPLE_ID_PASSWORD }}" \
-              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-              --wait \
-              --timeout 30m
-
-            echo "Note: Stapling is not applicable to bare CLI binaries"
-            echo "Binary is notarized server-side - users will be verified online"
-
-            echo "Verifying notarization status..."
-            spctl -a -v target/${{ matrix.target }}/release/treemd || true
-            echo "✓ Binary signed and notarized"
+            # notarytool exits 0 even when Apple rejects the submission, so
+            # the verdict is read from its JSON rather than its exit code.
+            ditto -c -k --sequesterRsrc "$bin" treemd-notarize.zip
+            result=$(xcrun notarytool submit treemd-notarize.zip \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_ID_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait --timeout 30m --output-format json)
+            echo "$result"
+            status=$(jq -r '.status' <<<"$result")
+            if [ "$status" != "Accepted" ]; then
+              xcrun notarytool log "$(jq -r '.id' <<<"$result")" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_ID_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" || true
+              echo "::error::notarization finished as '$status', not Accepted"
+              exit 1
+            fi
+            # A bare binary cannot be stapled; Gatekeeper checks the
+            # notarization online the first time it runs.
+            echo "Signed and notarized"
+          elif [ "$IS_TAG" = "true" ]; then
+            echo "::error::no Developer ID Application identity is available, and a tagged release must be signed and notarized"
+            exit 1
           else
-            echo "Developer ID certificate not configured. Using ad-hoc signing..."
-            codesign --remove-signature target/${{ matrix.target }}/release/treemd || true
-            codesign -s - target/${{ matrix.target }}/release/treemd
-            codesign -v target/${{ matrix.target }}/release/treemd
-            echo "⚠ Binary ad-hoc signed (users may see Gatekeeper warning)"
+            echo "::warning::no Developer ID identity, so this non-release build is ad-hoc signed only"
+            codesign --force --sign - "$bin"
+            codesign --verify --verbose=2 "$bin"
           fi
-
-
-      - name: Prepare artifacts (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          # Create artifacts directory
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-
-          $binary = "treemd-${{ matrix.target }}.exe"
-          Copy-Item "target/${{ matrix.target }}/release/treemd.exe" $binary
-
-          # Create zip for Windows (tar.gz not common on Windows)
-          Compress-Archive -Path $binary -DestinationPath "artifacts/$binary.zip"
-
-          # Generate SHA256
-          $hash = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLower()
-          "$hash  $binary" | Out-File -FilePath "artifacts/$binary.sha256" -Encoding ascii -NoNewline
-
-          Write-Host "Binary info:"
-          Get-Item $binary | Format-List Length, LastWriteTime
-          Get-Content "artifacts/$binary.sha256"
-        shell: pwsh
-
-      - name: Prepare artifacts (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p artifacts
-          BINARY="treemd-${{ matrix.target }}"
-          cp "target/${{ matrix.target }}/release/treemd" "$BINARY"
-          chmod +x "$BINARY"
-
-          # Create tar to preserve permissions and prevent corruption
-          tar -czf "artifacts/$BINARY.tar.gz" "$BINARY"
-          sha256sum "$BINARY" > "artifacts/$BINARY.sha256"
-          ls -lh "$BINARY"
-          cat "artifacts/$BINARY.sha256"
         shell: bash
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+      # After signing, so the binary run is the one that ships.
+      - name: Smoke test
+        env:
+          TARGET: ${{ matrix.target }}
+          SMOKE: ${{ matrix.smoke }}
+        run: |
+          bin="target/$TARGET/release/treemd"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            bin="$bin.exe"
+          fi
+          case "$SMOKE" in
+            native)
+              sh scripts/smoke-test.sh "$bin"
+              ;;
+            alpine)
+              # Read-only mount: the container only runs the binary.
+              docker run --rm -v "$PWD:/src:ro" -w /src alpine:3.22 \
+                sh scripts/smoke-test.sh "$bin"
+              ;;
+            glibc)
+              # The oldest glibc the binary is built for.
+              docker run --rm -v "$PWD:/src:ro" -w /src debian:10 \
+                sh scripts/smoke-test.sh "$bin"
+              ;;
+            rosetta)
+              if /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+                sh scripts/smoke-test.sh "$bin"
+              else
+                echo "::warning::Rosetta 2 is not installed on this runner, so $TARGET was not run"
+              fi
+              ;;
+            none)
+              echo "$TARGET cannot run on this runner, so it is not smoke-tested"
+              ;;
+            *)
+              echo "::error::unknown smoke mode '$SMOKE'"
+              exit 1
+              ;;
+          esac
+        shell: bash
+
+      # Only the binary: every archive is assembled in one place, by the
+      # package job, so they all come out of the same tools.
+      - name: Upload binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ matrix.target }}
-          path: artifacts/*
+          name: build-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/treemd${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
-          retention-days: 1
+          # Long enough to re-run one failed target on a later day without
+          # the others' binaries having expired.
+          retention-days: 7
+
+  # Archives for every target, built reproducibly (see
+  # scripts/package-release.sh): timestamps come from the release commit, so
+  # anyone with the same binaries gets byte-identical archives. Runs for
+  # manual runs too, so the result can be inspected without a release.
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 15
+    # id-token and attestations are for the provenance step alone; this is
+    # the only job that holds them.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: build-*
+          path: builds
+
+      - name: Build archives and checksums
+        run: |
+          # One directory per target triple, as package-release.sh expects.
+          for dir in builds/build-*; do
+            mv "$dir" "builds/${dir#builds/build-}"
+          done
+          # Every target or nothing: a release missing one, from an
+          # expired or failed artifact, must not go out green.
+          expected="aarch64-apple-darwin aarch64-unknown-linux-gnu aarch64-unknown-linux-musl x86_64-apple-darwin x86_64-pc-windows-msvc x86_64-unknown-linux-gnu x86_64-unknown-linux-musl"
+          found=$(ls builds | sort | tr '\n' ' ' | sed 's/ $//')
+          if [ "$found" != "$expected" ]; then
+            echo "::error::expected binaries for: $expected"
+            echo "::error::found: $found"
+            exit 1
+          fi
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export SOURCE_DATE_EPOCH
+          scripts/package-release.sh builds dist
+          for archive in dist/*.tar.gz; do
+            echo "$archive:"
+            tar -tvzf "$archive"
+          done
+          for archive in dist/*.zip; do
+            echo "$archive:"
+            unzip -l "$archive"
+          done
+        shell: bash
+
+      # Signed SLSA build provenance for every archive in SHA256SUMS, tying
+      # each one to this workflow, commit and tag. Verify a download with
+      # `gh attestation verify <archive> --repo Epistates/treemd`.
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+          # A re-run of this job replaces the earlier attempt's assets.
+          overwrite: true
 
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: build
+    needs: package
+    timeout-minutes: 10
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
+      - name: Download release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: release-artifacts
-
-      - name: Prepare release assets
-        run: |
-          mkdir -p final-release
-
-          # Copy archives directly (tar.gz and zip preserve permissions internally)
-          find release-artifacts -name "*.tar.gz" -type f -exec cp {} final-release/ \;
-          find release-artifacts -name "*.zip" -type f -exec cp {} final-release/ \;
-
-          # Copy individual SHA256 files
-          find release-artifacts -name "*.sha256" -type f -exec cp {} final-release/ \;
-
-          echo "Final release contents:"
-          ls -lah final-release/
-
-          echo "Verifying archive integrity:"
-          cd final-release
-          for archive in *.tar.gz; do
-            [ -f "$archive" ] || continue
-            echo "Testing $archive:"
-            tar -tzf "$archive" | head -5
-          done
-          for archive in *.zip; do
-            [ -f "$archive" ] || continue
-            echo "Testing $archive:"
-            unzip -l "$archive"
-          done
-        shell: bash
-
-      - name: Generate combined checksums
-        run: |
-          cd final-release
-          # Generate SHA256SUMS for archives (not individual binaries)
-          sha256sum *.tar.gz *.zip 2>/dev/null | grep -v "No such file" > SHA256SUMS || true
-          cat SHA256SUMS
-        shell: bash
+          name: dist
+          path: dist
 
       - name: Create Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
-            final-release/*.tar.gz
-            final-release/*.zip
-            final-release/*.sha256
-            final-release/SHA256SUMS
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+            dist/SHA256SUMS
           generate_release_notes: true
           draft: false
           prerelease: false

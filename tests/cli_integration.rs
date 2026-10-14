@@ -43,22 +43,31 @@ Deep section.
 End of doc.
 ";
 
-/// Write the fixture to a tempfile and return its path.
-/// Caller is responsible for cleanup (we leak — test process exits anyway).
-fn fixture_file() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "treemd-it-{}-{}",
-        std::process::id(),
-        // Add a tiny salt so concurrent tests don't collide on the same fixture.
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let path = dir.join("doc.md");
-    std::fs::write(&path, FIXTURE).expect("write fixture");
-    path
+/// A document written to its own temporary directory, removed on drop.
+struct TempDoc {
+    _dir: tempfile::TempDir,
+    path: PathBuf,
+}
+
+impl std::ops::Deref for TempDoc {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+/// Write `contents` to `doc.md` in a fresh temporary directory.
+fn temp_doc(contents: &str) -> TempDoc {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().join("doc.md");
+    std::fs::write(&path, contents).expect("write fixture");
+    TempDoc { _dir: dir, path }
+}
+
+/// The shared fixture in a temporary file.
+fn fixture_file() -> TempDoc {
+    temp_doc(FIXTURE)
 }
 
 /// Run treemd with args, return (stdout, stderr, exit code).
@@ -76,7 +85,20 @@ fn run(args: &[&str]) -> (String, String, i32) {
 
 /// Run treemd with stdin piped from `input` and the given args.
 fn run_with_stdin(args: &[&str], input: &str) -> (String, String, i32) {
-    let mut child = Command::new(bin())
+    run_with_stdin_in(None, args, input)
+}
+
+/// [`run_with_stdin`], from `dir` as the working directory when given.
+fn run_with_stdin_in(
+    dir: Option<&std::path::Path>,
+    args: &[&str],
+    input: &str,
+) -> (String, String, i32) {
+    let mut cmd = Command::new(bin());
+    if let Some(dir) = dir {
+        cmd.current_dir(dir);
+    }
+    let mut child = cmd
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -165,6 +187,186 @@ fn list_with_text_filter_is_case_insensitive() {
     let (stdout, _, code) = run(&["-l", "--filter", "INSTALL", f.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert_eq!(stdout.trim(), "## Installation");
+}
+
+/// `-L` used to win outright and drop `--filter`, which the skill recommends
+/// combining.
+#[test]
+fn list_level_and_filter_apply_together() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", "-L", "2", "--filter", "install", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "## Installation\n");
+}
+
+/// A document with no headings is given one for the TUI's outline, but in
+/// CLI output it is a heading the document does not have.
+#[test]
+fn a_document_without_headings_reports_none() {
+    let input = "just text\nmore text\n";
+    let (stdout, _, code) = run_with_stdin(&["-l", "-"], input);
+    assert_eq!((code, stdout.as_str()), (0, ""));
+
+    let (stdout, _, code) = run_with_stdin(&["-q", ".h", "-"], input);
+    assert_eq!((code, stdout.as_str()), (0, ""));
+
+    let (stdout, _, _) = run_with_stdin(&["-q", ".para | text", "-"], input);
+    assert_eq!(stdout, "just text more text\n");
+}
+
+/// A byte order mark in front of the first `#` hid that heading.
+#[test]
+fn a_byte_order_mark_does_not_hide_the_first_heading() {
+    let input = "\u{feff}# BOM Title\n\ntext\n\n## Second\n";
+    let (stdout, _, code) = run_with_stdin(&["-l", "-n", "-"], input);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "# BOM Title [1-5]\n## Second [5-5]\n");
+}
+
+/// `-n`, tql's `.line`, and a heading that does not start its line. `.line`
+/// counted `lines()` over the prefix, which includes the partial `> ` line.
+#[test]
+fn heading_lines_agree_between_list_and_query() {
+    let input = "# Title\n\n> # quoted\n\nSetext\n======\nbody\n";
+    let (listed, _, _) = run_with_stdin(&["-l", "-n", "-"], input);
+    let (queried, _, _) = run_with_stdin(&["-q", ".h | .line", "-"], input);
+    assert_eq!(listed, "# Title [1-2]\n# quoted [3-4]\n# Setext [5-7]\n");
+    assert_eq!(queried, "1\n3\n5\n");
+}
+
+/// JSON output is one array whatever the count, `[]` when nothing
+/// matched, while plain output prints nothing then, as jq does.
+#[test]
+fn an_empty_query_result_is_an_empty_json_array() {
+    let f = fixture_file();
+    let path = f.to_str().unwrap();
+    let (stdout, _, code) = run(&["-q", ".h6", "--query-output", "json", path]);
+    assert_eq!((code, stdout.trim()), (0, "[]"));
+    let (stdout, _, code) = run(&["-q", ".h6", "--query-output", "jsonl", path]);
+    assert_eq!((code, stdout.as_str()), (0, ""));
+    let (stdout, _, code) = run(&["-q", ".h6", path]);
+    assert_eq!((code, stdout.as_str()), (0, ""));
+}
+
+#[test]
+fn query_output_accepts_the_documented_jsonp_alias() {
+    let f = fixture_file();
+    let (stdout, stderr, code) = run(&[
+        "-q",
+        ".h1 | text",
+        "--query-output",
+        "jsonp",
+        f.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "[\n  \"Title\"\n]");
+}
+
+/// Writing into a pipe whose reader has gone, as with `| head -1`, used to
+/// panic with "failed printing to stdout". It has to end quietly instead.
+#[cfg(unix)]
+#[test]
+fn a_closed_pipe_ends_output_without_a_panic() {
+    let input: String = (0..20_000).map(|i| format!("## h{i}\n")).collect();
+    let mut child = Command::new(bin())
+        .args(["-l", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn treemd");
+    let mut stdin = child.stdin.take().expect("stdin");
+    std::thread::spawn(move || {
+        let _ = stdin.write_all(input.as_bytes());
+    });
+    // Read one line, then close our end, as `head -1` does.
+    {
+        use std::io::BufRead;
+        let stdout = child.stdout.take().expect("stdout");
+        let mut first = String::new();
+        std::io::BufReader::new(stdout)
+            .read_line(&mut first)
+            .expect("read");
+        assert_eq!(first, "## h0\n");
+    }
+    let out = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "stderr: {stderr}");
+}
+
+#[test]
+fn a_level_outside_one_to_six_is_rejected() {
+    let f = fixture_file();
+    let (_, stderr, code) = run(&["-l", "-L", "9", f.to_str().unwrap()]);
+    assert_eq!(code, 2, "{stderr}");
+}
+
+/// `-q` with `-l` used to drop `-l` silently.
+#[test]
+fn a_query_conflicts_with_the_other_output_modes() {
+    let f = fixture_file();
+    let (_, stderr, code) = run(&["-q", ".h", "-l", f.to_str().unwrap()]);
+    assert_eq!(code, 2, "{stderr}");
+}
+
+#[test]
+fn exit_status_reports_whether_the_query_matched() {
+    let f = fixture_file();
+    let path = f.to_str().unwrap();
+    let (_, _, code) = run(&["-q", ".h2[Usage]", "-e", path]);
+    assert_eq!(code, 0);
+    let (stdout, _, code) = run(&["-q", ".h6", "-e", path]);
+    assert_eq!((code, stdout.as_str()), (1, ""));
+    // Without -e, nothing matching is still a success, as in jq.
+    let (_, _, code) = run(&["-q", ".h6", path]);
+    assert_eq!(code, 0);
+}
+
+/// Query errors have jq's codes, 3 to parse and 5 to run. Both were 1, the
+/// code `-e` gives no results, so a script could not tell a typo from an
+/// empty match.
+#[test]
+fn query_errors_have_their_own_exit_codes() {
+    let f = fixture_file();
+    let path = f.to_str().unwrap();
+    let (_, stderr, code) = run(&["-q", ".h2 | | text", "-e", path]);
+    assert_eq!(code, 3, "{stderr}");
+    let (_, stderr, code) = run(&["-q", r#""a" - 1"#, path]);
+    assert_eq!(code, 5, "{stderr}");
+    assert!(stderr.contains("cannot be subtracted"), "{stderr}");
+    let (_, _, code) = run(&["-q", ".h", "--query-output", "xml", path]);
+    assert_eq!(code, 2);
+}
+
+/// `-l docs/` printed a placeholder `# Select a file` heading.
+#[test]
+fn a_directory_in_cli_mode_is_an_error() {
+    let f = fixture_file();
+    let dir = f.parent().unwrap();
+    let (stdout, stderr, code) = run(&["-l", dir.to_str().unwrap()]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("is a directory"), "{stderr}");
+}
+
+#[test]
+fn extra_files_in_cli_mode_are_reported() {
+    let f = fixture_file();
+    let path = f.to_str().unwrap();
+    let (stdout, stderr, code) = run(&["-l", path, path]);
+    assert_eq!(code, 0);
+    assert!(stdout.starts_with("# Title"), "{stdout}");
+    assert!(stderr.contains("only the first file"), "{stderr}");
+}
+
+/// With no terminal to draw on, the TUI wrote its escape sequences into the
+/// pipe. It prints the document instead, as bat and less do.
+#[test]
+fn without_a_terminal_the_document_is_printed() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&[f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, FIXTURE);
 }
 
 #[test]
@@ -366,6 +568,30 @@ fn list_reads_markdown_from_stdin() {
     assert_eq!(lines[1], "## Beta");
 }
 
+/// Piping without `-` is the documented form (`cat doc.md | treemd -q '.h'`),
+/// and it has to win over the startup file picker. That picker looks for
+/// markdown in the working directory, so run from one that has some, which
+/// is where it used to take over, and from one that has none, where treemd
+/// used to print usage and exit.
+#[test]
+fn piped_stdin_is_read_without_a_dash() {
+    let with_markdown = fixture_file();
+    let with_markdown = with_markdown.parent().expect("fixture dir");
+    let empty = with_markdown.join("empty");
+    std::fs::create_dir_all(&empty).expect("create empty dir");
+
+    for dir in [with_markdown, empty.as_path()] {
+        let (stdout, stderr, code) = run_with_stdin_in(Some(dir), &["-l"], "# Alpha\n## Beta\n");
+        assert_eq!(code, 0, "from {dir:?}, stderr: {stderr}");
+        assert_eq!(stdout, "# Alpha\n## Beta\n", "from {dir:?}");
+
+        let (stdout, stderr, code) =
+            run_with_stdin_in(Some(dir), &["-q", ".h2 | text"], "# Alpha\n## Beta\n");
+        assert_eq!(code, 0, "from {dir:?}, stderr: {stderr}");
+        assert_eq!(stdout, "Beta\n", "from {dir:?}");
+    }
+}
+
 // ------------------------------------------------------------------
 // --at-line
 // ------------------------------------------------------------------
@@ -402,10 +628,7 @@ fn at_line_on_heading_line_returns_that_heading() {
 #[test]
 fn at_line_before_first_heading_exits_nonzero() {
     // First heading is on line 5; line 2 has no heading at or before it.
-    let dir = std::env::temp_dir().join(format!("treemd-it-noheading-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("doc.md");
-    std::fs::write(&path, "lorem\nipsum\ndolor\nsit\n# Hello\nbody\n").unwrap();
+    let path = temp_doc("lorem\nipsum\ndolor\nsit\n# Hello\nbody\n");
     let (_, stderr, code) = run(&["--at-line", "2", path.to_str().unwrap()]);
     assert_ne!(code, 0);
     assert!(stderr.contains("No heading"));
@@ -427,14 +650,7 @@ fn at_line_zero_is_rejected() {
 
 #[test]
 fn section_with_inline_markdown_in_heading() {
-    let dir = std::env::temp_dir().join(format!("treemd-it-fmt-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("doc.md");
-    std::fs::write(
-        &path,
-        "# Top\n\n## **Bold** Section\nbody-of-bold\n\n## Next\nbody-of-next\n",
-    )
-    .unwrap();
+    let path = temp_doc("# Top\n\n## **Bold** Section\nbody-of-bold\n\n## Next\nbody-of-next\n");
 
     let (stdout, stderr, code) = run(&["-s", "Bold Section", path.to_str().unwrap()]);
     assert_eq!(code, 0, "stderr: {stderr}");
@@ -443,4 +659,56 @@ fn section_with_inline_markdown_in_heading() {
         "expected body of formatted-heading section, got: {stdout:?}"
     );
     assert!(!stdout.contains("body-of-next"));
+}
+
+// ------------------------------------------------------------------
+// One mode at a time, and the options that shape a listing need one.
+// Given two modes, all but one were silently ignored; given a listing
+// option without a listing, it was ignored and the TUI started.
+// ------------------------------------------------------------------
+
+#[test]
+fn modes_cannot_be_combined() {
+    let f = fixture_file();
+    for args in [
+        &["-l", "--tree"][..],
+        &["--tree", "-s", "Installation"],
+        &["--count", "-l"],
+        &["--at-line", "1", "-l"],
+        &["-q", ".h1", "--tree"],
+    ] {
+        let mut argv = args.to_vec();
+        argv.push(f.to_str().unwrap());
+        let (_, stderr, code) = run(&argv);
+        assert_eq!(code, 2, "{args:?}: {stderr}");
+        assert!(stderr.contains("cannot be used with"), "{args:?}: {stderr}");
+    }
+}
+
+#[test]
+fn listing_options_need_a_listing() {
+    let f = fixture_file();
+    for args in [
+        &["--filter", "usage"][..],
+        &["-L", "2"],
+        &["-n"],
+        &["-o", "json"],
+        &["--count", "-L", "2"],
+    ] {
+        let mut argv = args.to_vec();
+        argv.push(f.to_str().unwrap());
+        let (_, stderr, code) = run(&argv);
+        assert_eq!(code, 2, "{args:?}: {stderr}");
+        assert!(stderr.contains("--list|--tree"), "{args:?}: {stderr}");
+    }
+}
+
+/// `-o tree` was listed as an output format and refused with -l.
+#[test]
+fn list_with_tree_output_prints_the_tree() {
+    let f = fixture_file();
+    let (stdout, _, code) = run(&["-l", "-o", "tree", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let (tree, _, _) = run(&["--tree", f.to_str().unwrap()]);
+    assert_eq!(stdout, tree);
 }

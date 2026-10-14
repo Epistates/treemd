@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use image::Rgba;
 use image::RgbaImage;
@@ -37,16 +36,51 @@ pub(crate) struct ResizeResult {
     error: Option<String>,
 }
 
+/// When a file was last changed and how big it is, to tell whether a cached
+/// image is still the file on disk. `None` when it cannot be read.
+pub(crate) type FileStamp = Option<(std::time::SystemTime, u64)>;
+
+pub(crate) fn file_stamp(path: &Path) -> FileStamp {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+struct DecodeJob {
+    path: PathBuf,
+    stamp: FileStamp,
+    generation: u64,
+}
+
+/// An inline image decoded off the UI thread.
+pub(crate) struct DecodedStill {
+    pub(crate) path: PathBuf,
+    pub(crate) stamp: FileStamp,
+    /// `None` when the job was skipped, because the section it was for was
+    /// left before its turn came.
+    pub(crate) image: Option<Result<image::DynamicImage, String>>,
+}
+
 /// A single background worker shared by all images in an [`App`](crate::tui::App).
 ///
 /// `ratatui-image` deliberately separates resize/encode from rendering because
 /// graphics protocols can be expensive to prepare. Keeping one ordered worker
 /// avoids both frame stalls and an unbounded thread per cached image.
+///
+/// Decoding an inline image's file is the other slow part, a large PNG or
+/// JPEG taking most of a second, and it has a thread of its own. Done on the
+/// UI thread, every section with images froze the screen until they had all
+/// been read.
 pub(crate) struct ImageWorker {
     request_tx: mpsc::Sender<ResizeJob>,
     result_rx: mpsc::Receiver<ResizeResult>,
     pending: Arc<AtomicUsize>,
     next_protocol_id: AtomicU64,
+    decode_tx: mpsc::Sender<DecodeJob>,
+    decoded_rx: mpsc::Receiver<DecodedStill>,
+    decodes_pending: Arc<AtomicUsize>,
+    /// Jobs from before the latest [`supersede_decodes`](Self::supersede_decodes)
+    /// are skipped.
+    decode_generation: Arc<AtomicU64>,
 }
 
 impl ImageWorker {
@@ -54,18 +88,48 @@ impl ImageWorker {
         let (request_tx, request_rx) = mpsc::channel::<ResizeJob>();
         let (result_tx, result_rx) = mpsc::channel::<ResizeResult>();
         let pending = Arc::new(AtomicUsize::new(0));
+        let (decode_tx, decode_rx) = mpsc::channel::<DecodeJob>();
+        let (decoded_tx, decoded_rx) = mpsc::channel::<DecodedStill>();
+        let decode_generation = Arc::new(AtomicU64::new(0));
+
+        let current = Arc::clone(&decode_generation);
+        let _ = thread::Builder::new()
+            .name("treemd-image-decode".to_string())
+            .spawn(move || {
+                while let Ok(job) = decode_rx.recv() {
+                    let image = (job.generation >= current.load(Ordering::Acquire)).then(|| {
+                        // Inline, a GIF is a still of its first frame; it
+                        // plays in the image viewer.
+                        crate::tui::tty::catch_isolated(|| {
+                            ImageCache::extract_first_frame(&job.path).map(fit_for_inline)
+                        })
+                        .unwrap_or_else(|_| {
+                            Err(ImageError::InvalidFormat("decoder panicked".into()))
+                        })
+                        .map_err(|error| error.to_string())
+                    });
+                    let decoded = DecodedStill {
+                        path: job.path,
+                        stamp: job.stamp,
+                        image,
+                    };
+                    if decoded_tx.send(decoded).is_err() {
+                        break;
+                    }
+                }
+            });
 
         let _ = thread::Builder::new()
             .name("treemd-image-resize".to_string())
             .spawn(move || {
                 while let Ok(mut job) = request_rx.recv() {
-                    let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let error = crate::tui::tty::catch_isolated(|| {
                         job.protocol.resize_encode(&job.resize, job.size);
                         job.protocol
                             .last_encoding_result()
                             .and_then(Result::err)
                             .map(|error| error.to_string())
-                    }))
+                    })
                     .unwrap_or_else(|_| Some("image encoder panicked".to_string()));
                     if result_tx
                         .send(ResizeResult {
@@ -87,7 +151,38 @@ impl ImageWorker {
             result_rx,
             pending,
             next_protocol_id: AtomicU64::new(1),
+            decode_tx,
+            decoded_rx,
+            decodes_pending: Arc::new(AtomicUsize::new(0)),
+            decode_generation,
         }
+    }
+
+    /// Queue `path` to be decoded as an inline still.
+    pub(crate) fn request_decode(&self, path: PathBuf, stamp: FileStamp) {
+        let job = DecodeJob {
+            path,
+            stamp,
+            generation: self.decode_generation.load(Ordering::Acquire),
+        };
+        if self.decode_tx.send(job).is_ok() {
+            self.decodes_pending.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    /// Skip every decode queued so far that has not started, as when the
+    /// section they were for is left. Each comes back with no image.
+    pub(crate) fn supersede_decodes(&self) {
+        self.decode_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn drain_decoded(&self) -> Vec<DecodedStill> {
+        let results: Vec<_> = self.decoded_rx.try_iter().collect();
+        if !results.is_empty() {
+            self.decodes_pending
+                .fetch_sub(results.len(), Ordering::AcqRel);
+        }
+        results
     }
 
     pub(crate) fn wrap(&self, protocol: StatefulProtocol) -> AsyncProtocol {
@@ -114,7 +209,7 @@ impl ImageWorker {
     }
 
     pub(crate) fn has_pending(&self) -> bool {
-        self.pending.load(Ordering::Acquire) > 0
+        self.pending.load(Ordering::Acquire) > 0 || self.decodes_pending.load(Ordering::Acquire) > 0
     }
 }
 
@@ -269,31 +364,134 @@ impl std::fmt::Display for ImageError {
 
 impl std::error::Error for ImageError {}
 
+/// Largest image file treemd will open. A screen recording of a few minutes
+/// fits comfortably; past this the file is almost certainly not meant for a
+/// terminal pane.
+const MAX_IMAGE_FILE_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Largest GIF canvas treemd will allocate, in pixels, which is 64 MB of
+/// RGBA. A GIF declares its canvas size in its header, before any frame, and
+/// a 62-byte file can declare 65535x65535: 17 GB, allocated the moment the
+/// document is opened.
+const MAX_GIF_CANVAS_PIXELS: u64 = 16 * 1024 * 1024;
+
+/// Open an image the document names, if it is a regular file of a size worth
+/// drawing.
+///
+/// Checked before opening, because opening a FIFO blocks until something
+/// writes to it, and this runs on the UI thread with raw mode on, so the
+/// session freezes with no way to interrupt it. A terminal or a device is
+/// refused for the same reason.
+pub(crate) fn open_image_file(path: &Path) -> Result<File, ImageError> {
+    let meta = std::fs::metadata(path).map_err(|_| ImageError::NotFound)?;
+    if !meta.is_file() {
+        return Err(ImageError::InvalidFormat("not a regular file".to_string()));
+    }
+    if meta.len() > MAX_IMAGE_FILE_BYTES {
+        return Err(ImageError::InvalidFormat(format!(
+            "{} MB, over the {} MB limit",
+            meta.len() / (1024 * 1024),
+            MAX_IMAGE_FILE_BYTES / (1024 * 1024)
+        )));
+    }
+    File::open(path).map_err(|_| ImageError::NotFound)
+}
+
+/// A GIF decoder for `path`, or `None` when the file is not a GIF.
+///
+/// Refuses a canvas over [`MAX_GIF_CANVAS_PIXELS`] before anything is
+/// allocated for it.
+fn read_gif(
+    path: &Path,
+    color: gif::ColorOutput,
+) -> Result<Option<gif::Decoder<BufReader<File>>>, ImageError> {
+    let mut options = gif::DecodeOptions::new();
+    options.set_color_output(color);
+    read_gif_with(path, options)
+}
+
+/// [`read_gif`] with the decoder configured by the caller.
+fn read_gif_with(
+    path: &Path,
+    options: gif::DecodeOptions,
+) -> Result<Option<gif::Decoder<BufReader<File>>>, ImageError> {
+    let file = open_image_file(path)?;
+    let Ok(decoder) = options.read_info(BufReader::new(file)) else {
+        return Ok(None);
+    };
+    let (width, height) = (decoder.width(), decoder.height());
+    if u64::from(width) * u64::from(height) > MAX_GIF_CANVAS_PIXELS {
+        return Err(ImageError::InvalidFormat(format!(
+            "GIF canvas {width}x{height} is too large"
+        )));
+    }
+    Ok(Some(decoder))
+}
+
+/// [`read_gif`] for a path that has to be a GIF.
+fn require_gif(
+    path: &Path,
+    color: gif::ColorOutput,
+) -> Result<gif::Decoder<BufReader<File>>, ImageError> {
+    read_gif(path, color)?.ok_or_else(|| ImageError::InvalidFormat("not a GIF".to_string()))
+}
+
+/// Largest still image treemd decodes, in pixels: a 48-megapixel phone
+/// photo fits.
+///
+/// The `image` crate's default limit is on memory, 512 MB, which an
+/// 11000x11000 PNG of 470 KB stays under: three seconds of decoding with
+/// input frozen, and 840 MB held, for a file anyone can drop in a folder.
+const MAX_STILL_PIXELS: u64 = 64 * 1024 * 1024;
+
+/// Decode a still image in any supported format, refusing one over
+/// [`MAX_STILL_PIXELS`] from the size in its header, before decoding it.
+fn decode_still(path: &Path) -> Result<image::DynamicImage, ImageError> {
+    let invalid = |error: &dyn std::fmt::Display| ImageError::InvalidFormat(error.to_string());
+    let reader = || -> Result<_, ImageError> {
+        image::ImageReader::new(BufReader::new(open_image_file(path)?))
+            .with_guessed_format()
+            .map_err(|e| invalid(&e))
+    };
+    let (width, height) = reader()?.into_dimensions().map_err(|e| invalid(&e))?;
+    if u64::from(width) * u64::from(height) > MAX_STILL_PIXELS {
+        return Err(ImageError::InvalidFormat(format!(
+            "{width}x{height} is too large to draw"
+        )));
+    }
+    reader()?.decode().map_err(|e| invalid(&e))
+}
+
+/// Longest side an inline image is kept at, in pixels.
+const MAX_INLINE_SIDE: u32 = 2048;
+
+/// An image scaled down, if need be, to a size an inline image can use.
+///
+/// Inline images are drawn into a pane a few hundred cells wide, so a photo
+/// kept at its full resolution, tens of megabytes of RGBA, held far more than
+/// could ever be shown, and the cache holds up to 32 of them. The image
+/// viewer decodes its own copy at full resolution.
+pub(crate) fn fit_for_inline(image: image::DynamicImage) -> image::DynamicImage {
+    if image.width().max(image.height()) <= MAX_INLINE_SIDE {
+        image
+    } else {
+        image.resize(
+            MAX_INLINE_SIDE,
+            MAX_INLINE_SIDE,
+            image::imageops::FilterType::Triangle,
+        )
+    }
+}
+
 /// Namespace for image loading static methods.
 pub struct ImageCache;
 
-/// GIF frame with timing information
-#[derive(Clone)]
-pub struct GifFrame {
-    pub image: image::DynamicImage,
-    /// Delay in milliseconds
-    pub delay_ms: u32,
-}
-
-/// Result of advancing a streaming inline GIF.
-pub(crate) enum GifAdvance {
-    Waiting,
-    Frame(image::DynamicImage),
-    Finished,
-    Failed(String),
-}
-
-/// A memory-bounded GIF player for inline images.
+/// A memory-bounded GIF player for the image viewer.
 ///
-/// The modal viewer deliberately keeps every frame for random access. Inline
-/// images only need forward playback, so retaining a compositing canvas and
-/// decoder avoids expanding a long README recording into hundreds of full-size
-/// RGBA frames.
+/// Retaining one compositing canvas and the decoder, rather than every frame,
+/// keeps a long README recording from expanding into hundreds of full-size
+/// RGBA frames. Playback is forward only; the viewer reopens it to step back.
+/// Inline, a GIF is a still of its first frame.
 pub(crate) struct StreamingGif {
     path: PathBuf,
     decoder: gif::Decoder<BufReader<File>>,
@@ -301,12 +499,6 @@ pub(crate) struct StreamingGif {
     previous_disposal: gif::DisposalMethod,
     previous_rect: (u32, u32, u32, u32),
     restore_previous: Option<RgbaImage>,
-    repeat: gif::Repeat,
-    completed_repeats: u16,
-    frames_in_first_pass: usize,
-    current_delay: Duration,
-    last_frame_update: Instant,
-    active: bool,
 }
 
 impl StreamingGif {
@@ -315,7 +507,6 @@ impl StreamingGif {
         let decoder = Self::open_decoder(path)?;
         let width = u32::from(decoder.width());
         let height = u32::from(decoder.height());
-        let repeat = decoder.repeat();
         let mut animation = Self {
             path: path.to_path_buf(),
             decoder,
@@ -323,31 +514,18 @@ impl StreamingGif {
             previous_disposal: gif::DisposalMethod::Keep,
             previous_rect: (0, 0, 0, 0),
             restore_previous: None,
-            repeat,
-            completed_repeats: 0,
-            frames_in_first_pass: 0,
-            current_delay: Duration::from_millis(20),
-            last_frame_update: Instant::now(),
-            active: false,
         };
 
-        let Some((image, delay)) = animation.decode_next()? else {
+        let Some(image) = animation.decode_next()? else {
             return Err(ImageError::InvalidFormat(
                 "GIF contains no image frames".to_string(),
             ));
         };
-        animation.frames_in_first_pass = 1;
-        animation.current_delay = delay;
         Ok((animation, image))
     }
 
     fn open_decoder(path: &Path) -> Result<gif::Decoder<BufReader<File>>, ImageError> {
-        let file = File::open(path).map_err(|_| ImageError::NotFound)?;
-        let mut options = gif::DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::RGBA);
-        options
-            .read_info(BufReader::new(file))
-            .map_err(|error| ImageError::InvalidFormat(error.to_string()))
+        require_gif(path, gif::ColorOutput::RGBA)
     }
 
     fn reset_decoder(&mut self) -> Result<(), ImageError> {
@@ -363,7 +541,7 @@ impl StreamingGif {
         Ok(())
     }
 
-    fn decode_next(&mut self) -> Result<Option<(image::DynamicImage, Duration)>, ImageError> {
+    fn decode_next(&mut self) -> Result<Option<image::DynamicImage>, ImageError> {
         match self.previous_disposal {
             gif::DisposalMethod::Background => {
                 ImageCache::clear_gif_rect(&mut self.canvas, self.previous_rect);
@@ -390,8 +568,6 @@ impl StreamingGif {
         let height = self.canvas.height();
         ImageCache::composite_gif_frame(&mut self.canvas, frame, width, height);
 
-        let delay =
-            Duration::from_millis(u64::from(frame.delay) * 10).max(Duration::from_millis(20));
         self.previous_disposal = frame.dispose;
         self.previous_rect = (
             frame.left.into(),
@@ -401,69 +577,19 @@ impl StreamingGif {
         );
         self.restore_previous = restore_for_this_frame;
 
-        Ok(Some((
-            image::DynamicImage::ImageRgba8(self.canvas.clone()),
-            delay,
-        )))
+        Ok(Some(image::DynamicImage::ImageRgba8(self.canvas.clone())))
     }
 
-    /// Start or stop playback without decoding a frame.
-    ///
-    /// GIFs are deliberately inactive when opened so the composited first frame
-    /// remains a still. A viewer can explicitly activate the frame clock.
-    pub(crate) fn set_active(&mut self, active: bool) {
-        if active && !self.active {
-            self.last_frame_update = Instant::now();
+    /// The next frame regardless of the frame clock, wrapping to the first
+    /// after the last. For the image viewer, which keeps its own timing and
+    /// its own frame index.
+    pub(crate) fn next_frame_looping(&mut self) -> Result<image::DynamicImage, ImageError> {
+        if let Some(image) = self.decode_next()? {
+            return Ok(image);
         }
-        self.active = active;
-    }
-
-    pub(crate) fn time_until_next_frame(&self) -> Option<Duration> {
-        if !self.active {
-            return None;
-        }
-        Some(
-            self.current_delay
-                .saturating_sub(self.last_frame_update.elapsed())
-                .max(Duration::from_millis(1)),
-        )
-    }
-
-    pub(crate) fn advance(&mut self) -> GifAdvance {
-        if !self.active || self.last_frame_update.elapsed() < self.current_delay {
-            return GifAdvance::Waiting;
-        }
-
-        match self.decode_next() {
-            Ok(Some((image, delay))) => {
-                self.frames_in_first_pass = self.frames_in_first_pass.saturating_add(1);
-                self.current_delay = delay;
-                self.last_frame_update = Instant::now();
-                GifAdvance::Frame(image)
-            }
-            Ok(None) if self.frames_in_first_pass <= 1 => GifAdvance::Finished,
-            Ok(None) => {
-                let should_repeat = match self.repeat {
-                    gif::Repeat::Infinite => true,
-                    gif::Repeat::Finite(repeats) => self.completed_repeats < repeats,
-                };
-                if !should_repeat {
-                    return GifAdvance::Finished;
-                }
-
-                self.completed_repeats = self.completed_repeats.saturating_add(1);
-                match self.reset_decoder().and_then(|()| self.decode_next()) {
-                    Ok(Some((image, delay))) => {
-                        self.current_delay = delay;
-                        self.last_frame_update = Instant::now();
-                        GifAdvance::Frame(image)
-                    }
-                    Ok(None) => GifAdvance::Finished,
-                    Err(error) => GifAdvance::Failed(error.to_string()),
-                }
-            }
-            Err(error) => GifAdvance::Failed(error.to_string()),
-        }
+        self.reset_decoder()?;
+        self.decode_next()?
+            .ok_or_else(|| ImageError::InvalidFormat("GIF contains no image frames".to_string()))
     }
 }
 
@@ -498,21 +624,20 @@ impl ImageCache {
         }
     }
 
-    /// Read GIF timing without retaining decoded RGBA canvases.
+    /// Read GIF timing without decoding any frame.
     ///
-    /// The decoder reuses its frame buffer, so memory remains bounded even for
-    /// long terminal recordings that a capable terminal will animate itself.
+    /// Only the frames' headers are read: decompressing each frame just to
+    /// learn its delay cost about half a second on a 66 MB recording, on the
+    /// UI thread, as the viewer opened.
     pub fn extract_gif_frame_delays(path: &Path) -> Result<Vec<u32>, ImageError> {
-        let file = File::open(path).map_err(|_| ImageError::NotFound)?;
         let mut options = gif::DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::Indexed);
-        let mut decoder = options
-            .read_info(BufReader::new(file))
-            .map_err(|error| ImageError::InvalidFormat(error.to_string()))?;
+        options.skip_frame_decoding(true);
+        let mut decoder = read_gif_with(path, options)?
+            .ok_or_else(|| ImageError::InvalidFormat("not a GIF".to_string()))?;
         let mut delays = Vec::new();
 
         while let Some(frame) = decoder
-            .read_next_frame()
+            .next_frame_info()
             .map_err(|error| ImageError::InvalidFormat(error.to_string()))?
         {
             delays.push((u32::from(frame.delay) * 10).max(20));
@@ -527,67 +652,6 @@ impl ImageCache {
         }
     }
 
-    /// Decode one composited GIF frame with bounded memory.
-    ///
-    /// Used only for deliberate pause/step actions during terminal-native
-    /// playback; normal playback never expands all frames into memory.
-    pub fn extract_gif_frame(
-        path: &Path,
-        target_index: usize,
-    ) -> Result<image::DynamicImage, ImageError> {
-        let file = File::open(path).map_err(|_| ImageError::NotFound)?;
-        let mut options = gif::DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::RGBA);
-        let mut decoder = options
-            .read_info(BufReader::new(file))
-            .map_err(|error| ImageError::InvalidFormat(error.to_string()))?;
-        let width = u32::from(decoder.width());
-        let height = u32::from(decoder.height());
-        let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-        let mut previous_disposal = gif::DisposalMethod::Keep;
-        let mut previous_rect = (0, 0, 0, 0);
-        let mut restore_previous: Option<RgbaImage> = None;
-        let mut index = 0;
-
-        while let Some(frame) = decoder
-            .read_next_frame()
-            .map_err(|error| ImageError::InvalidFormat(error.to_string()))?
-        {
-            match previous_disposal {
-                gif::DisposalMethod::Background => {
-                    Self::clear_gif_rect(&mut canvas, previous_rect);
-                }
-                gif::DisposalMethod::Previous => {
-                    if let Some(previous) = restore_previous.take() {
-                        canvas = previous;
-                    }
-                }
-                gif::DisposalMethod::Any | gif::DisposalMethod::Keep => {}
-            }
-
-            let restore_for_this_frame =
-                (frame.dispose == gif::DisposalMethod::Previous).then(|| canvas.clone());
-            Self::composite_gif_frame(&mut canvas, frame, width, height);
-            if index == target_index {
-                return Ok(image::DynamicImage::ImageRgba8(canvas));
-            }
-
-            previous_disposal = frame.dispose;
-            previous_rect = (
-                frame.left.into(),
-                frame.top.into(),
-                frame.width.into(),
-                frame.height.into(),
-            );
-            restore_previous = restore_for_this_frame;
-            index += 1;
-        }
-
-        Err(ImageError::InvalidFormat(format!(
-            "GIF frame {target_index} is out of range"
-        )))
-    }
-
     fn clear_gif_rect(canvas: &mut RgbaImage, rect: (u32, u32, u32, u32)) {
         let (left, top, width, height) = rect;
         for y in top..top.saturating_add(height).min(canvas.height()) {
@@ -597,132 +661,21 @@ impl ImageCache {
         }
     }
 
-    /// Extract all frames from a GIF file with timing information.
-    ///
-    /// Returns a vector of frames with their delays in milliseconds.
-    /// For non-GIF images, returns a single frame with 0ms delay (static).
-    /// Maintains a persistent canvas to properly handle GIF disposal methods.
-    pub fn extract_all_frames(path: &Path) -> Result<Vec<GifFrame>, ImageError> {
-        use std::fs::File;
-
-        let file = File::open(path).map_err(|_| ImageError::NotFound)?;
-        let reader = BufReader::new(file);
-
-        let mut options = gif::DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::RGBA);
-
-        match options.read_info(reader) {
-            Ok(mut decoder) => {
-                let width = decoder.width() as u32;
-                let height = decoder.height() as u32;
-                let mut frames = Vec::new();
-
-                // Persistent canvas for proper frame compositing
-                let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-                let mut previous_disposal = gif::DisposalMethod::Keep;
-                let mut previous_rect = (0, 0, 0, 0);
-                let mut restore_previous: Option<RgbaImage> = None;
-
-                while let Ok(Some(frame)) = decoder.read_next_frame() {
-                    // Disposal applies immediately before the following frame.
-                    match previous_disposal {
-                        gif::DisposalMethod::Background => {
-                            Self::clear_gif_rect(&mut canvas, previous_rect);
-                        }
-                        gif::DisposalMethod::Previous => {
-                            if let Some(previous) = restore_previous.take() {
-                                canvas = previous;
-                            }
-                        }
-                        gif::DisposalMethod::Any | gif::DisposalMethod::Keep => {}
-                    }
-
-                    let restore_for_this_frame =
-                        (frame.dispose == gif::DisposalMethod::Previous).then(|| canvas.clone());
-
-                    // Composite this frame onto the persistent canvas
-                    Self::composite_gif_frame(&mut canvas, frame, width, height);
-
-                    // Clone the current canvas state as this frame
-                    let delay_ms = (frame.delay as u32) * 10;
-                    frames.push(GifFrame {
-                        image: image::DynamicImage::ImageRgba8(canvas.clone()),
-                        delay_ms: delay_ms.max(20), // Min 20ms (50fps cap)
-                    });
-
-                    previous_disposal = frame.dispose;
-                    previous_rect = (
-                        frame.left.into(),
-                        frame.top.into(),
-                        frame.width.into(),
-                        frame.height.into(),
-                    );
-                    restore_previous = restore_for_this_frame;
-                }
-
-                if frames.is_empty() {
-                    Self::load_static_image(path)
-                } else {
-                    Ok(frames)
-                }
-            }
-            Err(_) => Self::load_static_image(path),
-        }
-    }
-
-    /// Load a static (non-GIF) image as a single frame
-    fn load_static_image(path: &Path) -> Result<Vec<GifFrame>, ImageError> {
-        image::ImageReader::open(path)
-            .ok()
-            .and_then(|r| r.with_guessed_format().ok())
-            .and_then(|r| r.decode().ok())
-            .map(|img| {
-                vec![GifFrame {
-                    image: img,
-                    delay_ms: 0,
-                }]
-            })
-            .ok_or_else(|| ImageError::InvalidFormat("Unsupported image format".to_string()))
-    }
-
     /// Extract the first frame from an image file, properly handling GIFs.
     ///
     /// For regular images, returns the image as-is.
     /// For GIFs, extracts and composites the first frame with proper transparency.
     pub fn extract_first_frame(path: &Path) -> Result<image::DynamicImage, ImageError> {
-        use std::fs::File;
-
-        let file = File::open(path).map_err(|_| ImageError::NotFound)?;
-        let reader = BufReader::new(file);
-
-        let mut options = gif::DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::RGBA);
-
-        match options.read_info(reader) {
-            Ok(mut decoder) => {
-                let width = decoder.width() as u32;
-                let height = decoder.height() as u32;
-
-                if let Ok(Some(frame)) = decoder.read_next_frame() {
-                    let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-                    Self::composite_gif_frame(&mut canvas, frame, width, height);
-                    Ok(image::DynamicImage::ImageRgba8(canvas))
-                } else {
-                    image::ImageReader::open(path)
-                        .ok()
-                        .and_then(|r| r.with_guessed_format().ok())
-                        .and_then(|r| r.decode().ok())
-                        .ok_or_else(|| {
-                            ImageError::InvalidFormat("Failed to decode image".to_string())
-                        })
-                }
+        if let Some(mut decoder) = read_gif(path, gif::ColorOutput::RGBA)? {
+            let width = decoder.width() as u32;
+            let height = decoder.height() as u32;
+            if let Ok(Some(frame)) = decoder.read_next_frame() {
+                let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
+                Self::composite_gif_frame(&mut canvas, frame, width, height);
+                return Ok(image::DynamicImage::ImageRgba8(canvas));
             }
-            Err(_) => image::ImageReader::open(path)
-                .ok()
-                .and_then(|r| r.with_guessed_format().ok())
-                .and_then(|r| r.decode().ok())
-                .ok_or_else(|| ImageError::InvalidFormat("Unsupported format".to_string())),
         }
+        decode_still(path)
     }
 }
 
@@ -730,15 +683,26 @@ impl ImageCache {
 mod tests {
     use super::*;
 
+    /// A BMP header declaring 10000x10000, with no pixels behind it. The
+    /// size in the header is enough to refuse it, before any decoding.
     #[test]
-    fn test_gif_frame_struct() {
-        // GifFrame should store image and delay information
-        let img = image::DynamicImage::new_rgba8(10, 10);
-        let frame = GifFrame {
-            image: img,
-            delay_ms: 100,
-        };
-        assert_eq!(frame.delay_ms, 100);
+    fn a_huge_still_is_refused_from_its_header() {
+        let mut bmp = Vec::new();
+        bmp.extend_from_slice(b"BM");
+        bmp.extend_from_slice(&54u32.to_le_bytes()); // file size
+        bmp.extend_from_slice(&0u32.to_le_bytes()); // reserved
+        bmp.extend_from_slice(&54u32.to_le_bytes()); // pixel data offset
+        bmp.extend_from_slice(&40u32.to_le_bytes()); // header size
+        bmp.extend_from_slice(&10_000i32.to_le_bytes()); // width
+        bmp.extend_from_slice(&10_000i32.to_le_bytes()); // height
+        bmp.extend_from_slice(&1u16.to_le_bytes()); // planes
+        bmp.extend_from_slice(&24u16.to_le_bytes()); // bits per pixel
+        bmp.extend_from_slice(&[0; 24]); // compression and the rest
+        let file = tempfile::Builder::new().suffix(".bmp").tempfile().unwrap();
+        std::fs::write(file.path(), &bmp).unwrap();
+
+        let error = decode_still(file.path()).unwrap_err();
+        assert!(error.to_string().contains("too large"), "{error}");
     }
 
     #[test]
@@ -802,7 +766,18 @@ mod tests {
     }
 
     #[test]
-    fn streaming_gif_advances_and_loops_without_retaining_all_frames() {
+    fn an_inline_image_is_kept_no_larger_than_it_can_be_shown() {
+        let big = image::DynamicImage::new_rgba8(8000, 2000);
+        let fitted = fit_for_inline(big);
+        assert_eq!((fitted.width(), fitted.height()), (2048, 512));
+
+        let small = image::DynamicImage::new_rgba8(300, 200);
+        let fitted = fit_for_inline(small);
+        assert_eq!((fitted.width(), fitted.height()), (300, 200));
+    }
+
+    #[test]
+    fn streaming_gif_steps_and_loops_without_retaining_all_frames() {
         use std::borrow::Cow;
 
         let mut file = tempfile::NamedTempFile::new().expect("temporary gif");
@@ -836,27 +811,11 @@ mod tests {
         let (mut animation, first) = StreamingGif::open(file.path()).expect("streaming decoder");
         assert_eq!(first.to_rgba8().get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
 
-        animation.last_frame_update = Instant::now() - Duration::from_millis(21);
-        assert!(animation.time_until_next_frame().is_none());
-        assert!(matches!(animation.advance(), GifAdvance::Waiting));
-
-        animation.set_active(true);
-        animation.last_frame_update = Instant::now() - Duration::from_millis(21);
-        let GifAdvance::Frame(second) = animation.advance() else {
-            panic!("second frame should be due");
-        };
+        let second = animation.next_frame_looping().expect("second frame");
         assert_eq!(second.to_rgba8().get_pixel(0, 0), &Rgba([0, 255, 0, 255]));
 
-        animation.last_frame_update = Instant::now() - Duration::from_millis(21);
-        let GifAdvance::Frame(looped) = animation.advance() else {
-            panic!("infinite GIF should loop to its first frame");
-        };
+        let looped = animation.next_frame_looping().expect("looped frame");
         assert_eq!(looped.to_rgba8().get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
-
-        animation.set_active(false);
-        animation.last_frame_update = Instant::now() - Duration::from_millis(21);
-        assert!(animation.time_until_next_frame().is_none());
-        assert!(matches!(animation.advance(), GifAdvance::Waiting));
     }
 
     #[test]
@@ -884,7 +843,61 @@ mod tests {
             ImageCache::extract_gif_frame_delays(file.path()).unwrap(),
             vec![20, 70]
         );
-        let second = ImageCache::extract_gif_frame(file.path(), 1).unwrap();
+        let (mut stream, first) = StreamingGif::open(file.path()).unwrap();
+        assert_eq!(first.to_rgba8().get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
+        let second = stream.next_frame_looping().unwrap();
         assert_eq!(second.to_rgba8().get_pixel(0, 0), &Rgba([0, 255, 0, 255]));
+        // The viewer loops by asking past the end.
+        let wrapped = stream.next_frame_looping().unwrap();
+        assert_eq!(wrapped.to_rgba8().get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
+    }
+
+    /// A GIF's canvas size comes from its header, so a file of a few dozen
+    /// bytes can ask for gigabytes. Every path that composites a GIF has to
+    /// refuse it before allocating.
+    #[test]
+    fn a_gif_declaring_a_huge_canvas_is_refused_before_allocating() {
+        use std::borrow::Cow;
+
+        let mut file = tempfile::NamedTempFile::new().expect("temporary gif");
+        {
+            let palette = [255, 0, 0, 0, 255, 0];
+            let mut encoder = gif::Encoder::new(file.as_file_mut(), 60_000, 60_000, &palette)
+                .expect("gif encoder");
+            let frame = gif::Frame {
+                width: 1,
+                height: 1,
+                buffer: Cow::Owned(vec![0]),
+                ..gif::Frame::default()
+            };
+            encoder.write_frame(&frame).expect("frame");
+        }
+        let path = file.path();
+        assert!(std::fs::metadata(path).unwrap().len() < 100);
+
+        assert!(StreamingGif::open(path).is_err());
+        assert!(ImageCache::extract_first_frame(path).is_err());
+        assert!(ImageCache::extract_gif_frame_delays(path).is_err());
+    }
+
+    /// Opening a FIFO blocks until something writes to it, which on the UI
+    /// thread freezes the session with raw mode on. An image path that is not
+    /// a regular file is refused without opening it.
+    #[test]
+    fn an_image_path_that_is_not_a_regular_file_is_refused() {
+        let dir = tempfile::tempdir().expect("temporary dir");
+        assert!(open_image_file(dir.path()).is_err());
+        assert!(ImageCache::extract_first_frame(dir.path()).is_err());
+
+        #[cfg(unix)]
+        {
+            let fifo = dir.path().join("pipe.png");
+            let c_path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+            // SAFETY: `c_path` is a valid NUL-terminated path for the call's duration.
+            assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+            assert!(open_image_file(&fifo).is_err());
+            assert!(ImageCache::extract_first_frame(&fifo).is_err());
+            assert!(StreamingGif::open(&fifo).is_err());
+        }
     }
 }

@@ -1,21 +1,19 @@
 # treemd Query Language (tql)
 
-> **Status**: Design specification. Describes the intended language, not only what ships today
-> **Verified against**: treemd 0.7.0
-> **Goal**: jq-like querying for Markdown - maximum DX and utility
+> **Status**: Reference for the language as treemd ships it. Constructs that
+> do not exist are marked **Not implemented** and name the working
+> alternative where there is one.
+> **Goal**: jq-like querying for Markdown, with maximum DX and utility
 
-Everything here is implemented **except** the constructs marked
-**Not implemented**. Those parse-error or return "Unknown function" today;
-each one names the working alternative where there is one. For the reference
-covering only shipped behavior, run `treemd --query-help`.
+`treemd --query-help` prints a shorter summary of the same language.
 
 ## Design Philosophy
 
 1. **jq-compatible where sensible** - Same operators for same operations
 2. **Markdown-native selectors** - `.h1`, `.code`, `.link` feel natural
-3. **Composable** - Pipes and filters work exactly like jq
+3. **Composable** - Pipes and filters work like jq
 4. **Progressive complexity** - Simple things are simple, complex things possible
-5. **Excellent error messages** - Rust-quality diagnostics with suggestions
+5. **Clear error messages** - Parse errors point at the offending token
 6. **Unix philosophy** - Plays well with other tools via pipes
 
 ## Quick Reference
@@ -30,7 +28,7 @@ treemd -q '.link' doc.md                        # All links
 treemd -q '.h2 | select(contains("API"))' doc.md
 
 # Hierarchy
-treemd -q '.h1[Features] > .h2' doc.md          # h2s under Features
+treemd -q '.h1[Features] > .h2' doc.md          # h2s directly under Features
 
 # Properties
 treemd -q '.h2 | text' doc.md                   # Just heading text
@@ -38,6 +36,9 @@ treemd -q '.link | url' doc.md                  # Just URLs
 
 # Content extraction
 treemd -q '.h1[Installation] | content' doc.md  # Section content
+
+# Counting
+treemd -q '.h2 | count' doc.md                  # Number of h2s
 ```
 
 ---
@@ -48,12 +49,16 @@ treemd -q '.h1[Installation] | content' doc.md  # Section content
 
 | Selector | Description | Example |
 |----------|-------------|---------|
-| `.h` | All headings (any level) | `.h` |
+| `.h` | All headings (any level). Aliases: `.heading`, `.headings`, `.header` | `.h` |
 | `.h1` - `.h6` | Headings at specific level | `.h2` |
-| `.h[text]` | Heading matching text (fuzzy) | `.h[Install]` |
-| `.h["text"]` | Heading matching text (exact) | `.h["Getting Started"]` |
+| `.h[text]` | Headings whose text contains `text`, ignoring case | `.h[Install]` |
+| `.h["text"]` | Headings whose whole text is `text`, ignoring case | `.h["Getting Started"]` |
 | `.h[/regex/]` | **Not implemented**. Use `.h \| select(matches("Chapter [0-9]+"))` | `.h[/Chapter \d+/]` |
 | `.h1[text]` | Level + text filter combined | `.h1[Features]` |
+
+A bracketed word is matched as text, keywords included, so `.h[end]` finds
+"The End". Everything up to the `]` is the text, spaces and punctuation
+included: `.h[Getting Started]`, `.code[c++]`, `.code[objective-c]`.
 
 ### Code Blocks
 
@@ -74,40 +79,35 @@ from 1, including for a block nested in a list item or a blockquote.
 
 | Selector | Description | Example |
 |----------|-------------|---------|
-| `.link` | All links | `.link` |
+| `.link` | All links. Alias: `.a` | `.link` |
 | `.link[anchor]` | Anchor links only | `.link[anchor]` |
 | `.link[external]` | External URLs only | `.link[external]` |
 | `.link[relative]` | Relative file links | `.link[relative]` |
 | `.link[wikilink]` | Wikilinks `[[...]]` | `.link[wikilink]` |
 
+The four type names filter by type only on links. On anything else they are
+ordinary text filters, so `.h[external]` finds "External APIs".
+
 ### Other Elements
 
-| Selector | Description |
-|----------|-------------|
-| `.img` | All images (see caveats below) |
-| `.table` | All tables |
-| `.list` | All lists |
-| `.blockquote` | All blockquotes |
-| `.para` | All paragraphs |
-| `.frontmatter` | YAML front matter |
+| Selector | Aliases | Description |
+|----------|---------|-------------|
+| `.img` | `.image`, `.images` | All images (see caveats below) |
+| `.table` | `.tables` | All tables |
+| `.list` | `.ul`, `.ol`, `.lists` | All lists |
+| `.blockquote` | `.quote`, `.bq` | All blockquotes |
+| `.para` | `.p`, `.paragraph` | All paragraphs |
+| `.frontmatter` | `.fm`, `.meta`, `.yaml` | YAML front matter, as an object |
 
 `.img` finds images written standalone, inline in a sentence, in a heading,
 inside a blockquote, wrapped in a link, and in a list item whether the list is
-tight or loose. One case is still wrong in the underlying parser:
+tight or loose. A heading's image is not part of its text: `# Title ![a](a.png)`
+is `.h1` text `Title`, anchor `title`.
 
-- **A heading image's alt is also copied into the heading text.**
-  `# Title ![a](a.png)` reports the image correctly but gives `.h1` a text of
-  `Title a` rather than `Title`, and the generated anchor is `title-a`. Tracked
-  at [turbovault#78](https://github.com/Epistates/turbovault/issues/78).
-
-One case is wrong for `.list` and `.blockquote`, also in the parser:
-
-- **A list item's indented continuation inside a blockquote is joined to the
-  item with no separator.** Given `> - step` followed by a blank quoted line
-  and an indented `>   text`, the item's `.content` is `steptext` and the
-  quote's is `- steptext`. The same list outside a blockquote is correct, and
-  so is an unindented paragraph inside one. Tracked at
-  [turbovault#77](https://github.com/Epistates/turbovault/issues/77).
+`.list` reports every list in document order, a nested list right after the
+list that holds it. A nested list is its own entry rather than text in its
+parent item's `.content`, so `- outer` holding `- inner` gives two lists, one
+item each.
 
 ### Document
 
@@ -116,39 +116,56 @@ One case is wrong for `.list` and `.blockquote`, also in the parser:
 | `.` | Entire document |
 | `. \| stats` | Document statistics |
 
+### Selectors After a Pipe
+
+A selector does not always mean "everywhere in the document":
+
+- **On a heading, it looks inside that heading's section**, the same as `>>`.
+  `.h2[0] | .code` is the code under the first h2, and
+  `.h | {title: .text, code: [.code | .lang]}` lists each section's own
+  languages. `.frontmatter` belongs to the document and is the same from
+  anywhere.
+- **On a value that has a key or property of the same name, it reads that
+  key.** `.fm | .image` is the front matter's `image` field, and
+  `{p: 1} | .p` is `1`, not every paragraph. On the document itself the
+  selector always wins.
+
 ---
 
 ## Hierarchy Navigation
-
-### Parent-Child Relationships
 
 ```bash
 # Direct children (CSS > combinator)
 .h1 > .h2                    # h2s that are direct children of h1s
 .h1[Features] > .h2          # h2s directly under "Features"
-.h1 > .code                  # code blocks directly under any h1
+.h1 > .code                  # code in each h1's own body, before its first subheading
 
-# Descendants (CSS >> or space combinator)
+# Descendants
 .h1 >> .h2                   # h2s anywhere under h1s (any depth)
 .h1[Features] >> .code       # code blocks anywhere under Features
 .h1 >> .link                 # all links under any h1 section
+.h2[Install] > .table        # works for tables, lists, images, paragraphs, quotes too
 ```
 
-### Navigation Functions
+`>` is the hierarchy operator only between two selectors. Between anything
+else it is greater-than, so `select(2 > .level)` is a comparison.
 
-**Not implemented.** Every function in this section reports
-`Unknown function` today. Use the hierarchy operators above instead:
-`.h1[Features] > .h2` covers the `children` case and `.h1 >> .h2` covers
-`descendants`.
+### Heading Relationships
+
+`.children` and `.parent` are heading properties:
 
 ```bash
-.h2[0] | parent              # Parent heading of first h2
-.h1[0] | children            # All direct child headings
-.h2[0] | siblings            # Sibling headings (same level, same parent)
-.h2[0] | next                # Next heading at same level
-.h2[0] | prev                # Previous heading at same level
-.h1 | descendants            # All descendant headings
+.h1[0].children[] | .text    # Direct child headings of the first h1
+.h3 | .parent | .text        # The heading each h3 sits under
 ```
+
+`.children` is an array (empty when there are none), and `.parent` is a
+heading or `null`.
+
+**Not implemented** as functions: `parent`, `children`, `siblings`, `next`,
+`prev` and `descendants` all report `Unknown function`. Use the properties
+above, `.h1 >> .h` for descendants, and `.h2[0] | .parent | .children[]` for
+siblings (which includes the heading itself).
 
 ---
 
@@ -173,6 +190,16 @@ One case is wrong for `.list` and `.blockquote`, also in the parser:
 .table[0].rows[][0]          # First cell of every row
 ```
 
+After an expression that yields several arrays, an index applies to each one,
+as in jq: `.table[0].rows[][0]` takes the first cell of every row. After
+anything else it picks from the results, so `(.h | select(.level == 2))[0]`
+is the first matching heading.
+
+On an array, again as in jq, a slice is an array (`[1, 2, 3] | .[1:]` is
+`[2, 3]`), and an index past either end is `null`. A string slices by
+character: `"treemd" | .[0:4]` is `"tree"`. A slice of selector results, such
+as `.h2[0:3]`, stays a stream of elements.
+
 ---
 
 ## Iteration
@@ -180,10 +207,11 @@ One case is wrong for `.list` and `.blockquote`, also in the parser:
 The `[]` operator without index iterates over all elements:
 
 ```bash
-.h[]                         # Iterate over all headings
+.h[]                         # Every heading
 .h[] | text                  # Text of each heading (one per line)
 .table[].rows[]              # All rows of all tables
 .code[] | lang               # Language of each code block
+[1, 2] | .[]                 # Items of an array
 ```
 
 ---
@@ -200,6 +228,36 @@ Pipes (`|`) chain operations, passing output to input:
 .code | select(.lang == "rust") | text  # Rust code content
 ```
 
+### Streams and Collection Functions
+
+A selector yields a **stream**, one value per match, and most stages run once
+per value: `.h2 | text` runs `text` on each heading. Collection functions are
+different. After a stream they run **once on all of it**:
+
+```bash
+.h | count                   # Number of headings, not 1 per heading
+.h | text | join(", ")       # One line, every heading
+.h | sort_by(.level) | text  # Sorted, still one per line
+.h[Missing] | count          # 0
+```
+
+The collection functions are `count`, `length`, `first`, `last`, `nth`,
+`limit`, `skip`, `sort`, `sort_by`, `unique`, `reverse`, `group_by`, `join`,
+`min`, `max`, `add`, `any`, `all`, `levels`, `langs`, `types` and `stats`. The
+ordering ones (`sort`, `sort_by`, `unique`, `reverse`, `limit`, `skip`) hand
+back a stream, so a pipe can carry on per value after them.
+
+Given a single value they work on that value, so `[.h2] | count` counts the
+array and `.h1[0].text | count` counts characters. Whether something is a
+stream depends on the query, not on how many matches the document happens to
+have: `.h1.text | count` counts h1s even when there is one. Inside an object
+or a `select`, the input is a single value again, so
+`.h | {n: (.children | count)}` gives each heading's child count.
+
+A stage that starts with a collection function works on the whole stream
+too, so `.h | count > 3` is one `true` or `false` and `.h | count + 1` is one
+number.
+
 ### Multiple Outputs
 
 Comma generates multiple outputs:
@@ -209,8 +267,10 @@ Comma generates multiple outputs:
 .code[rust], .code[python]   # Rust and Python code
 ```
 
-A comma **inside parentheses** is not implemented. `(.h1, .h2) | text`
-fails with `Expected ')', found ','`. Pipe each branch separately instead:
+A comma separates whole queries, so it binds more loosely than `|`:
+`.h1 | text, .h2` is `(.h1 | text)` then `.h2`. A comma **inside
+parentheses** is not implemented. `(.h1, .h2) | text` fails with
+`Expected ')', found ','`. Pipe each branch separately instead:
 `.h1 | text, .h2 | text`.
 
 ---
@@ -224,12 +284,12 @@ fails with `Expected ')', found ','`. Pipe each branch separately instead:
 | `.text` | string | Heading text content |
 | `.level` | number | Heading level (1-6) |
 | `.offset` | number | Byte offset in source |
-| `.line` | number | Line number (1-indexed) |
-| `.content` | string | Section content (text under heading) |
-| `.md` | string | Raw markdown of section |
-| `.slug` | string | URL-friendly slug |
-| `.children` | array | Child headings |
-| `.parent` | heading? | Parent heading (if any) |
+| `.line` | number | The heading's own line (1-indexed), as `-l -n` reports it |
+| `.content` | string | Section body: everything under the heading, subsections included, up to the next heading at the same or a shallower level |
+| `.md` | string | Raw markdown of the section, heading line and subsections included |
+| `.slug` | string | The heading's anchor, in the config's `slug_style`. With `github`, a repeated heading is numbered (`setup-1`) |
+| `.children` | array | Headings directly under this one |
+| `.parent` | heading or null | Nearest heading above at a shallower level |
 
 ### Code Block Properties
 
@@ -270,6 +330,18 @@ fails with `Expected ')', found ','`. Pipe each branch separately instead:
 Access these as properties (`.img[0].alt`). Only `src`/`url`/`href` exist as
 pipe functions; `.img | alt` reports `Unknown function`.
 
+### Other Properties
+
+| Value | Properties |
+|-------|------------|
+| List | `.items` (array of item text), `.ordered` |
+| Paragraph, blockquote | `.text` |
+| Document | `.heading_count`, `.word_count`, `.text` |
+| Object, front matter | any key, as `.key` |
+
+Asking for a property a value does not have is an error,
+`Property 'x' not found on object`, rather than `null` as in jq.
+
 ---
 
 ## Filtering with `select()`
@@ -277,11 +349,11 @@ pipe functions; `.img | alt` reports `Unknown function`.
 The `select(condition)` function filters elements:
 
 ```bash
-# Text matching
+# Text matching (contains, startswith and endswith ignore case)
 .h | select(contains("API"))           # Headings containing "API"
 .h | select(startswith("Chapter"))     # Headings starting with "Chapter"
 .h | select(endswith("Guide"))         # Headings ending with "Guide"
-.h | select(matches("[0-9]+"))         # Headings matching regex
+.h | select(matches("[0-9]+"))         # Headings matching a regex (case-sensitive)
 
 # Property comparison
 .h | select(.level >= 2)               # h2 and deeper
@@ -294,10 +366,12 @@ The `select(condition)` function filters elements:
 .h | select(.level >= 2 and contains("API"))
 .code | select(.lang == "rust" or .lang == "python")
 .h | select(not contains("deprecated"))
+.h | select(contains("deprecated") | not)
 
 # Content-based
 .code | select(.text | lines > 10)     # Long code blocks
 .h | select(.content | words > 100)    # Substantial sections
+.h | select(.code | count > 0)         # Sections with code
 ```
 
 ---
@@ -308,29 +382,34 @@ The `select(condition)` function filters elements:
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `count` | Count elements | `.h \| count` |
-| `length` | Same as count | `.code \| length` |
-| `first` | First element | `.h2 \| first` |
-| `last` | Last element | `.h2 \| last` |
-| `nth(n)` | Element at index | `.h2 \| nth(3)` |
+| `count` | Count values. Aliases: `length`, `len`, `size` | `.h \| count` |
+| `first` | First value. Alias: `head` | `.h2 \| first` |
+| `last` | Last value | `.h2 \| last` |
+| `nth(n)` | Value at index `n`, negative from the end, nothing when out of range | `.h2 \| nth(3)` |
+| `limit(n)` | First `n` values. Alias: `take` | `.h \| limit(5)` |
+| `skip(n)` | All but the first `n`. Alias: `drop` | `.h \| skip(1)` |
 | `reverse` | Reverse order | `.h \| reverse` |
-| `sort` | Sort alphabetically | `.h \| text \| sort` |
-| `sort_by(f)` | Sort by function | `.h \| sort_by(.level)` |
-| `unique` | Deduplicate | `.code \| lang \| unique` |
-| `flatten` | Flatten nested arrays | `.table \| rows \| flatten` |
-| `group_by(f)` | Group by function | `.h \| group_by(.level)` |
+| `sort` | Sort in jq's order: null, booleans, numbers, strings, arrays, objects | `.h \| text \| sort` |
+| `sort_by(f)` | Sort by `f`; a string names a property | `.h \| sort_by(.level)` |
+| `unique` | Drop repeated values, keeping the first of each | `.code \| lang \| unique` |
+| `flatten` | Flatten one level of nested arrays | `.table \| .rows \| flatten` |
+| `group_by(f)` | Object of arrays keyed by `f`; a string names a property. Alias: `group` | `.h \| group_by(.level)` |
+| `min`, `max` | Smallest/largest number | `.h \| .level \| max` |
+| `add` | Sum numbers, or concatenate as text | `.h \| .level \| add` |
+| `keys` | Keys of an object, indices of an array | `.frontmatter \| keys` |
+| `values` | Values of an object, items of an array | `.frontmatter \| values` |
 
 ### String Functions
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `upper` | Uppercase | `.h \| text \| upper` |
-| `lower` | Lowercase | `.h \| text \| lower` |
+| `upper` | Uppercase. Alias: `ascii_upcase` | `.h \| text \| upper` |
+| `lower` | Lowercase. Alias: `ascii_downcase` | `.h \| text \| lower` |
 | `trim` | Trim whitespace | `.h \| text \| trim` |
-| `split(s)` | Split string | `.h \| text \| split(" ")` |
-| `join(s)` | Join array | `.h \| text \| join(", ")` |
-| `replace(a,b)` | Replace substring | `.h \| text \| replace("-", " ")` |
-| `slugify` | URL-friendly slug | `.h \| text \| slugify` |
+| `split(s)` | Split string into an array | `.h \| text \| split(" ")` |
+| `join(s)` | Join values with `s` | `.h \| text \| join(", ")` |
+| `replace(a, b)` | Replace every `a` with `b` | `.h \| text \| replace("-", " ")` |
+| `slugify` | URL-friendly slug, in the config's `slug_style` (with no numbering for repeats; use `.slug` for that) | `.h \| text \| slugify` |
 
 ### Content Functions
 
@@ -338,7 +417,9 @@ The `select(condition)` function filters elements:
 |----------|-------------|---------|
 | `text` | Get text content | `.h \| text` |
 | `content` | Section content | `.h1[Install] \| content` |
-| `md` | Raw markdown | `.h1[Install] \| md` |
+| `md` | Raw markdown. Alias: `markdown` | `.h1[Install] \| md` |
+| `url` | Link URL or image source. Aliases: `href`, `src` | `.link \| url` |
+| `lang` | Code block language. Alias: `language` | `.code \| lang` |
 | `lines` | Line count | `.code \| text \| lines` |
 | `words` | Word count | `.h \| content \| words` |
 | `chars` | Character count | `.h \| text \| chars` |
@@ -352,17 +433,56 @@ The `select(condition)` function filters elements:
 | `langs` | Code block count by lang | `.code \| langs` |
 | `types` | Link count by type | `.link \| types` |
 
+`levels`, `langs` and `types` count the elements they are given, so
+`.h2 | levels` is `{"h2": 3}` and `.h1[API] >> .code | langs` covers one
+section. On the document, or on their own, they count the whole document.
+`stats` always describes the whole document.
+
 ### Boolean Functions
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `contains(s)` | Contains substring | `select(contains("API"))` |
-| `startswith(s)` | Starts with | `select(startswith("Chapter"))` |
-| `endswith(s)` | Ends with | `select(endswith("Guide"))` |
+| `contains(s)` | Contains substring, ignoring case. Alias: `includes` | `select(contains("API"))` |
+| `startswith(s)` | Starts with, ignoring case. Alias: `starts_with` | `select(startswith("Chapter"))` |
+| `endswith(s)` | Ends with, ignoring case. Alias: `ends_with` | `select(endswith("Guide"))` |
 | `matches(r)` | Regex match | `select(matches("[0-9]+"))` |
-| `empty` | Is empty | `select(.content \| empty)` |
-| `any(f)` | Any element matches | `.code \| any(.lang == "rust")` |
-| `all(f)` | All elements match | `.h \| all(.level <= 3)` |
+| `has(key)` | Object has key | `.frontmatter \| has("draft")` |
+| `empty` | Is null, or an empty string, array or object | `select(.content \| empty)` |
+| `any(f)` | Any value matches | `.code \| any(.lang == "rust")` |
+| `all(f)` | All values match | `.h \| all(.level <= 3)` |
+| `not` | Negate | `select(.draft \| not)` |
+| `type` | Type name: `heading`, `code`, `string`, `number`, ... | `.h[0] \| type` |
+
+Unlike jq, `empty` is a test that returns `true` or `false`; it does not
+produce an empty stream.
+
+---
+
+## Operators
+
+| Operator | Meaning |
+|----------|---------|
+| `==`, `!=` | Equality. Values of different types are never equal: `1 == "1"` is `false` |
+| `<`, `<=`, `>`, `>=` | Comparison. Numbers and strings compare as you would expect; values of different types follow jq's order, null < booleans < numbers < strings < arrays < objects, so `1 < "a"` is `true` |
+| `and`, `or`, `not` | Logic. `not` is a prefix (`not .x`) or a pipe stage (`.x \| not`) |
+| `+` | Adds numbers; joins strings, arrays and objects (keys on the right win). `null + x` is `x` |
+| `-` | Subtracts numbers; removes from an array every item of another: `[1, 2, 3] - [2]` is `[1, 3]` |
+| `*` | Multiplies numbers. `"ab" * 3` repeats a string |
+| `/` | Divides numbers. A string divided by a string splits it: `"a,b" / ","` |
+| `%` | Remainder of whole numbers, as in jq: `5.9 % 3` is `2` |
+| `a // b` | `a`, or `b` when `a` is null, false, `0` or empty |
+| `( )` | Grouping |
+
+Any other pair of types is an error, as in jq, so `.text + 1` fails with
+`string ("Intro") and number (1) cannot be added` and exits `5`. Turn a
+number into text first: `.text + " " + (.level | tostring)`.
+
+From tightest to loosest: `* / %`, `+ -`, `//`, comparisons, `== !=`, `not`,
+`and`, `or`, `> >>` between selectors, `|`, `,`. A prefix `not` takes the
+whole comparison after it, so `not .level == 2` is `not (.level == 2)`.
+
+`//` falls back on any falsy value, which is wider than jq, where only
+`null` and `false` do.
 
 ---
 
@@ -377,14 +497,15 @@ Build custom JSON structures:
 
 # Array construction
 [.h2[].text]
-[.h | {level, text}]
+[.h | {level: .level, text: .text}]
 
-# Nested structure (requires the `children` navigation function, see above)
-{
-  title: .h1[0].text,
-  sections: [.h2[] | {title: .text, subsections: [.children[].text]}]
-}
+# Nested structure
+[.h2[] | {title: .text, subsections: [.children[].text]}]
 ```
+
+An object value that yields one value holds that value; several become an
+array. Wrap a value in `[...]` when it should always be an array, as
+`subsections` is above.
 
 **Property projection shorthand is not implemented.** Every key needs an
 explicit value, so `{level, text}` fails with `Expected ':', found ','`.
@@ -408,7 +529,10 @@ Write the pairs out:
        elif .lang == "python" then "Python: "
        else "Other: " end + .text
 
-# Null coalescing
+# No else: a false condition passes the input through unchanged
+.h | .text | if . == "Intro" then "Introduction" end
+
+# Fallback
 .code | .lang // "unknown"       # Default if null
 ```
 
@@ -425,7 +549,16 @@ For documents with YAML front matter:
 .frontmatter.author.name        # Nested field
 .frontmatter | keys             # List all keys
 .frontmatter | has("draft")     # Check field existence
+.fm | .image                    # A key that is also an element name
+.fm["draft-of"]                 # A key with a dash or a space
+.fm."draft-of"                  # The same
+.fm.draft // false              # A missing key is null
+.fm.tags[1:]                    # A slice of an array is an array
 ```
+
+As in jq, a key the front matter or an object does not have is `null`
+rather than an error. An element's properties are fixed, so `.h | .nme` is
+still an error.
 
 ---
 
@@ -434,7 +567,8 @@ For documents with YAML front matter:
 Queries select their format with `--query-output`, **not** `-o`. The `-o` flag
 applies to `--list`/`--tree` and is silently ignored alongside `-q`, so
 `treemd -q '.h2' -o json` prints plain text and exits `0`. Supported values are
-`plain` (default), `json`, `json-pretty`, `jsonl`, `md`, and `tree`.
+`plain` (default), `json`, `json-pretty` (alias `jsonp`), `jsonl`, `md`, and
+`tree`.
 
 ### Plain Text (Default)
 
@@ -447,13 +581,23 @@ $ treemd -q '.h2' doc.md
 
 ### JSON
 
+`json` and `json-pretty` always print an array, whatever the number of
+results, so a script can parse the output without knowing the count in
+advance. `jsonl` prints one value per line.
+
 ```bash
 $ treemd -q '.h2' --query-output json doc.md
 [{"type":"heading","level":2,"text":"Introduction","line":5},{"type":"heading","level":2,"text":"Installation","line":12}]
 
+$ treemd -q '.h2[0]' --query-output json doc.md
+[{"type":"heading","level":2,"text":"Introduction","line":5}]
+
 $ treemd -q '.h2' --query-output json-pretty doc.md   # same data, indented
 $ treemd -q '.h2' --query-output jsonl doc.md         # one object per line
 ```
+
+Every element carries a `type` tag. The same JSON is used when an element is
+printed inside an object, as in `{a: .h1[0]} | text`.
 
 ### Line-Delimited (for Piping)
 
@@ -530,11 +674,10 @@ treemd -q '.code | select(contains("TODO"))' doc.md
 treemd -q '.link | group_by(.type)' doc.md
 
 # Heading hierarchy as nested JSON
-# Needs the `children` navigation function, which is not implemented
 treemd -q '[.h1[] | {
   title: .text,
   sections: [.children[] | {title: .text, subsections: [.children[].text]}]
-}]' doc.md
+}]' --query-output json doc.md
 ```
 
 ### Scripting Examples
@@ -564,8 +707,9 @@ treemd -q '[.h[] | {level: .level, text: .text, slug: (.text | slugify)}]' --que
 
 ## Error Messages
 
-Parse errors carry a source span pointing at the offending token. All errors
-go to stderr and exit `1`.
+Parse errors carry a source span pointing at the offending token. Errors go
+to stderr. As in jq, a query that does not parse exits `3` and one that fails
+while running exits `5`, so neither is mistaken for `-e`'s `1` for no results.
 
 ```
 $ treemd -q '.h2 | | text' doc.md
@@ -576,9 +720,8 @@ error: Expected expression, found '|'
           ^  unexpected token
 ```
 
-The richer diagnostics below are the target, not current behavior. Today
-semantic errors are a single line with no span, no `help:` line, and no
-"did you mean" suggestion:
+Errors found while running the query are a single line with no span. An
+unknown function may add a "did you mean" line:
 
 ```
 $ treemd -q '.h99' doc.md
@@ -586,6 +729,9 @@ error: Property 'h99' not found on document
 
 $ treemd -q '.h1 | nonexistent' doc.md
 error: Unknown function 'nonexistent'
+
+$ treemd -q 'count(1)' doc.md
+error: Function 'count' takes no arguments, got 1
 ```
 
 A filter that matches nothing is **not** an error: it prints nothing and
@@ -601,76 +747,72 @@ $ echo $?
 
 ## Grammar (EBNF)
 
+The grammar the parser implements, loosest binding first.
+
 ```ebnf
-query       = expression ( "|" expression )* ;
-expression  = term ( "," term )* ;
-term        = selector | function | construction | conditional ;
+query          = pipeline ( "," pipeline )* ;
+pipeline       = hierarchy ( "|" hierarchy )* ;
 
-selector    = "." ( element filter* index? | property ) ;
-element     = "h" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-            | "code" | "link" | "img" | "table" | "list"
-            | "blockquote" | "para" | "frontmatter" ;
+(* ">" is the child operator only between two selectors, and greater-than
+   otherwise. *)
+hierarchy      = or_expr ( ( ">" | ">>" ) or_expr )* ;
+or_expr        = and_expr ( "or" and_expr )* ;
+and_expr       = equality ( "and" equality )* ;
+equality       = comparison ( ( "==" | "!=" ) comparison )* ;
+comparison     = alternative ( ( "<" | "<=" | ">" | ">=" ) alternative )* ;
+alternative    = additive ( "//" additive )* ;
+additive       = multiplicative ( ( "+" | "-" ) multiplicative )* ;
+multiplicative = unary ( ( "*" | "/" | "%" ) unary )* ;
+unary          = "not" equality              (* not (a == b) *)
+               | "-" unary
+               | "not"                       (* as a stage: negates its input *)
+               | postfix ;
+postfix        = primary ( "." ( identifier | string ) | index | "[" string "]" )* ;
 
-filter      = "[" filter_expr "]"
-            | ">" selector
-            | ">>" selector ;
-filter_expr = string | regex | number | slice | identifier ;
+primary        = "." identifier filter* index?   (* selector, or key/property *)
+               | "." string                      (* key: ."my-key" *)
+               | "."                             (* identity *)
+               | "(" pipeline ")"
+               | object | array | conditional
+               | string | number | "true" | "false" | "null"
+               | identifier ( "(" args ")" )? ;   (* function call *)
 
-index       = "[" ( number | slice ) "]" ;
-slice       = number? ":" number? ;
+filter         = "[" ( string | word | bare ) "]" ;
+bare           = ? any text up to the "]", right after a selector ? ;
+index          = "[" ( integer | integer? ":" integer? )? "]" ;
+args           = pipeline ( "," pipeline )* ;
 
-property    = identifier ( "." property )? ;
-function    = identifier ( "(" args ")" )? ;
-args        = expression ( "," expression )* ;
+object         = "{" ( key ":" pipeline ( "," key ":" pipeline )* )? "}" ;
+key            = identifier | string ;
+array          = "[" ( pipeline ( "," pipeline )* )? "]" ;
+conditional    = "if" pipeline "then" pipeline
+                 ( "elif" pipeline "then" pipeline )*
+                 ( "else" pipeline )? "end" ;
 
-construction = object | array ;
-object      = "{" ( pair ( "," pair )* )? "}" ;
-pair        = ( identifier | string ) ":" expression ;
-array       = "[" ( expression ( "," expression )* )? "]" ;
-
-conditional = "if" expression "then" expression
-              ( "elif" expression "then" expression )*
-              ( "else" expression )? "end" ;
-
-string      = '"' [^"]* '"' | "'" [^']* "'" ;
-regex       = "/" [^/]* "/" ;
-number      = "-"? [0-9]+ ;
-identifier  = [a-zA-Z_] [a-zA-Z0-9_]* ;
+string         = '"' ( char | escape )* '"' | "'" ( char | escape )* "'" ;
+escape         = "\" ( "n" | "r" | "t" | "\" | quote ) ;
+number         = digit+ ( "." digit+ )? ( ( "e" | "E" ) ( "+" | "-" )? digit+ )? ;
+integer        = "-"? digit+ ;
+identifier     = ( letter | "_" ) ( letter | digit | "_" )* ;
+word           = identifier | keyword ;
+keyword        = "and" | "or" | "not" | "if" | "then" | "elif" | "else"
+               | "end" | "true" | "false" | "null" ;
 ```
+
+Element names for `primary` are `h`, `h1` to `h6`, `code`, `link`, `img`,
+`table`, `list`, `blockquote`, `para`, `frontmatter` and the aliases listed
+under [Element Selectors](#element-selectors). A `.name` that is none of
+these is a property. A `-` directly before a digit is part of the number
+where an operand is expected (`-3`, `[-1]`), and subtraction otherwise
+(`5-3`).
 
 ---
 
-## Implementation Phases
+## Not Implemented
 
-Phases 1, 3, and 4 have shipped. Phase 2 shipped except for the navigation
-functions, which remain the largest gap between this spec and the engine.
-
-### Phase 1: Core (MVP)
-- Element selectors: `.h`, `.h1-6`, `.code`, `.link`, `.img`, `.table`
-- Basic filters: `[text]`, `[lang]`, `[type]`
-- Indexing: `[0]`, `[-1]`, `[0:3]`
-- Properties: `.text`, `.level`, `.url`, `.lang`
-- Pipes: `|`
-- Functions: `text`, `content`, `count`, `select`, `contains`
-- Output: plain, json
-
-### Phase 2: Navigation
-- Hierarchy: `>`, `>>`
-- Navigation (not implemented): `parent`, `children`, `siblings`, `next`, `prev`
-- More properties: `.line`, `.offset`, `.slug`
-- More filters: `startswith`, `endswith`, `matches`
-
-### Phase 3: Advanced
-- Construction: `{}`, `[]`
-- Conditionals: `if-then-else`
-- String functions: `upper`, `lower`, `split`, `join`, `replace`
-- Aggregations: `levels`, `langs`, `types`, `stats`
-- Front matter: `.frontmatter`
-
-### Phase 4: Polish
-- Iteration: `.[]`
-- Multiple outputs: `,`
-- Complex filters: `and`, `or`, `not`
-- Advanced functions: `sort`, `unique`, `group_by`, `flatten`
-- REPL mode
-- Shell completions for query syntax
+- Regex filters in brackets: `.h[/re/]`, `.code[/re/]`
+- Navigation functions: `parent`, `children`, `siblings`, `next`, `prev`,
+  `descendants` (the `.parent` and `.children` properties exist)
+- Property projection shorthand: `{level, text}`
+- A comma inside parentheses: `(.h1, .h2)`
+- An interactive query REPL, and shell completion for query syntax

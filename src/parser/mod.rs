@@ -13,13 +13,41 @@ pub mod links;
 pub mod output;
 pub mod utils;
 
-pub use builder::build_json_output;
+pub use builder::{build_json_output, build_json_output_with};
+pub use content::SlugStyle;
 pub use document::{Document, Heading, HeadingNode};
 pub use links::{Link, LinkTarget, extract_links};
 pub use output::{Block, DocumentOutput, InlineElement, Section};
 pub use utils::{parse_inline_html, strip_markdown_inline};
 
 use std::path::Path;
+
+/// The byte range of the YAML frontmatter block at the start of `content`:
+/// from its opening `---` line through the closing line, which has to be
+/// exactly `---` or `...`. A byte order mark may come first. `None` when
+/// the document does not open with one.
+///
+/// Only the start of a document holds frontmatter. A `---` line later on is
+/// a rule, and a block of `key: value` lines between two rules is content.
+pub fn frontmatter_range(content: &str) -> Option<std::ops::Range<usize>> {
+    let start = if content.starts_with('\u{feff}') {
+        3
+    } else {
+        0
+    };
+    let mut lines = content[start..].split_inclusive('\n');
+    if lines.next()?.trim_end() != "---" {
+        return None;
+    }
+    let mut end = start + content[start..].find('\n')? + 1;
+    for line in lines {
+        end += line.len();
+        if matches!(line.trim_end(), "---" | "...") {
+            return Some(start..end);
+        }
+    }
+    None
+}
 
 /// Parse a markdown file and extract its structure.
 ///
@@ -35,7 +63,10 @@ use std::path::Path;
 ///
 /// Returns an error if the file cannot be read.
 pub fn parse_file(path: &Path) -> std::io::Result<Document> {
-    let content = std::fs::read_to_string(path)?;
+    let content = crate::input::read_file(path).map_err(|e| match e {
+        crate::input::InputError::Io(e) => e,
+        other => std::io::Error::other(other),
+    })?;
     Ok(parse_markdown(&content))
 }
 
@@ -52,12 +83,25 @@ pub fn parse_file(path: &Path) -> std::io::Result<Document> {
 ///
 /// A `Document` containing the content and extracted headings with byte offsets.
 pub fn parse_markdown(content: &str) -> Document {
-    let headings = turbovault_parser::parse_headings(content)
+    // A lone `\r` ends a line in CommonMark, as in a file saved with classic
+    // Mac line endings, but the parser reads it as nothing, so every heading
+    // after the first ran into one line. It becomes `\n`, which is the same
+    // length, so offsets still index the file.
+    let content = &*lone_cr_to_lf(content);
+
+    // A UTF-8 byte order mark is not markdown, and left in place it sits in
+    // front of the first `#`, which then no longer opens a heading. Parse
+    // past it, but keep it in the content so offsets still index the file
+    // and an edit written back leaves it where it was.
+    let body = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let bom_len = content.len() - body.len();
+
+    let headings = turbovault_parser::parse_headings(body)
         .into_iter()
         .map(|h| Heading {
             level: h.level as usize,
             text: h.text,
-            offset: h.position.offset,
+            offset: h.position.offset + bom_len,
             source_len: h.position.length,
         })
         .collect();
@@ -65,9 +109,46 @@ pub fn parse_markdown(content: &str) -> Document {
     Document::new(content.to_string(), headings)
 }
 
+/// `content` with each `\r` that is not part of a `\r\n` made a `\n`.
+pub fn lone_cr_to_lf(content: &str) -> std::borrow::Cow<'_, str> {
+    if !has_lone_cr(content.as_bytes()) {
+        return std::borrow::Cow::Borrowed(content);
+    }
+    let mut bytes = content.as_bytes().to_vec();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n') {
+            bytes[i] = b'\n';
+        }
+    }
+    // One ASCII byte replaced by another, so still UTF-8.
+    std::borrow::Cow::Owned(String::from_utf8(bytes).expect("ASCII swap keeps UTF-8"))
+}
+
+/// Whether `bytes` has a `\r` that is not part of a `\r\n`.
+pub fn has_lone_cr(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .enumerate()
+        .any(|(i, &b)| b == b'\r' && bytes.get(i + 1) != Some(&b'\n'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bare CR line endings ran every heading after the first into one
+    /// line: `# A\rtext\r## B` listed one heading, `Atext## B`.
+    #[test]
+    fn bare_cr_ends_a_line() {
+        let doc = parse_markdown("# A\rtext\r\r## B\rmore\r\n## C\r\n");
+        let texts: Vec<&str> = doc.headings.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, ["A", "B", "C"]);
+        // Same length, so offsets index the original.
+        assert_eq!(doc.content, "# A\ntext\n\n## B\nmore\r\n## C\r\n");
+        assert_eq!(doc.heading_lines(), [1, 4, 6]);
+        assert!(!has_lone_cr(b"a\r\nb\n"));
+        assert!(has_lone_cr(b"a\rb"));
+    }
 
     #[test]
     fn test_parse_headings() {
@@ -89,6 +170,21 @@ End"#;
         assert_eq!(doc.headings[0].text, "Title");
         assert_eq!(doc.headings[1].level, 2);
         assert_eq!(doc.headings[1].text, "Section 1");
+    }
+
+    /// A byte order mark in front of the first heading hid it entirely, so
+    /// `-l` dropped it and `-s` could not find it.
+    #[test]
+    fn a_byte_order_mark_does_not_hide_the_first_heading() {
+        let md = "\u{feff}# BOM Title\n\ntext\n\n## Second\n";
+        let doc = parse_markdown(md);
+        let texts: Vec<_> = doc.headings.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, ["BOM Title", "Second"]);
+
+        // Offsets still index the content as given, BOM included.
+        assert!(doc.content[doc.headings[0].offset..].starts_with("# BOM Title"));
+        assert!(doc.content[doc.headings[1].offset..].starts_with("## Second"));
+        assert!(doc.content.starts_with('\u{feff}'));
     }
 
     #[test]

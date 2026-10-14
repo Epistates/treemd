@@ -5,9 +5,9 @@
 //!
 //! # Architecture
 //!
-//! - [`Action`] - All bindable actions in the application
-//! - [`KeybindingMode`] - Different modes with their own keybinding sets
-//! - [`Keybindings`] - The complete keybinding configuration (backed by keybinds-rs)
+//! - [`Action`](crate::keybindings::Action) - All bindable actions in the application
+//! - [`KeybindingMode`](crate::keybindings::KeybindingMode) - Different modes with their own keybinding sets
+//! - [`Keybindings`](crate::keybindings::Keybindings) - The complete keybinding configuration (backed by keybinds-rs)
 //!
 //! # Configuration
 //!
@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
 
 /// Application modes that have their own keybinding sets
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::EnumIter)]
 #[serde(rename_all = "PascalCase")]
 pub enum KeybindingMode {
     /// Normal navigation mode
@@ -66,6 +66,8 @@ pub enum KeybindingMode {
     FilePicker,
     /// File picker search/filter mode
     FileSearch,
+    /// The full-screen image viewer
+    ImageViewer,
 }
 
 impl KeybindingMode {
@@ -86,6 +88,7 @@ impl KeybindingMode {
             KeybindingMode::ConfirmDialog => "Confirm",
             KeybindingMode::FilePicker => "File Picker",
             KeybindingMode::FileSearch => "File Search",
+            KeybindingMode::ImageViewer => "Image Viewer",
         }
     }
 }
@@ -136,7 +139,12 @@ impl Keybindings {
 
             if let Some(config_bindings) = config.0.get(mode) {
                 for (config_key, config_action) in config_bindings {
-                    let config_seq = keybinds::KeySeq::from_str(config_key)?;
+                    // Checked when the config was read, so a key that does
+                    // not parse here is skipped rather than discarding every
+                    // other custom binding with it.
+                    let Ok(config_seq) = keybinds::KeySeq::from_str(config_key) else {
+                        continue;
+                    };
 
                     if let Some(existing) = binding_vec.iter_mut().find(|b| b.seq == config_seq) {
                         existing.action = *config_action;
@@ -310,6 +318,44 @@ pub fn format_key_compact(key: &str) -> String {
 pub struct KeybindingsConfig(pub HashMap<KeybindingMode, HashMap<String, Action>>);
 
 impl KeybindingsConfig {
+    /// Read a `[keybindings]` table entry by entry, keeping every valid
+    /// binding and adding a warning for each mode, key or action that is
+    /// not one. Deserialized whole, one bad entry failed the entire config.
+    pub fn from_toml_lenient(value: toml::Value, warnings: &mut Vec<String>) -> Self {
+        let mut config = HashMap::new();
+        let toml::Value::Table(modes) = value else {
+            warnings.push("[keybindings] is not a table; ignoring it".to_string());
+            return Self(config);
+        };
+        for (mode_name, bindings) in modes {
+            let Ok(mode) = toml::Value::String(mode_name.clone()).try_into::<KeybindingMode>()
+            else {
+                warnings.push(format!("unknown keybinding mode [keybindings.{mode_name}]"));
+                continue;
+            };
+            let toml::Value::Table(bindings) = bindings else {
+                warnings.push(format!("[keybindings.{mode_name}] is not a table"));
+                continue;
+            };
+            let entries: &mut HashMap<String, Action> = config.entry(mode).or_default();
+            for (key, action) in bindings {
+                if keybinds::KeySeq::from_str(&key).is_err() {
+                    warnings.push(format!("[keybindings.{mode_name}] \"{key}\" is not a key"));
+                    continue;
+                }
+                match action.clone().try_into::<Action>() {
+                    Ok(action) => {
+                        entries.insert(key, action);
+                    }
+                    Err(_) => warnings.push(format!(
+                        "[keybindings.{mode_name}] \"{key}\" = {action}: no such action"
+                    )),
+                }
+            }
+        }
+        Self(config)
+    }
+
     /// Convert to Keybindings, using defaults for any missing bindings
     pub fn to_keybindings(&self) -> Keybindings {
         // Falls back to pure defaults if any key is invalid
@@ -325,6 +371,40 @@ impl KeybindingsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key bound twice in one mode does whichever binding the dispatcher
+    /// happens to find first, and the other is silently dead.
+    #[test]
+    fn no_key_is_bound_twice_in_a_mode() {
+        let kb = Keybindings::default();
+        for (mode, binds) in &kb.bindings {
+            let binds = binds.as_slice();
+            for (i, a) in binds.iter().enumerate() {
+                for b in &binds[i + 1..] {
+                    assert!(
+                        a.seq != b.seq,
+                        "{mode:?}: {} is bound to both {:?} and {:?}",
+                        format_key_sequence(&a.seq),
+                        a.action,
+                        b.action
+                    );
+                }
+            }
+        }
+    }
+    /// Raw mode makes Ctrl+C an ordinary key. Bound in Normal mode only, it
+    /// did nothing anywhere else.
+    #[test]
+    fn ctrl_c_is_bound_in_every_mode() {
+        use strum::IntoEnumIterator;
+
+        let mut kb = Keybindings::default();
+        for mode in KeybindingMode::iter() {
+            let event = make_key_event(KeyCode::Char('c'), KeyModifiers::CONTROL);
+            assert!(kb.dispatch(mode, event).is_some(), "{mode:?}");
+        }
+    }
+
     use crossterm::event::{KeyCode, KeyEventKind, KeyEventState, KeyModifiers};
 
     fn make_key_event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {

@@ -17,28 +17,39 @@ use ratatui::widgets::{
 use super::util::popup_area;
 
 /// Render the help popup with keyboard shortcuts
-pub fn render_help_popup(frame: &mut Frame, app: &App, area: Rect) {
+pub fn render_help_popup(frame: &mut Frame, app: &mut App, area: Rect) {
     // Min 40 cols for readability, min 10 rows for usable scroll area
     let popup_area = popup_area(area, 70, 80, 40, 10);
-    let theme = &app.theme;
-    let keybindings = &app.keybindings;
+    let theme = app.theme.clone();
 
     // Clear the area
     frame.render_widget(Clear, popup_area);
 
-    let help_lines = help_text::build_help_text(keybindings, theme);
-    let help_text_len = help_lines.len();
+    // Wrapped to the popup here, so the scroll limit and page size are the
+    // rows actually drawn. They were the number of unwrapped help lines and
+    // the content pane's height, so scrolling stopped short of the end, or
+    // ran past it, depending on the terminal and the keybindings.
+    let help_lines = help_text::build_help_text(&app.keybindings, &theme);
+    let visible = usize::from(popup_area.height.saturating_sub(2));
+    let rows = crate::tui::content_view::ContentView::new(
+        help_lines,
+        popup_area.width.saturating_sub(2),
+        Vec::new(),
+    )
+    .rows;
+    let max_scroll = rows.len().saturating_sub(visible);
+    app.help_max_scroll = u16::try_from(max_scroll).unwrap_or(u16::MAX);
+    app.help_page = u16::try_from(visible.max(1)).unwrap_or(u16::MAX);
+    app.help_scroll = app.help_scroll.min(app.help_max_scroll);
+    let scroll = usize::from(app.help_scroll);
 
-    let paragraph = Paragraph::new(help_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.modal_border()))
-                .title(" Help ")
-                .style(Style::default().bg(theme.modal_bg())),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((app.help_scroll, 0));
+    let paragraph = Paragraph::new(rows[scroll..].to_vec()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.modal_border()))
+            .title(" Help ")
+            .style(Style::default().bg(theme.modal_bg())),
+    );
 
     frame.render_widget(paragraph, popup_area);
 
@@ -50,7 +61,7 @@ pub fn render_help_popup(frame: &mut Frame, app: &App, area: Rect) {
         .track_symbol(Some("│"))
         .style(Style::default().fg(theme.modal_border()));
 
-    let mut scrollbar_state = ScrollbarState::new(help_text_len).position(app.help_scroll as usize);
+    let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll);
 
     frame.render_stateful_widget(
         scrollbar,
@@ -223,43 +234,22 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
             .add_modifier(Modifier::ITALIC),
     )]));
 
-    let total_lines = lines.len();
-
-    // Calculate scroll offset to keep selected link visible
-    // Account for popup border (2 lines) and header (2 lines)
     let inner_height = popup_area.height.saturating_sub(2) as usize; // Border takes 2 lines
-    let header_lines = 2; // Title + blank line
-    let footer_lines = 2; // Blank + footer
+    let (rows, scroll_offset) = wrap_and_scroll(
+        lines,
+        popup_area.width.saturating_sub(2),
+        inner_height,
+        selected_line_start as usize,
+    );
+    let total_lines = rows.len();
 
-    // Visible content area for links
-    let visible_area = inner_height.saturating_sub(header_lines + footer_lines);
-
-    // Calculate scroll offset
-    let scroll_offset = if selected_line_start > 0 && visible_area > 0 {
-        // Keep selected line roughly centered, but don't scroll past bounds
-        let target_line = selected_line_start.saturating_sub(header_lines as u16);
-        let center_offset = (visible_area / 2) as u16;
-
-        if target_line > center_offset {
-            let max_scroll = (total_lines.saturating_sub(inner_height)) as u16;
-            (target_line.saturating_sub(center_offset)).min(max_scroll)
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-
-    let paragraph = Paragraph::new(lines.clone())
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.modal_border()))
-                .title(" Link Navigator ")
-                .style(Style::default().bg(theme.modal_bg())),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((scroll_offset, 0));
+    let paragraph = Paragraph::new(rows[scroll_offset..].to_vec()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.modal_border()))
+            .title(" Link Navigator ")
+            .style(Style::default().bg(theme.modal_bg())),
+    );
 
     frame.render_widget(paragraph, popup_area);
 
@@ -272,7 +262,7 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
             .track_symbol(Some("│"))
             .style(Style::default().fg(theme.modal_border()));
 
-        let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll_offset as usize);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll_offset);
 
         frame.render_stateful_widget(
             scrollbar,
@@ -697,6 +687,8 @@ pub fn render_save_before_nav_confirm(frame: &mut Frame, edit_count: usize, them
 /// Render the command palette with fuzzy search
 pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
     use crate::tui::app::PALETTE_COMMANDS;
+    use ratatui::layout::{Constraint, Layout};
+    use ratatui::widgets::{List, ListItem, ListState};
 
     // Create a centered popup
     // Min 35 cols for command names, min 10 rows for header + a few commands
@@ -705,9 +697,25 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
     // Clear the area
     frame.render_widget(Clear, area);
 
-    // Build the content
-    let mut lines = vec![
-        // Title
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.modal_border()))
+        .style(Style::default().bg(theme.modal_bg()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Title and input above, hints below, and the commands in between as a
+    // list that scrolls to keep the selection in view. Drawn as one
+    // paragraph, the commands past the bottom of the popup were cut off and
+    // the selection moved out of sight after a few steps on a small terminal.
+    let [header, commands, footer] = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .areas(inner);
+
+    let header_lines = vec![
         Line::from(vec![Span::styled(
             "Command Palette",
             Style::default()
@@ -715,7 +723,6 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
                 .add_modifier(Modifier::BOLD),
         )]),
         Line::from(""),
-        // Search input
         Line::from(vec![
             Span::styled(": ", Style::default().fg(theme.modal_key_fg())),
             Span::styled(
@@ -723,90 +730,129 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
                 Style::default().fg(theme.modal_text()),
             ),
         ]),
-        Line::from(""),
     ];
+    frame.render_widget(Paragraph::new(header_lines), header);
 
-    // Show filtered commands
     if app.command_palette.filtered.is_empty() {
-        lines.push(Line::from(vec![Span::styled(
-            "  No matching commands",
-            Style::default()
-                .fg(theme.modal_description())
-                .add_modifier(Modifier::ITALIC),
-        )]));
-    } else {
-        for (display_idx, &cmd_idx) in app.command_palette.filtered.iter().enumerate() {
-            let cmd = &PALETTE_COMMANDS[cmd_idx];
-            let is_selected = display_idx == app.command_palette.selected;
-
-            let prefix = if is_selected { "▸ " } else { "  " };
-            let style = if is_selected {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                "  No matching commands",
                 Style::default()
-                    .fg(theme.modal_selected_marker())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.modal_text())
-            };
+                    .fg(theme.modal_description())
+                    .add_modifier(Modifier::ITALIC),
+            )])),
+            commands,
+        );
+    } else {
+        let items: Vec<ListItem> = app
+            .command_palette
+            .filtered
+            .iter()
+            .enumerate()
+            .map(|(display_idx, &cmd_idx)| {
+                let cmd = &PALETTE_COMMANDS[cmd_idx];
+                let is_selected = display_idx == app.command_palette.selected;
 
-            // Command name
-            let mut spans = vec![Span::styled(prefix, style), Span::styled(cmd.name, style)];
-
-            // Show aliases in dimmer text
-            if !cmd.aliases.is_empty() {
-                let aliases_str = format!(" ({})", cmd.aliases.join(", "));
-                spans.push(Span::styled(
-                    aliases_str,
-                    Style::default().fg(theme.modal_description()),
-                ));
-            }
-
-            lines.push(Line::from(spans));
-
-            // Show description for selected item
-            if is_selected {
-                lines.push(Line::from(vec![Span::styled(
-                    format!("    {}", cmd.description),
+                let prefix = if is_selected { "▸ " } else { "  " };
+                let style = if is_selected {
                     Style::default()
-                        .fg(theme.modal_description())
-                        .add_modifier(Modifier::ITALIC),
-                )]));
-            }
-        }
+                        .fg(theme.modal_selected_marker())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.modal_text())
+                };
+
+                // Command name, with aliases in dimmer text
+                let mut spans = vec![Span::styled(prefix, style), Span::styled(cmd.name, style)];
+                if !cmd.aliases.is_empty() {
+                    spans.push(Span::styled(
+                        format!(" ({})", cmd.aliases.join(", ")),
+                        Style::default().fg(theme.modal_description()),
+                    ));
+                }
+                let mut lines = vec![Line::from(spans)];
+
+                // Show description for selected item
+                if is_selected {
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("    {}", cmd.description),
+                        Style::default()
+                            .fg(theme.modal_description())
+                            .add_modifier(Modifier::ITALIC),
+                    )]));
+                }
+                ListItem::new(lines)
+            })
+            .collect();
+
+        let mut state = ListState::default().with_selected(Some(app.command_palette.selected));
+        frame.render_stateful_widget(List::new(items).scroll_padding(1), commands, &mut state);
     }
 
-    // Footer with hints
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("↑↓/Tab", Style::default().fg(theme.modal_key_fg())),
-        Span::styled(
-            " navigate  ",
-            Style::default().fg(theme.modal_description()),
-        ),
-        Span::styled("Enter", Style::default().fg(theme.modal_key_fg())),
-        Span::styled(" execute  ", Style::default().fg(theme.modal_description())),
-        Span::styled("Esc", Style::default().fg(theme.modal_key_fg())),
-        Span::styled(" cancel", Style::default().fg(theme.modal_description())),
-    ]));
+    // Footer with hints. Tab completes the command name; it does not move.
+    let footer_lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("↑↓", Style::default().fg(theme.modal_key_fg())),
+            Span::styled(
+                " navigate  ",
+                Style::default().fg(theme.modal_description()),
+            ),
+            Span::styled("Tab", Style::default().fg(theme.modal_key_fg())),
+            Span::styled(
+                " complete  ",
+                Style::default().fg(theme.modal_description()),
+            ),
+            Span::styled("Enter", Style::default().fg(theme.modal_key_fg())),
+            Span::styled(" execute  ", Style::default().fg(theme.modal_description())),
+            Span::styled("Esc", Style::default().fg(theme.modal_key_fg())),
+            Span::styled(" cancel", Style::default().fg(theme.modal_description())),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(footer_lines), footer);
 
-    let paragraph = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.modal_border()))
-            .style(Style::default().bg(theme.modal_bg())),
-    );
-
-    frame.render_widget(paragraph, area);
-
-    if area.width > 2 {
+    if inner.width > 0 {
         use unicode_width::UnicodeWidthStr;
         let cursor_offset = 2 + app.command_palette.query.as_str().width() as u16;
-        let cursor_x = area
+        let cursor_x = inner
             .x
-            .saturating_add(1)
             .saturating_add(cursor_offset)
-            .min(area.right().saturating_sub(2));
-        frame.set_cursor_position((cursor_x, area.y.saturating_add(3)));
+            .min(inner.right().saturating_sub(1));
+        frame.set_cursor_position((cursor_x, header.y.saturating_add(2)));
     }
+}
+
+/// A popup's lines wrapped to `width`, and the row to scroll to so that the
+/// line at `selected_line` sits near the middle of `height` rows.
+///
+/// The scroll used to be worked out in lines while the paragraph wrapped
+/// them, so with long entries above it the selection was scrolled to a row
+/// that was no longer where it was drawn, and went out of view.
+fn wrap_and_scroll(
+    lines: Vec<Line<'_>>,
+    width: u16,
+    height: usize,
+    selected_line: usize,
+) -> (Vec<Line<'static>>, usize) {
+    let owned = lines
+        .into_iter()
+        .map(|line| {
+            let mut owned = Line::from(
+                line.spans
+                    .into_iter()
+                    .map(|span| Span::styled(span.content.into_owned(), span.style))
+                    .collect::<Vec<_>>(),
+            )
+            .style(line.style);
+            owned.alignment = line.alignment;
+            owned
+        })
+        .collect();
+    let view = crate::tui::content_view::ContentView::new(owned, width, Vec::new());
+    let selected = view.row_of_line(selected_line);
+    let max_scroll = view.rows.len().saturating_sub(height);
+    let scroll = selected.saturating_sub(height / 2).min(max_scroll);
+    (view.rows, scroll)
 }
 
 /// Render the file picker modal

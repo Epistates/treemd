@@ -4,15 +4,15 @@
 //! type safety and efficient operations.
 
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use serde::{Serialize, Serializer};
+use std::cmp::Ordering;
 use std::fmt;
 
 /// Runtime value during query evaluation.
 ///
 /// Values are the currency of the query language - every expression
 /// produces and consumes values.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum Value {
     /// Null/empty value
     Null,
@@ -178,16 +178,13 @@ impl Value {
         match self {
             Value::Null => String::new(),
             Value::Bool(b) => b.to_string(),
-            Value::Number(n) => {
-                if n.fract() == 0.0 {
-                    (*n as i64).to_string()
-                } else {
-                    n.to_string()
-                }
-            }
+            Value::Number(n) => match exact_integer(*n) {
+                Some(i) => i.to_string(),
+                None => n.to_string(),
+            },
             Value::String(s) => s.clone(),
             Value::Array(a) => a.iter().map(|v| v.to_text()).collect::<Vec<_>>().join("\n"),
-            Value::Object(o) => serde_json::to_string(o).unwrap_or_default(),
+            Value::Object(_) | Value::FrontMatter(_) => self.to_json().to_string(),
             Value::Heading(h) => h.text.clone(),
             Value::Code(c) => c.content.clone(),
             Value::Link(l) => l.text.clone(),
@@ -202,8 +199,129 @@ impl Value {
             Value::Blockquote(b) => b.content.clone(),
             Value::Paragraph(p) => p.content.clone(),
             Value::Document(d) => d.content.clone(),
-            Value::FrontMatter(fm) => serde_json::to_string(fm).unwrap_or_default(),
         }
+    }
+
+    /// The JSON form of this value.
+    ///
+    /// This is the one serializer: `--query-output json`, the text of an
+    /// object (`{a: .h1[0]} | text`), and `Serialize` all go through it, so
+    /// an element looks the same wherever it is printed. Elements carry a
+    /// `type` tag and their public fields, not internal ones like the byte
+    /// offset or the whole section body.
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+
+        let map = |m: &IndexMap<String, Value>| {
+            serde_json::Value::Object(m.iter().map(|(k, v)| (k.clone(), v.to_json())).collect())
+        };
+
+        match self {
+            Value::Null => serde_json::Value::Null,
+            Value::Bool(b) => serde_json::Value::Bool(*b),
+            Value::Number(n) => match exact_integer(*n) {
+                Some(i) => json!(i),
+                None => json!(n),
+            },
+            Value::String(s) => serde_json::Value::String(s.clone()),
+            Value::Array(a) => serde_json::Value::Array(a.iter().map(Value::to_json).collect()),
+            Value::Object(o) | Value::FrontMatter(o) => map(o),
+            Value::Heading(h) => json!({
+                "type": "heading",
+                "level": h.level,
+                "text": h.text,
+                "line": h.line,
+            }),
+            Value::Code(c) => json!({
+                "type": "code",
+                "language": c.language,
+                "content": c.content,
+                "start_line": c.start_line,
+                "end_line": c.end_line,
+            }),
+            Value::Link(l) => json!({
+                "type": "link",
+                "text": l.text,
+                "url": l.url,
+                "link_type": l.link_type.as_str(),
+            }),
+            Value::Image(i) => json!({
+                "type": "image",
+                "alt": i.alt,
+                "src": i.src,
+                "title": i.title,
+            }),
+            Value::Table(t) => json!({
+                "type": "table",
+                "headers": t.headers,
+                "rows": t.rows,
+            }),
+            Value::List(l) => json!({
+                "type": "list",
+                "ordered": l.ordered,
+                "items": l.items.iter().map(|i| json!({
+                    "content": i.content,
+                    "checked": i.checked,
+                })).collect::<Vec<_>>(),
+            }),
+            Value::Blockquote(b) => json!({
+                "type": "blockquote",
+                "content": b.content,
+            }),
+            Value::Paragraph(p) => json!({
+                "type": "paragraph",
+                "content": p.content,
+            }),
+            Value::Document(d) => json!({
+                "type": "document",
+                "heading_count": d.heading_count,
+                "word_count": d.word_count,
+            }),
+        }
+    }
+
+    /// Total order used by `sort`, `sort_by` and `unique`, after jq's: null,
+    /// then booleans, numbers, strings, arrays, objects, and last the
+    /// document's elements. Numbers compare as numbers and arrays element
+    /// by element, so `[10, 9, 1] | sort` is `1 9 10`.
+    pub fn sort_cmp(&self, other: &Value) -> Ordering {
+        fn rank(v: &Value) -> u8 {
+            match v {
+                Value::Null => 0,
+                Value::Bool(_) => 1,
+                Value::Number(_) => 2,
+                Value::String(_) => 3,
+                Value::Array(_) => 4,
+                Value::Object(_) | Value::FrontMatter(_) => 5,
+                _ => 6,
+            }
+        }
+
+        match (self, other) {
+            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+            (Value::Number(a), Value::Number(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+            (Value::String(a), Value::String(b)) => a.cmp(b),
+            (Value::Array(a), Value::Array(b)) => a
+                .iter()
+                .zip(b)
+                .map(|(x, y)| x.sort_cmp(y))
+                .find(|o| o.is_ne())
+                .unwrap_or_else(|| a.len().cmp(&b.len())),
+            _ => rank(self).cmp(&rank(other)).then_with(|| {
+                // Maps and elements: by text, then by their full JSON so two
+                // values only tie when they are the same value.
+                self.to_text()
+                    .cmp(&other.to_text())
+                    .then_with(|| self.identity_key().cmp(&other.identity_key()))
+            }),
+        }
+    }
+
+    /// A string that two values share exactly when they are the same value,
+    /// type included: their JSON. Two headings with the same text differ by
+    /// line, and `1` differs from `"1"`.
+    pub(crate) fn identity_key(&self) -> String {
+        self.to_json().to_string()
     }
 
     /// Get the length of this value (for arrays, strings, objects).
@@ -223,6 +341,22 @@ impl Value {
     pub fn is_empty(&self) -> bool {
         self.len().map(|l| l == 0).unwrap_or(false)
     }
+}
+
+impl Serialize for Value {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_json().serialize(serializer)
+    }
+}
+
+/// A whole number as an integer, within the range an f64 holds exactly.
+///
+/// So a count prints as `1` rather than `1.0` in JSON, the way an element's
+/// own fields already do, and `1e20` prints as itself rather than clamped to
+/// `i64::MAX` by an `as` cast.
+pub(crate) fn exact_integer(n: f64) -> Option<i64> {
+    const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    (n.fract() == 0.0 && n.abs() <= EXACT).then_some(n as i64)
 }
 
 impl fmt::Display for Value {
@@ -332,21 +466,21 @@ impl fmt::Display for ValueKind {
 // ============================================================================
 
 /// Heading element value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct HeadingValue {
     pub level: u8,
     pub text: String,
     pub offset: usize,
     pub line: usize,
-    /// Content under this heading (excluding subheadings)
-    #[serde(skip_serializing_if = "String::is_empty")]
+    /// Body under this heading, subsections included, up to the next
+    /// heading at the same or a shallower level
     pub content: String,
     /// Raw markdown of the entire section
-    #[serde(skip)]
     pub raw_md: String,
     /// Index in the flat headings list (for navigation)
-    #[serde(skip)]
     pub index: usize,
+    /// Anchor slug, in the engine's [`SlugStyle`](crate::parser::SlugStyle)
+    pub slug: String,
 }
 
 impl HeadingValue {
@@ -358,16 +492,15 @@ impl HeadingValue {
             "line" => Some(Value::Number(self.line as f64)),
             "content" => Some(Value::String(self.content.clone())),
             "md" | "markdown" => Some(Value::String(self.raw_md.clone())),
-            "slug" => Some(Value::String(slugify(&self.text))),
+            "slug" => Some(Value::String(self.slug.clone())),
             _ => None,
         }
     }
 }
 
 /// Code block element value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CodeValue {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     pub content: String,
     pub start_line: usize,
@@ -392,11 +525,10 @@ impl CodeValue {
 }
 
 /// Link element value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LinkValue {
     pub text: String,
     pub url: String,
-    #[serde(rename = "type")]
     pub link_type: LinkType,
     pub offset: usize,
 }
@@ -414,8 +546,7 @@ impl LinkValue {
 }
 
 /// Link type enumeration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkType {
     Anchor,
     Relative,
@@ -435,11 +566,10 @@ impl LinkType {
 }
 
 /// Image element value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ImageValue {
     pub alt: String,
     pub src: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
 
@@ -455,7 +585,7 @@ impl ImageValue {
 }
 
 /// Table element value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TableValue {
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
@@ -490,7 +620,7 @@ impl TableValue {
 }
 
 /// List element value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ListValue {
     pub ordered: bool,
     pub items: Vec<ListItemValue>,
@@ -513,15 +643,14 @@ impl ListValue {
 }
 
 /// List item value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ListItemValue {
     pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub checked: Option<bool>,
 }
 
 /// Blockquote element value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct BlockquoteValue {
     pub content: String,
 }
@@ -536,7 +665,7 @@ impl BlockquoteValue {
 }
 
 /// Paragraph element value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ParagraphValue {
     pub content: String,
 }
@@ -551,7 +680,7 @@ impl ParagraphValue {
 }
 
 /// Document value (root).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DocumentValue {
     pub content: String,
     pub heading_count: usize,
@@ -562,24 +691,13 @@ impl DocumentValue {
     pub fn get_property(&self, name: &str) -> Option<Value> {
         match name {
             "content" | "text" => Some(Value::String(self.content.clone())),
-            "heading_count" | "headings" => Some(Value::Number(self.heading_count as f64)),
+            // No `headings` alias: on the document `.headings` is the
+            // heading selector, so the alias could never be reached.
+            "heading_count" => Some(Value::Number(self.heading_count as f64)),
             "word_count" | "words" => Some(Value::Number(self.word_count as f64)),
             _ => None,
         }
     }
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Generate URL-friendly slug from text.
-///
-/// Delegates to the single canonical implementation (turbovault, via
-/// `parser::content::slugify`) so heading slugs are consistent across the
-/// document model, JSON output, and the query language.
-fn slugify(text: &str) -> String {
-    crate::parser::content::slugify(text)
 }
 
 #[cfg(test)]
@@ -603,14 +721,5 @@ mod tests {
         assert!(Value::Number(1.0).is_truthy());
         assert!(!Value::String("".into()).is_truthy());
         assert!(Value::String("hello".into()).is_truthy());
-    }
-
-    #[test]
-    fn test_slugify() {
-        // Now delegates to turbovault's canonical slugify: `.` and `_` are
-        // dropped (not treated as separators), so "API v2.0" -> "api-v20".
-        assert_eq!(slugify("Hello World"), "hello-world");
-        assert_eq!(slugify("Getting Started!"), "getting-started");
-        assert_eq!(slugify("API v2.0"), "api-v20");
     }
 }

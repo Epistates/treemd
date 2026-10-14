@@ -42,9 +42,15 @@ clap_mangen = "0.3"
 ureq = "3"
 
 unicode-width = "0.2"
+# Grapheme clusters for wrapping the content pane; the version ratatui uses.
+unicode-segmentation = "1.13"
 
 # Turbovault integration - OFM parsing with code-block awareness
-turbovault-parser = "2.1.0"
+turbovault-parser = "4.0.1"
+# The parser turbovault-parser is built on, used directly only to locate a
+# table's source range for in-place cell edits, which turbovault's blocks
+# do not carry. Same version line, so it is one copy in the build.
+pulldown-cmark = { version = "0.13", default-features = false }
 
 # Serialization for JSON output
 serde = { version = "1.0", features = ["derive"] }
@@ -55,14 +61,16 @@ indexmap = { version = "2.14", features = ["serde"] }
 regex = "1.13"
 
 # TUI framework
-ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache", "unstable-rendered-line-info"] }
-crossterm = "0.29"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
+crossterm = { version = "0.29", features = ["use-dev-tty"] }
 color-eyre = "0.6"
 
 # Image rendering in TUI
-ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }
+ratatui-image = { version = "11.1", default-features = false, features = ["crossterm"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 gif = "0.14"
+# Encoding a GIF for iTerm2's inline-image transfer
+base64 = "0.23"
 
 # Syntax highlighting
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "default-themes", "plist-load", "regex-onig"] }
@@ -79,6 +87,9 @@ tempfile = "3.27"
 # Configuration persistence
 dirs = "7.0"
 toml = "1.1"
+# Saving a setting edits that key in the user's file, keeping its comments,
+# layout and anything treemd does not recognize
+toml_edit = "0.25"
 
 # Keybindings system
 keybinds = { version = "0.2", features = ["crossterm", "serde"] }
@@ -92,10 +103,13 @@ notify = "8.2"
 
 # Open files in editor with line:column positioning
 opensesame = { version = "0.1.1", features = ["serde"] }
+github-slugger = "0.1.0"
 
 # Unix system calls for TTY handling
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# SIGTERM / SIGHUP as flags, so the TUI exits through its own cleanup
+signal-hook = "0.4"
 
 # Mermaid diagram rendering (pure Rust, no external tools)
 # NOTE: pre-1.0 crate in early development; semver pins to >=0.3.0, <0.4.0
@@ -123,3 +137,7 @@ strip = true
 # Keep unwinding enabled so panic isolation around third-party image/render
 # work can recover and report an error instead of terminating the TUI.
 panic = "unwind"
+
+[dev-dependencies]
+# Property tests: parsing, querying, rendering and editing over generated input
+proptest = "1.12"

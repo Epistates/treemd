@@ -1,7 +1,7 @@
 ---
 name: treemd
 description: Markdown document analysis and navigation using the treemd CLI. Use when exploring markdown structure (heading trees, section extraction), querying markdown elements via tql (treemd query language), or piping markdown content for programmatic analysis. Also use before reading or editing large markdown files to survey structure, locate relevant sections, and avoid loading entire documents into context.
-version: 1.0.1
+version: 1.0.2
 homepage: https://github.com/Epistates/treemd
 license: MIT
 ---
@@ -14,8 +14,8 @@ Skill for working with the `treemd` markdown viewer and query tool.
 
 `treemd` is a Rust-based CLI for markdown document analysis. It handles two primary workflows:
 
-1. **Structural Navigation** — Explore document hierarchy top-down
-2. **Query Navigation** — Navigate by asking structured questions
+1. **Structural Navigation**: explore document hierarchy top-down
+2. **Query Navigation**: navigate by asking structured questions
 
 For scripted/agent tasks, always use CLI mode. TUI mode is reserved for human interactive viewing.
 
@@ -49,24 +49,24 @@ treemd -l FILE.md | head -20       # Quick scan of all headings
 Pinpoint the sections relevant to your goal.
 
 ```bash
-treemd -l --filter "install" FILE.md        # Fuzzy heading search (case-insensitive)
+treemd -l --filter "install" FILE.md        # Headings containing "install" (substring, case-insensitive)
 treemd -l -L 2 --filter "API" FILE.md      # Narrow by heading level + keyword
 treemd --at-line 150 FILE.md               # "Which heading covers line 150?"
 treemd -l -n FILE.md                       # Each heading with its [start-end] line range
 ```
 
-> **Tip for agents**: `-n` (combine with `-l` or `--tree`) appends a `[start-end]` line range to every heading in plain output — e.g. `## Installation [12-34]`. `start` is the heading's own line; `end` is the last line before the next heading at the same or a shallower level (or the document's last line). This lets you read only the lines for the section you need (e.g. via `Read` with an offset/limit) instead of loading the whole file — much cheaper than parsing `-o json`'s `position.line` for the same information.
+> **Tip for agents**: `-n` (combine with `-l` or `--tree`) appends a `[start-end]` line range to every heading in plain output, e.g. `## Installation [12-34]`. `start` is the heading's own line; `end` is the last line before the next heading at the same or a shallower level (or the document's last line). This lets you read only the lines for the section you need (e.g. via `Read` with an offset/limit) instead of loading the whole file, and is much cheaper than parsing `-o json`. Note that `-o json`'s `position.line` is not the same number: it is the line the section's body starts on, one below the heading for an ATX heading and two below for a setext one. The tql `.line` property matches `-n`.
 
 ### Step 3: Extract
 
 Pull entire sections or pipe content for downstream processing.
 
 ```bash
-treemd -s "Full Heading Text" FILE.md     # Extract heading + content (must match full heading text exactly)
+treemd -s "Full Heading Text" FILE.md     # Extract heading + content (full heading text, case-insensitive)
 cat FILE.md | treemd -s "Full Heading Text" -  # Pipe stdin, extract from stream
 ```
 
-> **Important**: `-s` requires the **exact full heading text** (including emoji and parentheses). A partial match fails: given a heading `## 📦 Installation (from source)`, `treemd -s "Installation"` exits `1` with `Section 'Installation' not found`, while the full text succeeds. Use `-l --filter` first to recover the exact heading, then pass it verbatim. The `-o` flag has no effect in `-s` mode: output is always plain markdown.
+> **Important**: `-s` requires the **full heading text** (including emoji and parentheses). Case is ignored, so `-s "installation"` finds `## Installation`, but a partial match fails: given a heading `## 📦 Installation (from source)`, `treemd -s "Installation"` exits `1` with `Section 'Installation' not found`, while the full text succeeds. Use `-l --filter` first to recover the exact heading, then pass it verbatim. The `-o` flag has no effect in `-s` mode: output is always plain markdown.
 
 #### Output Format Options
 
@@ -74,14 +74,14 @@ Attach `-o` to `--list` or `--tree` only (not `-s`):
 
 - `-o plain`: Human-readable text (default)
 - `-o json`: JSON for scripting/parsing. The shape differs by mode: `--list -o json` emits a nested document object (`.document.metadata` plus a recursive `.document.sections[]` tree carrying each section's content and blocks), while `--tree -o json` emits a flat array of `{"level", "text"}` objects.
-- `-o tree`: Box-drawing tree structure (`--tree` only; using it with `--list` prints `Use --tree for tree output` and exits `1`)
+- `-o tree`: Box-drawing tree structure (`--list -o tree` prints the same tree as `--tree`)
 
 For tql (`-q`) queries, use `--query-output` instead of `-o`. Available formats:
 
 - `--query-output plain`: Human-readable text (default)
-- `--query-output json`: Compact JSON
-- `--query-output json-pretty`: Pretty-printed JSON
-- `--query-output jsonl`: Line-delimited JSON
+- `--query-output json`: Compact JSON, always an array (`[]` for no results), even for one result
+- `--query-output json-pretty`: Pretty-printed JSON array
+- `--query-output jsonl`: One JSON value per line
 - `--query-output md`: Raw markdown rendering
 - `--query-output tree`: Box-drawing tree structure
 
@@ -89,7 +89,7 @@ For tql (`-q`) queries, use `--query-output` instead of `-o`. Available formats:
 
 ## Line B: Query Navigation
 
-Use this when you already know what to look for. Jump directly to answers via the tql (treemd query language) — a jq-like markdown DOM traversal engine.
+Use this when you already know what to look for. Jump directly to answers via tql (treemd query language), a jq-like markdown DOM traversal engine.
 
 ### Element Selectors
 
@@ -110,8 +110,11 @@ Navigate parent-child relationships and apply predicate filters:
 treemd -q '.h1[Features] > .h2' FILE.md           # Direct child h2 under "Features"
 treemd -q '.h1 >> .code' FILE.md                  # Code blocks anywhere under h1
 treemd -q '.h | select(contains("API"))' FILE.md  # Headings containing "API"
-treemd -q '[.h2] | limit(5)' FILE.md              # First 5 h2 elements
+treemd -q '.h2 | limit(5)' FILE.md               # First 5 h2 elements
+treemd -q '.h2[Install] | .code' FILE.md          # Code blocks inside the "Install" section
 ```
+
+A selector piped from a heading looks only inside that heading's section, the same as `>>`. Collection functions (`count`, `first`, `limit`, `sort_by`, `join`, ...) run once on everything a selector returns, so `.h2 | count` is the number of h2s.
 
 ### Aggregation & Document Statistics
 
@@ -119,10 +122,10 @@ treemd -q '[.h2] | limit(5)' FILE.md              # First 5 h2 elements
 treemd -q 'stats' FILE.md              # Document metrics (headings, links, code blocks)
 treemd -q 'levels' FILE.md             # Heading count per level
 treemd -q 'langs' FILE.md              # Code block language distribution
-treemd -q '[.h2] | count' FILE.md      # Total h2 count
+treemd -q '.h2 | count' FILE.md        # Total h2 count
 ```
 
-> **Note**: Aggregation functions (`stats`, `levels`, `langs`, `types`) do not require `. |` prefix — use them directly as shown above.
+> **Note**: Aggregation functions (`stats`, `levels`, `langs`, `types`) do not need a `. |` prefix; use them directly as shown above.
 
 #### tql Query Output Formats
 
@@ -165,7 +168,7 @@ Themes: `--theme <OceanDark|Nord|Dracula|Solarized|Monokai|Gruvbox|TokyoNight|Ca
 ### Pattern: Extract Section for Analysis
 
 ```bash
-SECTION=$(treemd -s "Full Heading Text (with emoji)" README.md)  # Must use exact full heading
+SECTION=$(treemd -s "Full Heading Text (with emoji)" README.md)  # Full heading text; case is ignored
 ```
 
 ### Pattern: Extract Heading Section Content (tql)
@@ -193,21 +196,23 @@ treemd -q '.h | select(contains("Config"))' FILE.md
 ### Pattern: Document Statistics Pipeline
 
 ```bash
-treemd -q 'stats' --query-output json FILE.md | jq '.code_blocks'
-treemd -q 'levels' --query-output json FILE.md | jq '.h1'
+treemd -q 'stats' --query-output json FILE.md | jq '.[0].code_blocks'
+treemd -q 'levels' --query-output json FILE.md | jq '.[0].h1'
 ```
 
-> **Note**: Aggregation queries output plain text by default. Always add `--query-output json` when piping to `jq`.
+> **Note**: Aggregation queries output plain text by default. Always add `--query-output json` when piping to `jq`. JSON output is always an array of results, so take `.[0]` for a query that returns one value.
 
 ## Error Handling
 
 - **Missing section**: `treemd -s "NonExistent" FILE.md` exits with code `1` and prints `Section 'NonExistent' not found` to stderr. Check for non-zero exit code to detect missing sections.
-- **Invalid tql syntax**: Exits with a non-zero code and an error message on stderr.
-- **Unsupported `--query-output` value**: Exits with error "Unknown output format" — use supported values only (`plain`, `json`, `json-pretty`, `jsonl`, `md`, `tree`).
+- **Invalid tql syntax**: Exits `3` with an error message on stderr.
+- **A query that fails while running** (such as `"a" - 1`, a type error): Exits `5`.
+- **No results with `-e`**: Exits `1`. Without `-e`, an empty result exits `0`.
+- **Unsupported `--query-output` value**: Exits `2` with "Unknown output format"; use supported values only (`plain`, `json`, `json-pretty`, `jsonl`, `md`, `tree`).
 
 ## Notes
 
 - File picker filters to `.md` / `.markdown` extensions only
 - tql supports element selectors, hierarchy operators (`>`, `>>`), pipes (`|`), and collection/string/filter/aggregation functions
 - JSON output is compatible with `jq` pipelines
-- Run `treemd --query-help` for the complete built-in tql reference (same content as `references/query-language.md`)
+- Run `treemd --query-help` for the built-in tql reference (`references/query-language.md` covers the same language)

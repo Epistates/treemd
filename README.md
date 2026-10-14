@@ -57,7 +57,7 @@ Use it to:
 | **Navigation history** | Go back/forward between files with full state preservation |
 | **Syntax highlighting** | 50+ languages via [syntect](https://crates.io/crates/syntect) |
 | **Vim-style navigation** | `j`/`k`, `g`/`G`, `d`/`u`, `p` (parent) |
-| **Search & filter** | Filter headings (`s`) or search content (`/`) with `n`/`N` navigation |
+| **Search & filter** | Filter headings (`s`) or search the current section (`/`) with `n`/`N` navigation |
 | **Command palette** | Fuzzy-search every command with `:`—no need to memorize keys |
 | **Collapsible tree** | Expand/collapse sections with `Space`/`Enter` |
 | **Bookmarks** | Mark positions (`m`) and jump back (`'`) |
@@ -80,7 +80,7 @@ Use it to:
 | **Statistics** | Count headings by level (`--count`) |
 | **Stdin support** | Pipe markdown content (`cat doc.md \| treemd -q '.h'`) |
 
-**Pro tip:** Combine `--tree` with `--section` for rapid navigation of large files. The query language brings [jq](https://jqlang.github.io/jq/)-like power to markdown extraction.
+**Pro tip:** `--tree -n` shows each section's line range, so you can read just the lines you need from a large file, or pull one out whole with `--section`. The query language brings [jq](https://jqlang.github.io/jq/)-like power to markdown extraction.
 
 ## Installation
 
@@ -130,7 +130,7 @@ Completions are context-aware: they only offer `.md`/`.markdown` files and direc
 
 ```sh
 treemd README.md                  # Open a file
-treemd github:rust-lang/rust      # Read a GitHub repo's README
+treemd github:rust-lang/rust      # Read a GitHub repo's README, whatever it is named
 treemd https://example.com/doc.md # Open any markdown URL
 ```
 
@@ -140,7 +140,6 @@ Launch the interactive interface by running treemd with a file:
 treemd README.md        # Open specific file
 treemd .                # Open file picker in current directory
 treemd docs/            # Open file picker in specified directory
-treemd *.md             # Open file picker with matched files
 ```
 
 #### Keyboard Shortcuts
@@ -153,6 +152,7 @@ treemd *.md             # Open file picker with matched files
 | `j` / `k` or `↓` / `↑` | Move down/up |
 | `g` / `G` or `Home` / `End` | Jump to top/bottom |
 | `p` | Jump to parent heading |
+| `Ctrl+e` / `Ctrl+y` | Scroll the content a line, keeping the selection |
 | `d` / `u` or `PageDown` / `PageUp` | Page down/up |
 | `Tab` / `Shift+Tab` | Switch focus between outline and content |
 | `5j` etc. | Repeat motion with a vim count prefix (digits `1`-`9` start a count, shown in the status bar) |
@@ -179,7 +179,7 @@ treemd *.md             # Open file picker with matched files
 | Key | Action |
 |-----|--------|
 | `s` | Search/filter headings in outline |
-| `/` | Search document content |
+| `/` | Search the current section |
 | `Tab` (in search) | Toggle between outline and content search |
 | `n` / `N` | Next/previous match |
 | `Esc` | Exit search mode |
@@ -195,9 +195,10 @@ treemd *.md             # Open file picker with matched files
 | `Tab` / `Shift+Tab` | Navigate links |
 | `1`-`9` | Jump to link by number |
 | `Enter` | Follow selected link |
-| `b` / `Backspace` | Go back |
-| `F` (Shift+F) | Go forward |
+| `p` | List the parent section's links |
 | `Esc` | Exit link mode |
+
+After following a link, `b` / `Backspace` and `F` go back and forward from the main view.
 
 </details>
 
@@ -208,10 +209,13 @@ treemd *.md             # Open file picker with matched files
 |-----|--------|
 | `i` | Enter interactive mode |
 | `j` / `k` | Navigate elements |
+| `g` / `G` | First / last element |
+| `d` / `u` | Page down / up |
 | `Tab` / `Shift+Tab` | Next/previous link within element |
 | `Enter` | Activate element |
 | `Space` | Toggle checkboxes/details |
-| `y` | Copy content |
+| `y` | Copy the selected element (link target, code, table, image source) |
+| `e` | Open the editor at the element's line |
 | `Esc` | Exit interactive mode |
 
 </details>
@@ -227,6 +231,17 @@ treemd *.md             # Open file picker with matched files
 | `r` | Copy table as markdown |
 | `Enter` | Edit cell |
 | `Esc` | Exit table mode |
+
+</details>
+
+<details>
+<summary><strong>Image Viewer</strong> (<code>Enter</code> on an image)</summary>
+
+| Key | Action |
+|-----|--------|
+| `Space` | Play or pause an animated GIF |
+| `h` / `l` or `←` / `→` | Previous / next frame |
+| `Esc` / `q` / `Ctrl+c` | Close the viewer |
 
 </details>
 
@@ -248,7 +263,8 @@ treemd *.md             # Open file picker with matched files
 | `m` | Set bookmark |
 | `'` | Jump to bookmark |
 | `?` | Toggle help overlay |
-| `q` | Quit (`Esc` backs out of searches/modes) |
+| `q` / `Ctrl+c` | Quit (`Esc` backs out of searches/modes; in a search or prompt, `Ctrl+c` cancels it) |
+| `Ctrl+z` | Suspend to the shell (`fg` to return) |
 
 </details>
 
@@ -323,8 +339,8 @@ treemd -q '.table' doc.md     # Tables
 #### Filters and Indexing
 
 ```bash
-treemd -q '.h2[Features]' doc.md       # Fuzzy match
-treemd -q '.h2["Installation"]' doc.md # Exact match
+treemd -q '.h2[Features]' doc.md       # Text contains "Features" (any case)
+treemd -q '.h2["Installation"]' doc.md # Whole text is "Installation" (any case)
 treemd -q '.h2[0]' doc.md              # First h2
 treemd -q '.h2[-1]' doc.md             # Last h2
 treemd -q '.h2[1:3]' doc.md            # Slice
@@ -335,12 +351,15 @@ treemd -q '.code[rust]' doc.md         # By language
 
 ```bash
 treemd -q '.h2 | text' doc.md                    # Get text (strips ##)
-treemd -q '[.h2] | count' doc.md                 # Count elements
-treemd -q '[.h] | limit(5)' doc.md               # First 5
+treemd -q '.h2 | count' doc.md                   # Count elements
+treemd -q '.h | limit(5)' doc.md                 # First 5
 treemd -q '.h | select(contains("API"))' doc.md  # Filter
 treemd -q '.h2 | text | slugify' doc.md          # URL slug
 treemd -q '.link | url' doc.md                   # Extract URLs
+treemd -q '.h2[Install] | .code' doc.md          # Code inside one section
 ```
+
+Functions like `count`, `first`, `sort_by` and `join` see everything a selector returns at once, and a selector piped from a heading looks only inside that heading's section.
 
 #### Hierarchy Operators
 
@@ -361,10 +380,25 @@ treemd -q '. | langs' doc.md           # Code blocks by language
 #### Output Formats
 
 ```bash
-treemd -q '.h2' --query-output json doc.md        # JSON
-treemd -q '.h2' --query-output json-pretty doc.md # Pretty JSON
+treemd -q '.h2' --query-output json doc.md        # JSON array
+treemd -q '.h2' --query-output json-pretty doc.md # Pretty JSON array
 treemd -q '.h2' --query-output jsonl doc.md       # JSON Lines
 ```
+
+`json` and `json-pretty` always print an array, even for a single result,
+and `[]` when nothing matches.
+
+#### Exit Status
+
+A query that matches nothing exits 0, as jq does. Add `-e` to exit 1 instead,
+so a script can tell:
+
+```bash
+treemd -q '.h2[Install]' -e README.md || echo "no install section"
+```
+
+A query that does not parse exits 3, and one that fails while running (such
+as `"a" - 1`) exits 5, as in jq.
 
 #### Stdin Support
 
@@ -372,6 +406,16 @@ treemd -q '.h2' --query-output jsonl doc.md       # JSON Lines
 cat doc.md | treemd -q '.h2'
 curl -s https://raw.githubusercontent.com/.../README.md | treemd -q '.h'
 tree | treemd                          # Pipe tree output to TUI
+```
+
+A piped document could come from anywhere, so in the TUI its links and images
+stay inside the working directory, and it loads no image by absolute path. A
+document opened by URL reaches nothing on this machine at all. To treat piped
+documents like local files:
+
+```toml
+[security]
+trust_piped_documents = true
 ```
 
 Run `treemd --query-help` for complete documentation.
@@ -382,24 +426,34 @@ Run `treemd --query-help` for complete documentation.
 
 Download from the [releases page](https://github.com/epistates/treemd/releases):
 
-| Platform | Binary |
-|----------|--------|
-| Linux x86_64 | `treemd-x86_64-unknown-linux-gnu` |
-| Linux ARM64 | `treemd-aarch64-unknown-linux-gnu` |
-| macOS x86_64 | `treemd-x86_64-apple-darwin` |
-| macOS ARM64 (Apple Silicon) | `treemd-aarch64-apple-darwin` |
-| Windows x86_64 | `treemd-x86_64-pc-windows-msvc.exe` |
+| Platform | Archive |
+|----------|---------|
+| Linux x86_64 | `treemd-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux x86_64, static (musl, Alpine) | `treemd-x86_64-unknown-linux-musl.tar.gz` |
+| Linux ARM64 | `treemd-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux ARM64, static (musl, Alpine) | `treemd-aarch64-unknown-linux-musl.tar.gz` |
+| macOS x86_64 | `treemd-x86_64-apple-darwin.tar.gz` |
+| macOS ARM64 (Apple Silicon) | `treemd-aarch64-apple-darwin.tar.gz` |
+| Windows x86_64 | `treemd-x86_64-pc-windows-msvc.exe.zip` |
+
+Each archive holds the binary, named as above without the extension, and `LICENSE`; the `.tar.gz` archives also hold the man page, `treemd.1`. `SHA256SUMS` lists the hash of every archive, and each `treemd-<target>.sha256` is the hash of the binary inside it. The archives are reproducible: the same binaries, packaged by `scripts/package-release.sh` with the same versions of tar, gzip and zip, give byte-identical archives. Each archive also has signed build provenance, checkable with `gh attestation verify <archive> --repo Epistates/treemd`. The Linux glibc builds need glibc 2.28 or newer (RHEL 8, Debian 10, Ubuntu 18.10); the musl builds need no glibc at all.
+
+Each archive also has a signed build provenance attestation, which shows it was built by this repository's release workflow from the tagged commit:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify treemd-x86_64-unknown-linux-gnu.tar.gz --repo Epistates/treemd
+```
 
 **macOS binaries** are signed with Developer ID and notarized by Apple.
 
 ### Building from Source
 
 ```bash
-cargo install cross              # For ARM cross-compilation
-./scripts/build-all.sh           # Build all platforms
+cargo build --release --locked   # target/release/treemd
 ```
 
-Artifacts are output to `target/release-artifacts/`.
+The release binaries for every platform are built by [`.github/workflows/release.yml`](.github/workflows/release.yml), which is the reference for each target's build.
 
 ## Configuration
 
@@ -408,7 +462,7 @@ treemd stores configuration in a TOML file:
 | Platform | Location |
 |----------|----------|
 | Linux/Unix | `~/.config/treemd/config.toml` |
-| macOS | `~/Library/Application Support/treemd/config.toml` |
+| macOS | `~/.config/treemd/config.toml` if it exists, otherwise `~/Library/Application Support/treemd/config.toml` |
 | Windows | `%APPDATA%\treemd\config.toml` |
 
 The file is created automatically when you change settings (theme with `t`, outline width with `[`/`]`).
@@ -419,7 +473,7 @@ The file is created automatically when you change settings (theme with `t`, outl
 [ui]
 theme = "Nord"                  # OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
 outline_width = 30              # 20, 30, or 40
-tree_style = "spaced"           # "spaced" (default) or "compact" (gapless box characters)
+tree_style = "compact"          # "compact" (default, gapless box characters) or "spaced"; used by --tree
 outline_heading_markers = true  # Show #/##/### level markers in outline sidebar
 
 [terminal]
@@ -429,7 +483,17 @@ color_mode = "auto"    # "auto", "rgb", or "256"
 hide_frontmatter = true  # Hide YAML frontmatter (---\n...\n---) in content view
 hide_latex = true        # Hide LaTeX math expressions ($...$, $$...$$, \begin{...})
 code_fences = "full"     # "full", "label", or "none" (see below)
+slug_style = "treemd"    # "treemd" or "github" (see below)
 ```
+
+### Heading Anchors
+
+`slug_style` decides how a heading becomes an anchor: the one `Y` copies, the
+`id` and `slug` in `-l -o json`, and `.slug` and `slugify` in queries.
+`treemd`, the default, drops `_` and gives repeated headings the same anchor.
+`github` makes them the way github.com does: `snake_case` keeps its `_`, and
+the second `## Setup` is `#setup-1`. Following a link finds the heading with
+either kind of anchor, whichever is set.
 
 ### Code Block Appearance
 
@@ -478,7 +542,9 @@ Remap any key for any mode using intuitive TOML syntax. Multi-key sequences are 
 "Ctrl+p" = "PrevMatch"
 ```
 
-Available modes: `Normal`, `Help`, `ThemePicker`, `Interactive`, `InteractiveTable`, `LinkFollow`, `LinkSearch`, `Search`, `DocSearch`, `CommandPalette`, `ConfirmDialog`, `CellEdit`
+Available modes: `Normal`, `Help`, `ThemePicker`, `Interactive`, `InteractiveTable`, `LinkFollow`, `LinkSearch`, `Search`, `DocSearch`, `CommandPalette`, `ConfirmDialog`, `CellEdit`, `FilePicker`, `FileSearch`, `ImageViewer`
+
+A binding that names an unknown key or action is skipped, and the rest of the file still applies; the status bar says which entries were skipped.
 
 See the built-in defaults in [`src/keybindings/defaults.rs`](src/keybindings/defaults.rs) for all available actions.
 
@@ -601,9 +667,9 @@ Contributions are welcome! Please feel free to submit a [Pull Request](https://g
 - [x] WikiLinks support
 - [x] Customizable keybindings
 - [x] Live file watching (auto-reload)
+- [x] Obsidian and GitHub callouts
 
 **Planned:**
-- [ ] Obsidian Flavored Markdown (callouts)
 - [ ] Fuzzy search improvements
 - [ ] Multiple file tabs
 - [ ] Custom query language plugins

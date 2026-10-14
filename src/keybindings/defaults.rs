@@ -51,6 +51,9 @@ pub fn default_keybindings() -> Keybindings {
     // Cell edit mode
     add_cell_edit_mode(&mut kb);
 
+    // Image viewer
+    add_image_viewer_mode(&mut kb);
+
     kb
 }
 
@@ -78,6 +81,10 @@ fn add_normal_mode(kb: &mut Keybindings) {
     bind(kb, Normal, "Home", First);
     bind(kb, Normal, "End", Last);
     bind(kb, Normal, "p", JumpToParent);
+    // Scroll the content a line without moving the outline selection, as in
+    // vim. These actions existed with no key to run them.
+    bind(kb, Normal, "Ctrl+e", ScrollDown);
+    bind(kb, Normal, "Ctrl+y", ScrollUp);
 
     // Outline
     bind(kb, Normal, "Enter", ToggleExpand);
@@ -125,10 +132,17 @@ fn add_normal_mode(kb: &mut Keybindings) {
 
     // Application
     bind(kb, Normal, "q", Quit);
+    // Raw mode turns Ctrl+C into an ordinary key, so without this it did
+    // nothing at all. Quit still asks first when there are unsaved edits.
+    // Every mode binds it: where `q` quits it quits, and where text is
+    // typed or a question asked it cancels, as Escape does.
+    bind(kb, Normal, "Ctrl+c", Quit);
     // Esc backs out (clears search/filter, shows quit hint) instead of
     // terminating the session — q is the deliberate quit key.
     bind(kb, Normal, "Escape", ExitMode);
     bind(kb, Normal, "Ctrl+l", Redraw);
+    // Raw mode turns Ctrl+Z into an ordinary key as well.
+    bind(kb, Normal, "Ctrl+z", Suspend);
 
     // Note: digits 1-9 act as a vim-style count prefix in Normal mode (e.g.
     // `5j`) and are consumed before keybinding dispatch, so the
@@ -168,6 +182,7 @@ fn add_help_mode(kb: &mut Keybindings) {
 
     // Quit
     bind(kb, Help, "q", Quit);
+    bind(kb, Help, "Ctrl+c", Quit);
 }
 
 fn add_theme_picker_mode(kb: &mut Keybindings) {
@@ -190,6 +205,7 @@ fn add_theme_picker_mode(kb: &mut Keybindings) {
 
     // Quit
     bind(kb, ThemePicker, "q", Quit);
+    bind(kb, ThemePicker, "Ctrl+c", Quit);
 }
 
 fn add_interactive_mode(kb: &mut Keybindings) {
@@ -242,6 +258,7 @@ fn add_interactive_mode(kb: &mut Keybindings) {
 
     // Quit
     bind(kb, Interactive, "q", Quit);
+    bind(kb, Interactive, "Ctrl+c", Quit);
 }
 
 fn add_interactive_table_mode(kb: &mut Keybindings) {
@@ -274,6 +291,7 @@ fn add_interactive_table_mode(kb: &mut Keybindings) {
 
     // Quit
     bind(kb, InteractiveTable, "q", Quit);
+    bind(kb, InteractiveTable, "Ctrl+c", Quit);
 }
 
 fn add_link_follow_mode(kb: &mut Keybindings) {
@@ -313,6 +331,7 @@ fn add_link_follow_mode(kb: &mut Keybindings) {
 
     // Quit
     bind(kb, LinkFollow, "q", Quit);
+    bind(kb, LinkFollow, "Ctrl+c", Quit);
 }
 
 fn add_link_search_mode(kb: &mut Keybindings) {
@@ -321,6 +340,7 @@ fn add_link_search_mode(kb: &mut Keybindings) {
 
     // Exit search (back to link follow)
     bind(kb, LinkSearch, "Escape", ExitMode);
+    bind(kb, LinkSearch, "Ctrl+c", ExitMode);
 
     // Select filtered result
     bind(kb, LinkSearch, "Enter", FollowLink);
@@ -339,6 +359,7 @@ fn add_search_mode(kb: &mut Keybindings) {
 
     // Exit search
     bind(kb, Search, "Escape", ExitMode);
+    bind(kb, Search, "Ctrl+c", ExitMode);
 
     // Confirm search (select result)
     bind(kb, Search, "Enter", ConfirmAction);
@@ -356,6 +377,7 @@ fn add_doc_search_mode(kb: &mut Keybindings) {
 
     // Exit search
     bind(kb, DocSearch, "Escape", ExitMode);
+    bind(kb, DocSearch, "Ctrl+c", ExitMode);
 
     // Accept search and enter navigation mode
     bind(kb, DocSearch, "Enter", ConfirmAction);
@@ -375,6 +397,19 @@ fn add_doc_search_mode(kb: &mut Keybindings) {
 
     // Re-enter search input with /
     bind(kb, DocSearch, "/", EnterDocSearch);
+
+    // Reading with the matches highlighted, once Enter has accepted the
+    // search: these keys did nothing there. While the query is typed they
+    // are text, taken before any binding.
+    bind(kb, DocSearch, "j", ScrollDown);
+    bind(kb, DocSearch, "k", ScrollUp);
+    bind(kb, DocSearch, "d", PageDown);
+    bind(kb, DocSearch, "PageDown", PageDown);
+    bind(kb, DocSearch, "u", PageUp);
+    bind(kb, DocSearch, "PageUp", PageUp);
+    bind(kb, DocSearch, "g", First);
+    bind(kb, DocSearch, "G", Last);
+    bind(kb, DocSearch, "q", Quit);
 }
 
 fn add_command_palette_mode(kb: &mut Keybindings) {
@@ -383,6 +418,7 @@ fn add_command_palette_mode(kb: &mut Keybindings) {
 
     // Exit
     bind(kb, CommandPalette, "Escape", ExitMode);
+    bind(kb, CommandPalette, "Ctrl+c", ExitMode);
 
     // Execute selected command
     bind(kb, CommandPalette, "Enter", ConfirmAction);
@@ -413,6 +449,7 @@ fn add_confirm_dialog_mode(kb: &mut Keybindings) {
     bind(kb, ConfirmDialog, "n", CancelAction);
     bind(kb, ConfirmDialog, "N", CancelAction);
     bind(kb, ConfirmDialog, "Escape", CancelAction);
+    bind(kb, ConfirmDialog, "Ctrl+c", CancelAction);
 
     // Discard and quit (for unsaved changes dialogs)
     bind(kb, ConfirmDialog, "q", DiscardAndQuit);
@@ -427,6 +464,7 @@ fn add_cell_edit_mode(kb: &mut Keybindings) {
 
     // Cancel editing
     bind(kb, CellEdit, "Escape", CancelAction);
+    bind(kb, CellEdit, "Ctrl+c", CancelAction);
 
     // Confirm edit
     bind(kb, CellEdit, "Enter", ConfirmAction);
@@ -466,6 +504,7 @@ fn add_file_picker_mode(kb: &mut Keybindings) {
     // Exit
     bind(kb, FilePicker, "Escape", ExitMode);
     bind(kb, FilePicker, "q", Quit);
+    bind(kb, FilePicker, "Ctrl+c", Quit);
 }
 
 fn add_file_search_mode(kb: &mut Keybindings) {
@@ -479,10 +518,28 @@ fn add_file_search_mode(kb: &mut Keybindings) {
 
     // Exit search
     bind(kb, FileSearch, "Escape", ExitMode);
+    bind(kb, FileSearch, "Ctrl+c", ExitMode);
     bind(kb, FileSearch, "Enter", FollowLink);
 
     // Delete character
     bind(kb, FileSearch, "Backspace", SearchBackspace);
+}
+
+fn add_image_viewer_mode(kb: &mut Keybindings) {
+    use Action::*;
+    use KeybindingMode::ImageViewer;
+
+    // Step through an animation's frames
+    bind(kb, ImageViewer, "h", PreviousFrame);
+    bind(kb, ImageViewer, "Left", PreviousFrame);
+    bind(kb, ImageViewer, "l", NextFrame);
+    bind(kb, ImageViewer, "Right", NextFrame);
+    bind(kb, ImageViewer, "Space", TogglePlayback);
+
+    // Close the viewer
+    bind(kb, ImageViewer, "Escape", ExitMode);
+    bind(kb, ImageViewer, "q", ExitMode);
+    bind(kb, ImageViewer, "Ctrl+c", ExitMode);
 }
 
 #[cfg(test)]
@@ -531,6 +588,32 @@ mod tests {
                 make_key_event(KeyCode::Char('?'), KeyModifiers::NONE)
             ),
             Some(Action::ToggleHelp)
+        );
+    }
+
+    /// Raw mode makes Ctrl+C and Ctrl+Z ordinary keys, so they do only what
+    /// the keymap says. In Normal mode that is quit and suspend; in the
+    /// interactive modes Ctrl+Z is still undo.
+    #[test]
+    fn test_ctrl_c_quits_and_ctrl_z_suspends_only_in_normal_mode() {
+        let mut kb = default_keybindings();
+        let ctrl = |c| make_key_event(KeyCode::Char(c), KeyModifiers::CONTROL);
+
+        assert_eq!(
+            kb.dispatch(KeybindingMode::Normal, ctrl('c')),
+            Some(Action::Quit)
+        );
+        assert_eq!(
+            kb.dispatch(KeybindingMode::Normal, ctrl('z')),
+            Some(Action::Suspend)
+        );
+        assert_eq!(
+            kb.dispatch(KeybindingMode::Interactive, ctrl('z')),
+            Some(Action::UndoEdit)
+        );
+        assert_eq!(
+            kb.dispatch(KeybindingMode::InteractiveTable, ctrl('z')),
+            Some(Action::UndoEdit)
         );
     }
 
@@ -600,22 +683,7 @@ mod tests {
     fn test_all_modes_have_bindings() {
         let kb = default_keybindings();
 
-        let modes = [
-            KeybindingMode::Normal,
-            KeybindingMode::Help,
-            KeybindingMode::ThemePicker,
-            KeybindingMode::Interactive,
-            KeybindingMode::InteractiveTable,
-            KeybindingMode::LinkFollow,
-            KeybindingMode::LinkSearch,
-            KeybindingMode::Search,
-            KeybindingMode::DocSearch,
-            KeybindingMode::CommandPalette,
-            KeybindingMode::ConfirmDialog,
-            KeybindingMode::CellEdit,
-        ];
-
-        for mode in modes {
+        for mode in <KeybindingMode as strum::IntoEnumIterator>::iter() {
             assert!(
                 kb.get_mode_keybinds(mode).is_some(),
                 "Mode {:?} has no bindings",

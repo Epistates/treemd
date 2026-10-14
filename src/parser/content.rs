@@ -10,7 +10,35 @@
 //! - Details block extraction: `<details><summary>` HTML blocks
 //! - Full GFM support: tables, strikethrough, task lists
 
-use super::output::Block;
+use super::output::{Block, InlineElement, ListItem};
+
+/// The inline elements of a list item's own text, without its nested blocks.
+///
+/// turbovault-parser gives an item's `inline` its own elements first, then
+/// everything gathered from `blocks`: a paragraph's inline run, and each
+/// nested item's `inline`, which is already that same collection applied to
+/// it. That is what lets a link in a nested item be found from the top-level
+/// item, but drawing the whole run on the item's row repeats every nested
+/// item's text there. This takes back off what the blocks contributed, the
+/// inverse of the parser's `collect_inline_elements`.
+pub fn own_inline(item: &ListItem) -> &[InlineElement] {
+    fn contributed(blocks: &[Block]) -> usize {
+        blocks
+            .iter()
+            .map(|block| match block {
+                Block::Paragraph { inline, .. } => inline.len(),
+                Block::List { items, .. } => items.iter().map(|i| i.inline.len()).sum(),
+                Block::Blockquote { blocks, .. } | Block::Details { blocks, .. } => {
+                    contributed(blocks)
+                }
+                _ => 0,
+            })
+            .sum()
+    }
+
+    let own = item.inline.len().saturating_sub(contributed(&item.blocks));
+    &item.inline[..own]
+}
 
 /// Parse markdown content into structured blocks.
 ///
@@ -44,6 +72,55 @@ pub fn parse_content(markdown: &str, start_line: usize) -> Vec<Block> {
 /// ```
 pub fn slugify(text: &str) -> String {
     turbovault_parser::slugify(text)
+}
+
+/// How heading text becomes an anchor slug.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SlugStyle {
+    /// treemd's own, [`slugify`]: drops `_` and other punctuation, and
+    /// headings with the same text share a slug.
+    #[default]
+    Treemd,
+    /// GitHub's: keeps `_`, and a repeated heading is numbered, so the
+    /// second "Setup" is `setup-1`, as on github.com.
+    Github,
+}
+
+impl SlugStyle {
+    /// The slug of `text` alone, with no numbering for repeats.
+    ///
+    /// ```
+    /// use treemd::parser::content::SlugStyle;
+    ///
+    /// assert_eq!(SlugStyle::Treemd.slug("snake_case"), "snakecase");
+    /// assert_eq!(SlugStyle::Github.slug("snake_case"), "snake_case");
+    /// ```
+    pub fn slug(self, text: &str) -> String {
+        match self {
+            SlugStyle::Treemd => slugify(text),
+            SlugStyle::Github => github_slugger::slug(text),
+        }
+    }
+
+    /// The slug of each of `texts`, in order, numbering repeats when the
+    /// style does.
+    ///
+    /// ```
+    /// use treemd::parser::content::SlugStyle;
+    ///
+    /// assert_eq!(SlugStyle::Github.slugs(["Setup", "Setup"]), ["setup", "setup-1"]);
+    /// assert_eq!(SlugStyle::Treemd.slugs(["Setup", "Setup"]), ["setup", "setup"]);
+    /// ```
+    pub fn slugs<'a>(self, texts: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+        match self {
+            SlugStyle::Treemd => texts.into_iter().map(slugify).collect(),
+            SlugStyle::Github => {
+                let mut slugger = github_slugger::Slugger::default();
+                texts.into_iter().map(|text| slugger.slug(text)).collect()
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -299,5 +376,47 @@ Also [[Another Valid]]
         } else {
             panic!("Expected Paragraph block, got {:?}", blocks[1]);
         }
+    }
+
+    /// `own_inline` undoes the parser's collection of nested inline elements
+    /// into an item's run, and nothing else. If the parser changes how it
+    /// collects them, this is what fails, rather than the renderer quietly
+    /// drawing a child's text on its parent's row.
+    #[test]
+    fn own_inline_is_the_item_without_its_nested_blocks() {
+        fn text(elements: &[InlineElement]) -> String {
+            elements
+                .iter()
+                .map(|e| match e {
+                    InlineElement::Text { value }
+                    | InlineElement::Strong { value }
+                    | InlineElement::Emphasis { value }
+                    | InlineElement::Code { value } => value.clone(),
+                    InlineElement::Link { text, .. } => text.clone(),
+                    _ => String::new(),
+                })
+                .collect()
+        }
+        fn first_item(md: &str) -> ListItem {
+            match parse_content(md, 0).into_iter().next() {
+                Some(Block::List { mut items, .. }) => items.remove(0),
+                other => panic!("expected a list, got {other:?}"),
+            }
+        }
+
+        let item = first_item("- **outer** [a](#a)\n  - inner [b](#b)\n    - deep\n");
+        assert_eq!(text(own_inline(&item)), "outer a");
+        // The run as a whole still carries the nested links, which is what
+        // interactive mode indexes them from.
+        assert!(text(&item.inline).contains('b'));
+
+        let item = first_item("- a\n  - b\n\n  para under a\n");
+        assert_eq!(text(own_inline(&item)), "a");
+
+        let item = first_item("- [ ] todo [x](#x)\n\n  more [y](#y)\n");
+        assert_eq!(text(own_inline(&item)), "todo x");
+
+        let item = first_item("- plain\n");
+        assert_eq!(own_inline(&item), item.inline.as_slice());
     }
 }

@@ -104,6 +104,25 @@ impl TokenKind {
             TokenKind::Eof => "end of input",
         }
     }
+
+    /// The source text of a keyword token, for places where a keyword is
+    /// just a word, such as the `[end]` in `.h[end]`.
+    pub fn keyword(&self) -> Option<&'static str> {
+        Some(match self {
+            TokenKind::And => "and",
+            TokenKind::Or => "or",
+            TokenKind::Not => "not",
+            TokenKind::If => "if",
+            TokenKind::Then => "then",
+            TokenKind::Elif => "elif",
+            TokenKind::Else => "else",
+            TokenKind::End => "end",
+            TokenKind::True => "true",
+            TokenKind::False => "false",
+            TokenKind::Null => "null",
+            _ => return None,
+        })
+    }
 }
 
 /// A token with its source location.
@@ -124,6 +143,9 @@ struct Lexer<'a> {
     input: &'a str,
     chars: std::iter::Peekable<std::str::CharIndices<'a>>,
     pos: usize,
+    /// A bare word found inside a filter's brackets, returned as the token
+    /// after the `[` (see [`Lexer::bare_filter_word`]).
+    pending: Option<Token>,
 }
 
 impl<'a> Lexer<'a> {
@@ -132,6 +154,52 @@ impl<'a> Lexer<'a> {
             input,
             chars: input.char_indices().peekable(),
             pos: 0,
+            pending: None,
+        }
+    }
+
+    /// The word between a filter's brackets, when it is written bare and is
+    /// more than one identifier, as in `.code[c++]`, `.code[objective-c]` or
+    /// `.h[Getting Started]`.
+    ///
+    /// `open` is the byte just past the `[`. Only a `[` right after a name or
+    /// another filter's `]` opens a filter; an index (`[0]`, `[-1]`, `[1:]`),
+    /// a quoted string or a single identifier is left to the ordinary
+    /// tokens. Lexed one character at a time, `c++` was `c` and two `+`
+    /// operators, `c#` an unexpected `#`, and `-d` lost its `-`.
+    fn bare_filter_word(&self, open: usize, prev: Option<&Token>) -> Option<(String, usize)> {
+        let prev = prev?;
+        if !matches!(prev.kind, TokenKind::Ident(_) | TokenKind::RBracket)
+            || prev.span.end + 1 != open
+        {
+            return None;
+        }
+        let close = open + self.input[open..].find(']')?;
+        let word = self.input[open..close].trim();
+        let is_index = {
+            let (start, end) = word.split_once(':').unwrap_or((word, ""));
+            let integer = |s: &str| {
+                let s = s.trim();
+                let digits = s.strip_prefix('-').unwrap_or(s);
+                s.is_empty() || (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+            };
+            integer(start) && integer(end)
+        };
+        let single_identifier = word.chars().all(|c| c.is_alphanumeric() || c == '_');
+        if word.is_empty()
+            || is_index
+            || single_identifier
+            || word.contains(['[', '(', '{', '"', '\'', '|', ','])
+        {
+            return None;
+        }
+        Some((word.to_string(), close))
+    }
+
+    /// Consume input up to byte offset `end`.
+    fn skip_to(&mut self, end: usize) {
+        while self.chars.peek().is_some_and(|&(pos, _)| pos < end) {
+            self.advance();
         }
     }
 
@@ -141,8 +209,10 @@ impl<'a> Lexer<'a> {
 
     fn advance(&mut self) -> Option<(usize, char)> {
         let result = self.chars.next();
-        if let Some((pos, _)) = result {
-            self.pos = pos + 1;
+        if let Some((pos, c)) = result {
+            // A byte offset, like every span: past the whole character, not
+            // one byte into it.
+            self.pos = pos + c.len_utf8();
         }
         result
     }
@@ -267,7 +337,11 @@ impl<'a> Lexer<'a> {
         Token::new(kind, Span::new(start, self.pos))
     }
 
-    fn next_token(&mut self, prev: Option<&TokenKind>) -> Result<Token, QueryError> {
+    fn next_token(&mut self, prev_token: Option<&Token>) -> Result<Token, QueryError> {
+        if let Some(token) = self.pending.take() {
+            return Ok(token);
+        }
+        let prev = prev_token.map(|t| &t.kind);
         self.skip_whitespace();
 
         let Some((start, c)) = self.advance() else {
@@ -282,7 +356,17 @@ impl<'a> Lexer<'a> {
             '|' => Token::new(TokenKind::Pipe, Span::new(start, self.pos)),
             ',' => Token::new(TokenKind::Comma, Span::new(start, self.pos)),
             ':' => Token::new(TokenKind::Colon, Span::new(start, self.pos)),
-            '[' => Token::new(TokenKind::LBracket, Span::new(start, self.pos)),
+            '[' => {
+                if let Some((word, close)) = self.bare_filter_word(self.pos, prev_token) {
+                    let word_start = self.pos;
+                    self.skip_to(close);
+                    self.pending = Some(Token::new(
+                        TokenKind::Ident(word),
+                        Span::new(word_start, close),
+                    ));
+                }
+                Token::new(TokenKind::LBracket, Span::new(start, start + 1))
+            }
             ']' => Token::new(TokenKind::RBracket, Span::new(start, self.pos)),
             '(' => Token::new(TokenKind::LParen, Span::new(start, self.pos)),
             ')' => Token::new(TokenKind::RParen, Span::new(start, self.pos)),
@@ -439,12 +523,10 @@ fn prev_allows_prefix_minus(prev: Option<&TokenKind>) -> bool {
 pub fn tokenize(input: &str) -> Result<Vec<Token>, QueryError> {
     let mut lexer = Lexer::new(input);
     let mut tokens = Vec::new();
-    let mut prev_kind: Option<TokenKind> = None;
 
     loop {
-        let token = lexer.next_token(prev_kind.as_ref())?;
+        let token = lexer.next_token(tokens.last())?;
         let is_eof = matches!(token.kind, TokenKind::Eof);
-        prev_kind = Some(token.kind.clone());
         tokens.push(token);
         if is_eof {
             break;
@@ -655,6 +737,24 @@ mod tests {
                 TokenKind::Eof
             ]
         );
+    }
+
+    /// A filter's bare text is one word, whatever it holds; an index, a
+    /// string, a single identifier and an array literal lex as before.
+    #[test]
+    fn test_bare_filter_word() {
+        let word = |q: &str| tokenize_kinds(q)[3].clone();
+        assert_eq!(word(".code[c++]"), TokenKind::Ident("c++".into()));
+        assert_eq!(word(".code[c#]"), TokenKind::Ident("c#".into()));
+        assert_eq!(word(".h[ a b ]"), TokenKind::Ident("a b".into()));
+        assert_eq!(word(".h[-d]"), TokenKind::Ident("-d".into()));
+        assert_eq!(word(".h[-1]"), TokenKind::Number(-1.0));
+        assert_eq!(word(".h[1:]"), TokenKind::Number(1.0));
+        assert_eq!(word(".h[end]"), TokenKind::End);
+        assert_eq!(word(r#".h["a b"]"#), TokenKind::String("a b".into()));
+        assert_eq!(tokenize_kinds("[a-b]")[1], TokenKind::Ident("a".into()));
+        // Only a `[` right against the selector opens a filter.
+        assert_eq!(tokenize_kinds(".h [c++]")[4], TokenKind::Plus);
     }
 
     #[test]

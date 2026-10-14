@@ -130,6 +130,10 @@ pub struct InteractiveState {
     /// test that holds the two together; without it the two drift silently and
     /// the viewport scrolls to the wrong place.
     pub total_lines: usize,
+    /// The line each top-level block was counted at, which places each
+    /// element relative to its own block once the renderer reports where the
+    /// block was really drawn.
+    pub block_lines: Vec<usize>,
 }
 
 /// Unique identifier for an element
@@ -222,6 +226,7 @@ impl InteractiveState {
             element_states: HashMap::new(),
             detail_mode: None,
             total_lines: 0,
+            block_lines: Vec::new(),
         }
     }
 
@@ -235,6 +240,7 @@ impl InteractiveState {
         mermaid_rows: &std::collections::HashMap<u64, usize>,
     ) {
         self.elements.clear();
+        self.block_lines.clear();
         let mut current_line = 0;
 
         // Resolve placeholder rows: use cached pixel-based value if available, else heuristic.
@@ -249,6 +255,7 @@ impl InteractiveState {
 
         for (block_idx, block) in blocks.iter().enumerate() {
             let start_line = current_line;
+            self.block_lines.push(current_line);
 
             match block {
                 Block::Details {
@@ -1396,16 +1403,14 @@ mod interactive_tests {
 
         // One row for `step`, then 2 + 1 for the fence and its single line.
         assert_eq!(count("1. step\n\n   ```bash\n   cmd\n   ```\n"), 4);
-        // A nested item is a second line of the outer item's content.
+        // A nested item is a nested list block, one row of its own.
         assert_eq!(count("- outer\n  - inner\n"), 2);
         // Plain items are still one row each.
         assert_eq!(count("- a\n- b\n"), 2);
-        // Nested inside a quote is the path that was actually reachable. One
-        // row, because turbovault-parser 2.1.0 folds an indented continuation
-        // into the item rather than leaving it a nested block. That folding
-        // also drops the separator, which is Epistates/turbovault#77, but the
-        // count and the render agree either way.
-        assert_eq!(count("> - step\n>\n>   text\n"), 1);
+        // Nested inside a quote is the path that was actually reachable. The
+        // indented continuation is the item's own paragraph since
+        // turbovault-parser 2.2.0 (Epistates/turbovault#77), so two rows.
+        assert_eq!(count("> - step\n>\n>   text\n"), 2);
     }
 
     /// An image in a list item has to reach the element index with rows

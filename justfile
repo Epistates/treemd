@@ -44,6 +44,19 @@ check:
 lint:
     cargo clippy --all-targets --all-features --locked -- -D warnings
 
+# Run clippy on the minimal build, where feature-gated code drops out and
+# leaves unused imports behind
+lint-minimal:
+    cargo clippy --all-targets --no-default-features --locked -- -D warnings
+
+# Build the docs with warnings as errors
+doc-check:
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --locked
+
+# Run the doc examples, which `--all-targets` skips
+test-doc:
+    cargo test --doc --all-features --locked
+
 # Format code with rustfmt
 fmt:
     cargo fmt
@@ -60,7 +73,7 @@ clean:
 install:
     @echo "Installing treemd..."
     cargo install --path . --force
-    @echo "✅ Installation complete! Run 'treemd --help' to get started."
+    @echo "Installation complete. Run 'treemd --help' to get started."
 
 # Uninstall the binary
 uninstall:
@@ -70,18 +83,26 @@ uninstall:
 update:
     cargo update
 
-# Audit dependencies. The ignored quick-xml advisories are build-time-only in
-# wayland-scanner, which parses bundled protocol XML rather than user input.
+# Check dependencies for security advisories (requires cargo-deny)
 audit:
-    cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+    cargo deny --locked check advisories
+
+# Check advisories, licenses, banned specs and sources against deny.toml
+deny:
+    cargo deny --locked check
 
 # Show outdated dependencies
 outdated:
     cargo outdated
 
-# Full CI check: format, lint, test, build
-ci: fmt-check lint test test-minimal audit release
-    @echo "✅ All CI checks passed!"
+# Everything that has to pass before a commit: format, both lints, docs and
+# every test
+gate: fmt-check lint lint-minimal doc-check test test-minimal test-doc
+    @echo "GATE-OK"
+
+# Full CI check: the gate, dependencies, and a release build
+ci: gate deny release
+    @echo "All CI checks passed."
 
 # Quick test of link following feature
 test-links: install
@@ -139,6 +160,14 @@ release-preflight VERSION:
         fail=1
     fi
 
+    # The tag goes on HEAD, so HEAD has to be what everyone else has: a tag
+    # on an unpushed local commit releases code nobody reviewed.
+    git fetch --quiet origin main
+    if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+        echo "HEAD is not origin/main; push or pull first"
+        fail=1
+    fi
+
     manifest=$(cargo metadata --no-deps --format-version 1 \
         | jq -r '.packages[] | select(.name == "treemd") | .version')
     if [ "$version" != "$manifest" ]; then
@@ -156,6 +185,11 @@ release-preflight VERSION:
         fail=1
     fi
 
+    if ! cargo publish --dry-run --locked; then
+        echo "cargo publish --dry-run failed"
+        fail=1
+    fi
+
     if [ "$fail" -ne 0 ]; then
         echo
         echo "preflight failed, do not tag"
@@ -163,7 +197,11 @@ release-preflight VERSION:
     fi
     echo "ready to tag v$version"
 
-# Cut and push a release tag, but only if the preflight passes.
+# Cut and push a release tag, but only if the preflight passes. crates.io is
+# published by hand afterwards, once the release workflow is green, so a
+# failed build never leaves a crate on crates.io without its GitHub release.
 release-tag VERSION: (release-preflight VERSION)
     git tag -a "v{{VERSION}}" -m "Release v{{VERSION}}"
     git push origin "v{{VERSION}}"
+    @echo "Tag pushed. When the release workflow has passed and published v{{VERSION}},"
+    @echo "publish the crate: cargo publish --locked"

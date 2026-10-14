@@ -301,8 +301,11 @@ pub fn render_table_row(
     let mut wrapped_cells: Vec<Vec<String>> = Vec::new();
     let mut max_lines = 1;
 
-    for (i, cell) in cells.iter().enumerate() {
-        let width = col_widths.get(i).copied().unwrap_or(10);
+    // A row is drawn with exactly the table's columns. The parser already
+    // drops a row's extra cells, as GFM says to, but a longer row reaching
+    // here would otherwise draw cells past the right border.
+    for (i, cell) in cells.iter().take(col_widths.len()).enumerate() {
+        let width = col_widths[i];
         // Column widths carry `CELL_PADDING`, so the text gets what is left.
         let content_width = width.saturating_sub(CELL_PADDING);
         let wrapped = if content_width > 0 {

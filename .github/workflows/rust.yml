@@ -5,6 +5,13 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  # Weekly, so a new advisory or a toolchain change is caught on a quiet
+  # repository too, not only on the next push.
+  schedule:
+    - cron: "17 6 * * 1"
+  # The release workflow runs this whole suite on the tagged commit and
+  # builds nothing until it passes.
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,22 +23,38 @@ concurrency:
   group: rust-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Every action is pinned to a full commit SHA, since a tag can be moved to
+# different code after the fact. The trailing comment is the release the SHA
+# belongs to, and Dependabot's github-actions updates keep both current.
+# dtolnay/rust-toolchain has no release tags: it is pinned to a commit on
+# master and given the toolchain explicitly, as its README describes.
+
 jobs:
   lint:
     name: Format & Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
-      - name: Check minimal feature set
-        run: cargo check --all-targets --no-default-features --locked
+      - name: Clippy on the minimal feature set
+        run: cargo clippy --all-targets --no-default-features --locked -- -D warnings
+      - name: Test minimal feature set
+        run: cargo test --all-targets --no-default-features --locked
+      - name: Docs
+        run: cargo doc --no-deps --all-features --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -40,60 +63,121 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build
         run: cargo build --all-features --locked --verbose
       - name: Run tests
         run: cargo test --all-targets --all-features --locked --verbose
+      - name: Run doc examples
+        run: cargo test --doc --all-features --locked
 
   msrv:
     name: MSRV (1.90)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
           toolchain: "1.90"
-      - uses: Swatinem/rust-cache@v2
-      - name: Check with MSRV
-        run: cargo check --all-targets --all-features --locked
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Test with MSRV
+        run: cargo test --all-targets --all-features --locked
 
   package:
     name: Package
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Verify crates.io package
         run: cargo package --locked
 
-  audit:
-    name: Security audit
+  # The musl build is the one Alpine users get (#42), and it was only ever
+  # built at release time, after the tag was already pushed. Build it the
+  # way the release does, with cross, and run it on Alpine itself.
+  musl:
+    name: musl on Alpine
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: write
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-
-      # audit-check installs cargo-audit itself, unpinned and without
-      # --locked, so a broken publish anywhere in cargo-audit's dependency
-      # tree fails this job with nothing to say about our code. jiff 0.2.36
-      # did exactly that: it shipped `include_str!` paths reaching outside
-      # the crate, so it would not compile at all. Installing first with
-      # --locked resolves through cargo-audit's own lockfile, and the action
-      # then finds it present and skips its own install.
-      - name: Install cargo-audit from its lockfile
-        run: cargo install cargo-audit --locked
-
-      - uses: rustsec/audit-check@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # quick-xml is used only by wayland-scanner's proc macro against
-          # bundled protocol XML. Keep runtime Wayland clipboard support while
-          # upstream moves to quick-xml >=0.41; all other advisories still fail.
-          ignore: RUSTSEC-2026-0194,RUSTSEC-2026-0195
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --rev 8633ec65ab914015c2444c732568b414bd3c47cf --locked
+      - name: Build
+        run: cross build --locked --target x86_64-unknown-linux-musl
+      # The checkout is mounted read-only: the container only runs the binary.
+      - name: Smoke test on Alpine
+        run: >-
+          docker run --rm -v "$PWD:/src:ro" -w /src alpine:3.22
+          sh scripts/smoke-test.sh target/x86_64-unknown-linux-musl/debug/treemd
+
+  # The release packaging otherwise only runs once a tag is pushed, which
+  # cannot be re-cut. Package one target twice and compare: the script has
+  # to work, and to give the same bytes both times.
+  archives:
+    name: Release archives
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build
+        run: cargo build --locked
+      - name: Package twice and compare
+        run: |
+          mkdir -p builds/x86_64-unknown-linux-gnu
+          cp target/debug/treemd builds/x86_64-unknown-linux-gnu/
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export SOURCE_DATE_EPOCH
+          scripts/package-release.sh builds first
+          sleep 1
+          scripts/package-release.sh builds second
+          diff -r first second
+          cat first/SHA256SUMS
+        shell: bash
+
+  # Advisories (the RustSec database cargo-audit reads), licenses, banned
+  # dependency specs and sources, all configured in deny.toml. The action
+  # runs a prebuilt cargo-deny fixed by the pinned SHA, so nothing is
+  # compiled or resolved at run time.
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          arguments: --all-features --locked

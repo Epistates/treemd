@@ -36,6 +36,26 @@ use super::value::Value;
 pub type FunctionFn =
     Arc<dyn Fn(&[Value], &EvalContext) -> Result<Vec<Value>, QueryError> + Send + Sync>;
 
+/// How a function treats a stream of values piped into it.
+///
+/// `.h | text` runs `text` once per heading, but `.h | count` has to see
+/// every heading at once to mean anything. A function that is not
+/// [`PerValue`](StreamMode::PerValue) receives the whole upstream stream as
+/// one array when the stage before it yields a stream. Given a single
+/// value, such as an array literal, it is called on that value as usual.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StreamMode {
+    /// Called once for each value (`text`, `upper`, `keys`).
+    #[default]
+    PerValue,
+    /// Called once on the collected stream, producing a single result
+    /// (`count`, `join`, `first`).
+    Reduce,
+    /// Called once on the collected stream; the array it returns is spread
+    /// back into a stream (`sort`, `unique`, `limit`).
+    Reorder,
+}
+
 /// A registered function with metadata.
 #[derive(Clone)]
 pub struct Function {
@@ -47,6 +67,8 @@ pub struct Function {
     pub description: String,
     /// Whether this function consumes the current value as first arg
     pub takes_input: bool,
+    /// How the function treats a stream piped into it
+    pub stream: StreamMode,
 }
 
 impl Function {
@@ -60,7 +82,14 @@ impl Function {
             arity,
             description: String::new(),
             takes_input: true,
+            stream: StreamMode::PerValue,
         }
+    }
+
+    /// Set how the function treats a stream piped into it.
+    pub fn with_stream(mut self, stream: StreamMode) -> Self {
+        self.stream = stream;
+        self
     }
 
     /// Set the function description.
@@ -92,6 +121,7 @@ impl std::fmt::Debug for Function {
             .field("arity", &self.arity)
             .field("description", &self.description)
             .field("takes_input", &self.takes_input)
+            .field("stream", &self.stream)
             .finish()
     }
 }

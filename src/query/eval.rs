@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use super::ast::*;
 use super::error::{QueryError, QueryErrorKind};
-use super::registry::Registry;
+use super::registry::{Registry, StreamMode};
 use super::value::*;
-use crate::parser::Document;
 use crate::parser::output::InlineElement;
+use crate::parser::{Document, SlugStyle};
 
 /// Evaluation context passed to functions.
 pub struct EvalContext {
@@ -38,13 +38,23 @@ pub struct EvalContext {
     pub document: DocumentValue,
     /// Raw document content
     pub raw_content: String,
+    /// How headings' `.slug` and `slugify` make slugs
+    pub slug_style: SlugStyle,
 }
 
 impl EvalContext {
     /// Create a new context from a document.
     pub fn from_document(doc: &Document) -> Self {
-        let headings = extract_headings(doc);
-        let extracted = extract_blocks(doc);
+        let slug_style = SlugStyle::default();
+        let headings = extract_headings(doc, slug_style);
+        // Past a byte order mark, which otherwise sits in front of the first
+        // block and keeps a leading table, quote or list from being one.
+        let body = doc.content.strip_prefix('\u{feff}').unwrap_or(&doc.content);
+        let mut extracted = extract_blocks(body);
+        // In document order, which section scoping searches.
+        extracted.code_blocks.sort_by_key(|code| code.start_line);
+        let mut links = extract_doc_links(&doc.content);
+        links.sort_by_key(|link| link.offset);
         let frontmatter = extract_frontmatter(doc);
 
         let document = DocumentValue {
@@ -57,7 +67,7 @@ impl EvalContext {
             current: Value::Document(document.clone()),
             headings,
             code_blocks: extracted.code_blocks,
-            links: extracted.links,
+            links,
             images: extracted.images,
             tables: extracted.tables,
             lists: extracted.lists,
@@ -66,6 +76,7 @@ impl EvalContext {
             frontmatter,
             document,
             raw_content: doc.content.clone(),
+            slug_style,
         }
     }
 }
@@ -100,6 +111,30 @@ impl Engine {
         }
     }
 
+    /// Make headings' `.slug`, and `slugify`, in `style` rather than the
+    /// default, as the `slug_style` setting asks.
+    ///
+    /// ```
+    /// use treemd::{parse_markdown, parser::SlugStyle, query};
+    ///
+    /// let doc = parse_markdown("# Setup\n# Setup\n");
+    /// let q = query::parse(".h | .slug").unwrap();
+    /// let slugs = query::engine(&doc).with_slug_style(SlugStyle::Github).execute(&q).unwrap();
+    /// assert_eq!(slugs[1].to_text(), "setup-1");
+    /// ```
+    pub fn with_slug_style(mut self, style: SlugStyle) -> Self {
+        let texts = self.context.headings.iter().map(|h| h.text.as_str());
+        for (slug, heading) in style
+            .slugs(texts)
+            .into_iter()
+            .zip(&mut self.context.headings)
+        {
+            heading.slug = slug;
+        }
+        self.context.slug_style = style;
+        self
+    }
+
     /// Execute a query and return results.
     pub fn execute(&mut self, query: &Query) -> Result<Vec<Value>, QueryError> {
         let mut all_results = Vec::new();
@@ -113,35 +148,126 @@ impl Engine {
     }
 
     fn eval_piped(&mut self, piped: &PipedExpr) -> Result<Vec<Value>, QueryError> {
-        // Start with the document as input
-        let mut current = vec![Value::Document(self.context.document.clone())];
+        let document = Value::Document(self.context.document.clone());
+        self.eval_stages(&piped.stages, document)
+    }
 
-        // Preserve and restore the outer `current` so a top-level pipe doesn't
-        // leak its per-stage value into sibling expressions.
+    /// Run pipeline `stages` left to right, starting from `input`.
+    ///
+    /// Each stage normally runs once per value from the stage before. A
+    /// collection function (see [`StreamMode`]) after a stage that yields a
+    /// stream runs once on the whole stream instead, so `.h | count` counts
+    /// headings rather than printing `1` per heading. That holds for an
+    /// empty stream too, which is how `.h[Missing] | count` gives `0`.
+    ///
+    /// `current` is saved and restored around the pipeline so a stage's
+    /// value does not leak into the surrounding expression (in
+    /// `{a: (.text | upper), b: .level}`, `.level` must still see the
+    /// heading).
+    fn eval_stages(&mut self, stages: &[Expr], input: Value) -> Result<Vec<Value>, QueryError> {
         let saved = self.context.current.clone();
+        let result = self.run_stages(stages, input);
+        self.context.current = saved;
+        result
+    }
 
-        for stage in &piped.stages {
-            let mut next = Vec::new();
-            for input in current {
-                self.context.current = input;
-                match self.eval_expr(stage) {
-                    Ok(vals) => next.extend(vals),
-                    Err(e) => {
-                        self.context.current = saved;
-                        return Err(e);
-                    }
+    fn run_stages(&mut self, stages: &[Expr], input: Value) -> Result<Vec<Value>, QueryError> {
+        let mut current = vec![input];
+        let mut is_stream = false;
+
+        for stage in stages {
+            let mode = self.stream_mode(stage);
+            let collect = is_stream && mode != StreamMode::PerValue;
+
+            current = if collect {
+                self.context.current = Value::Array(current);
+                let out = self.eval_expr(stage)?;
+                match (mode, <[Value; 1]>::try_from(out)) {
+                    (StreamMode::Reorder, Ok([Value::Array(items)])) => items,
+                    (_, Ok(single)) => single.into(),
+                    (_, Err(out)) => out,
                 }
-            }
-            current = next;
+            } else {
+                let mut next = Vec::new();
+                for value in current {
+                    self.context.current = value;
+                    next.extend(self.eval_expr(stage)?);
+                }
+                next
+            };
 
-            // Short-circuit if no results
-            if current.is_empty() {
-                break;
-            }
+            is_stream = self.yields_stream(stage, is_stream);
         }
 
-        self.context.current = saved;
         Ok(current)
+    }
+
+    /// How the function a pipeline stage calls treats a piped stream.
+    ///
+    /// A stage that starts with a reducing function, as `count > 3` and
+    /// `count + 1` do, reduces too: it compares or adds to the count of the
+    /// whole stream. It used to run once per value, so `.h | count > 3`
+    /// printed `false` for each heading.
+    fn stream_mode(&self, stage: &Expr) -> StreamMode {
+        match stage {
+            Expr::Function { name, .. } if !is_internal_form(name) => self
+                .registry
+                .get_function(name)
+                .map(|f| f.stream)
+                .unwrap_or_default(),
+            Expr::Binary { left, .. } => match self.stream_mode(left) {
+                StreamMode::Reduce => StreamMode::Reduce,
+                _ => StreamMode::PerValue,
+            },
+            _ => StreamMode::PerValue,
+        }
+    }
+
+    /// Whether `expr`, given an input that is (`input`) or is not a stream,
+    /// can yield more than one value per pipeline.
+    ///
+    /// Decided from the query rather than from how many values came back,
+    /// so that `.h | text | first` is the first heading's text even in a
+    /// document with one heading, rather than that text's first character.
+    fn yields_stream(&self, expr: &Expr, input: bool) -> bool {
+        match expr {
+            Expr::Element { kind, index, .. } => match (kind, index) {
+                (ElementKind::FrontMatter, _) | (_, Some(IndexOp::Single(_))) => input,
+                _ => true,
+            },
+            Expr::Hierarchy { .. } => true,
+            Expr::Group { expr, .. } => self.yields_stream(expr, input),
+            Expr::Conditional {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                // With no `else` the input passes through unchanged.
+                self.yields_stream(then_branch, input)
+                    || else_branch
+                        .as_deref()
+                        .map_or(input, |e| self.yields_stream(e, input))
+            }
+            Expr::Function { name, args, .. } => match name.as_str() {
+                "_pipe" => args
+                    .iter()
+                    .fold(input, |s, stage| self.yields_stream(stage, s)),
+                // An index or a slice keeps its target's shape: one array
+                // sliced is one array, and a stream sliced is a stream.
+                "_index" => match args.get(1).map(decode_index_arg) {
+                    Some(IndexOp::Single(_) | IndexOp::Slice { .. }) => {
+                        self.yields_stream(&args[0], input)
+                    }
+                    _ => true,
+                },
+                _ => match self.stream_mode(expr) {
+                    StreamMode::PerValue | StreamMode::Reorder => input,
+                    StreamMode::Reduce => false,
+                },
+            },
+            Expr::Binary { .. } if self.stream_mode(expr) == StreamMode::Reduce => false,
+            _ => input,
+        }
     }
 
     fn eval_expr(&mut self, expr: &Expr) -> Result<Vec<Value>, QueryError> {
@@ -165,10 +291,11 @@ impl Engine {
 
             Expr::Element {
                 kind,
+                name,
                 filters,
                 index,
                 span,
-            } => self.eval_element(kind, filters, index.as_ref(), *span),
+            } => self.eval_element(kind, name, filters, index.as_ref(), *span),
 
             Expr::Property { name, span } => self.eval_property(name, *span),
 
@@ -210,12 +337,54 @@ impl Engine {
     fn eval_element(
         &mut self,
         kind: &ElementKind,
+        name: &str,
         filters: &[Filter],
         index: Option<&IndexOp>,
         _span: Span,
     ) -> Result<Vec<Value>, QueryError> {
-        // Get all elements of the requested kind
-        let mut elements: Vec<Value> = match kind {
+        // An element name is also a plausible key, so `.image` on front
+        // matter or `.p` on a constructed object reads that key when the
+        // input has it. The selector used to win everywhere, which turned
+        // `{p: 1} | .p` into every paragraph in the document. On the
+        // document itself the selector still wins, so `.h2` and `. | .code`
+        // select elements as they always have.
+        if !matches!(self.context.current, Value::Document(_))
+            && let Some(value) = self.context.current.get_property(name)
+        {
+            let mut values = match value {
+                Value::Array(items) if index.is_some() || !filters.is_empty() => items,
+                other => vec![other],
+            };
+            for filter in filters {
+                values = self.apply_filter(values, filter)?;
+            }
+            if let Some(idx) = index {
+                values = apply_index(values, idx)?;
+            }
+            return Ok(values);
+        }
+
+        // A selector piped from a heading selects within that heading's
+        // section, the same as `>>`, so `.h2[0] | .code` is the code under
+        // that h2 rather than every block in the document.
+        let mut elements = match &self.context.current {
+            Value::Heading(parent) => self.scoped_elements(parent, kind, false),
+            _ => self.all_elements(kind),
+        };
+
+        for filter in filters {
+            elements = self.apply_filter(elements, filter)?;
+        }
+        if let Some(idx) = index {
+            elements = apply_index(elements, idx)?;
+        }
+
+        Ok(elements)
+    }
+
+    /// Every element of `kind` in the document.
+    fn all_elements(&self, kind: &ElementKind) -> Vec<Value> {
+        match kind {
             ElementKind::Heading(level) => self
                 .context
                 .headings
@@ -277,19 +446,113 @@ impl Engine {
                 Some(fm) => vec![Value::FrontMatter(fm.clone())],
                 None => Vec::new(),
             },
-        };
-
-        // Apply filters
-        for filter in filters {
-            elements = self.apply_filter(elements, filter)?;
         }
+    }
 
-        // Apply index
-        if let Some(idx) = index {
-            elements = apply_index(elements, idx)?;
+    /// The elements of `kind` inside `parent`'s section.
+    ///
+    /// `direct` (`>`) stops at the next heading of any level, so it covers
+    /// the heading's own body; otherwise (`>>`) the section runs to the next
+    /// heading at the same level or above and includes every subsection.
+    /// Front matter belongs to the document rather than to any section, so
+    /// it is returned whatever the heading.
+    fn scoped_elements(
+        &self,
+        parent: &HeadingValue,
+        kind: &ElementKind,
+        direct: bool,
+    ) -> Vec<Value> {
+        let headings = &self.context.headings;
+        let parent_idx = parent.index;
+        let parent_level = parent.level;
+
+        let scope_start = parent.offset;
+        let end_heading = headings
+            .iter()
+            .skip(parent_idx + 1)
+            .find(|h| direct || h.level <= parent_level);
+        let scope_end = end_heading.map_or(self.context.raw_content.len(), |h| h.offset);
+
+        match kind {
+            ElementKind::Heading(level_filter) => {
+                // Walking the subtree with the lowest level seen so far: a
+                // heading is a direct child when nothing between it and the
+                // parent sits at a shallower level than it does.
+                let mut shallowest = u8::MAX;
+                let mut results = Vec::new();
+                for h in headings[parent_idx + 1..]
+                    .iter()
+                    .take_while(|h| h.level > parent_level)
+                {
+                    let is_child = h.level <= shallowest;
+                    shallowest = shallowest.min(h.level);
+                    if direct && !is_child {
+                        continue;
+                    }
+                    if level_filter.is_some_and(|level| h.level != level) {
+                        continue;
+                    }
+                    results.push(Value::Heading(h.clone()));
+                }
+                results
+            }
+            ElementKind::Code => {
+                // A block's start_line is its opening fence's row in the
+                // document, so the global list scopes by line. Re-parsing
+                // the section instead numbered its blocks from the
+                // section's own first line. The blocks are in document
+                // order and the headings know their lines, so this is a
+                // search: counting lines from the top of the document and
+                // scanning every block, for each heading, took 38 seconds
+                // for `.h1 >> .code` on 20,000 headings.
+                let blocks = &self.context.code_blocks;
+                let past = end_heading.map_or(usize::MAX, |h| h.line);
+                let first = blocks.partition_point(|code| code.start_line < parent.line);
+                let end = blocks.partition_point(|code| code.start_line < past);
+                blocks[first..end.max(first)]
+                    .iter()
+                    .cloned()
+                    .map(Value::Code)
+                    .collect()
+            }
+            // Links carry byte offsets, so scope by byte range.
+            ElementKind::Link => {
+                let links = &self.context.links;
+                let first = links.partition_point(|link| link.offset < scope_start);
+                let end = links.partition_point(|link| link.offset < scope_end);
+                links[first..end.max(first)]
+                    .iter()
+                    .cloned()
+                    .map(Value::Link)
+                    .collect()
+            }
+            ElementKind::FrontMatter => self.all_elements(kind),
+            // Images, tables, lists, paragraphs and blockquotes carry no
+            // source position, so the section is parsed on its own. None of
+            // them holds a line number for that to get wrong.
+            ElementKind::Image
+            | ElementKind::Table
+            | ElementKind::List
+            | ElementKind::Blockquote
+            | ElementKind::Paragraph => {
+                let section = extract_blocks(&self.context.raw_content[scope_start..scope_end]);
+                match kind {
+                    ElementKind::Image => section.images.into_iter().map(Value::Image).collect(),
+                    ElementKind::Table => section.tables.into_iter().map(Value::Table).collect(),
+                    ElementKind::List => section.lists.into_iter().map(Value::List).collect(),
+                    ElementKind::Blockquote => section
+                        .blockquotes
+                        .into_iter()
+                        .map(Value::Blockquote)
+                        .collect(),
+                    _ => section
+                        .paragraphs
+                        .into_iter()
+                        .map(Value::Paragraph)
+                        .collect(),
+                }
+            }
         }
-
-        Ok(elements)
     }
 
     fn apply_filter(
@@ -298,32 +561,18 @@ impl Engine {
         filter: &Filter,
     ) -> Result<Vec<Value>, QueryError> {
         match filter {
-            Filter::Text { pattern, exact, .. } => {
-                let pattern_lower = pattern.to_lowercase();
-                Ok(elements
-                    .into_iter()
-                    .filter(|v| match v {
-                        // A bracket filter on a code block selects by language,
-                        // not by body text — `.code[rust]` means "Rust code
-                        // blocks". Use `select(contains(...))` to search bodies.
-                        Value::Code(code) => code_matches_language(code, pattern),
-                        _ => {
-                            let text = v.to_text().to_lowercase();
-                            if *exact {
-                                text == pattern_lower
-                            } else {
-                                text.contains(&pattern_lower)
-                            }
-                        }
-                    })
-                    .collect())
-            }
+            Filter::Text { pattern, exact, .. } => Ok(elements
+                .into_iter()
+                .filter(|v| text_filter_matches(v, pattern, *exact))
+                .collect()),
+            // A link type only means something to a link. Everywhere else
+            // the word is an ordinary text filter, so `.h[external]` finds
+            // "External APIs" rather than nothing.
             Filter::Type { type_name, .. } => Ok(elements
                 .into_iter()
                 .filter(|v| match v {
                     Value::Link(link) => link.link_type.as_str() == type_name,
-                    Value::Code(code) => code_matches_language(code, type_name),
-                    _ => false,
+                    _ => text_filter_matches(v, type_name, false),
                 })
                 .collect()),
         }
@@ -332,8 +581,33 @@ impl Engine {
     fn eval_property(&mut self, name: &str, span: Span) -> Result<Vec<Value>, QueryError> {
         let current = &self.context.current;
 
+        // A heading's place in the outline needs the document's other
+        // headings, which the heading value itself does not hold.
+        if let Value::Heading(heading) = current {
+            match name {
+                "children" => {
+                    let children = self.scoped_elements(heading, &ElementKind::Heading(None), true);
+                    return Ok(vec![Value::Array(children)]);
+                }
+                "parent" => {
+                    let parent = self.context.headings[..heading.index]
+                        .iter()
+                        .rev()
+                        .find(|h| h.level < heading.level)
+                        .map_or(Value::Null, |h| Value::Heading(h.clone()));
+                    return Ok(vec![parent]);
+                }
+                _ => {}
+            }
+        }
+
         if let Some(value) = current.get_property(name) {
             Ok(vec![value])
+        } else if current.as_map().is_some() || matches!(current, Value::Null) {
+            // A key that is not there is null, as in jq, so `.fm.draft //
+            // false` works on a page without `draft`. An element's
+            // properties are fixed, and a wrong one is still an error.
+            Ok(vec![Value::Null])
         } else {
             Err(QueryError::new(
                 QueryErrorKind::PropertyNotFound {
@@ -355,31 +629,8 @@ impl Engine {
         // Handle special built-in functions
         match name {
             "_pipe" => {
-                // Internal pipe handling. Save/restore `current` so the pipe's
-                // per-stage value doesn't leak into the surrounding expression
-                // (e.g. `{a: (.text | upper), b: .level}` must still see the
-                // heading for `.level`).
-                let saved = self.context.current.clone();
-                let mut current = vec![self.context.current.clone()];
-                for arg in args {
-                    let mut next = Vec::new();
-                    for input in current {
-                        self.context.current = input;
-                        match self.eval_expr(arg) {
-                            Ok(vals) => next.extend(vals),
-                            Err(e) => {
-                                self.context.current = saved;
-                                return Err(e);
-                            }
-                        }
-                    }
-                    current = next;
-                    if current.is_empty() {
-                        break;
-                    }
-                }
-                self.context.current = saved;
-                return Ok(current);
+                let input = self.context.current.clone();
+                return self.eval_stages(args, input);
             }
             "_index" if args.len() >= 2 => {
                 return self.eval_index(&args[0], &args[1]);
@@ -430,7 +681,7 @@ impl Engine {
                 return Err(QueryError::new(
                     QueryErrorKind::InvalidArity {
                         function: name.to_string(),
-                        expected: format!("{:?}", func.arity),
+                        expected: describe_arity(&func.arity),
                         found: provided,
                     },
                     span,
@@ -459,21 +710,55 @@ impl Engine {
     /// - `Array[a,b]` → slice `[a:b]` (each of `a`/`b` is `Number` or `Null`)
     /// - `Null`       → iterate `[]`
     ///
-    /// If the target evaluates to a single array value, we index *into* that
-    /// array (jq semantics, negative indices supported). Otherwise we index the
-    /// result stream.
+    /// When every value of the target is an array, each one is indexed in
+    /// turn, as jq does, so `.table[0].rows[][0]` is the first cell of every
+    /// row. Indexing the stream instead gave the first row. As in jq, a
+    /// slice of an array is an array, and an index past either end is
+    /// `null`. Strings slice by character. When the values are neither, as
+    /// in `(.h | select(.level == 2))[0]`, the stream itself is indexed.
+    /// Negative indices count from the end either way.
     fn eval_index(&mut self, target: &Expr, index_arg: &Expr) -> Result<Vec<Value>, QueryError> {
         let target_vals = self.eval_expr(target)?;
         let index = decode_index_arg(index_arg);
 
-        // Single array value → index into its elements (jq-style subscripting).
-        if target_vals.len() == 1
-            && let Value::Array(items) = &target_vals[0]
-        {
-            return apply_index(items.clone(), &index);
+        if !target_vals.is_empty() && target_vals.iter().all(|v| matches!(v, Value::Array(_))) {
+            let mut results = Vec::new();
+            for value in target_vals {
+                if let Value::Array(items) = value {
+                    match index {
+                        IndexOp::Single(_) => {
+                            results.push(apply_index(items, &index)?.pop().unwrap_or(Value::Null))
+                        }
+                        IndexOp::Slice { .. } => {
+                            results.push(Value::Array(apply_index(items, &index)?));
+                        }
+                        IndexOp::Iterate => results.extend(items),
+                    }
+                }
+            }
+            return Ok(results);
         }
 
-        // Otherwise index the result stream.
+        if let IndexOp::Slice { .. } = index
+            && !target_vals.is_empty()
+            && target_vals.iter().all(|v| matches!(v, Value::String(_)))
+        {
+            let mut results = Vec::new();
+            for value in target_vals {
+                let chars = value
+                    .to_text()
+                    .chars()
+                    .map(|c| Value::String(c.to_string()))
+                    .collect();
+                let kept: String = apply_index(chars, &index)?
+                    .iter()
+                    .map(Value::to_text)
+                    .collect();
+                results.push(Value::String(kept));
+            }
+            return Ok(results);
+        }
+
         apply_index(target_vals, &index)
     }
 
@@ -498,7 +783,18 @@ impl Engine {
 
     /// Evaluate `key_expr` against `element` (with `current` bound to it) and
     /// return its first result value. Restores `current` afterward.
+    ///
+    /// A string literal names a property, so `group_by("level")` means
+    /// `group_by(.level)`. Evaluated as an expression it would be the same
+    /// string for every element, and everything landed in one group.
     fn eval_key(&mut self, element: &Value, key_expr: &Expr) -> Result<Value, QueryError> {
+        if let Expr::Literal {
+            value: Literal::String(name),
+            ..
+        } = key_expr
+        {
+            return Ok(element.get_property(name).unwrap_or(Value::Null));
+        }
         let saved = std::mem::replace(&mut self.context.current, element.clone());
         let result = self.eval_expr(key_expr);
         self.context.current = saved;
@@ -535,7 +831,7 @@ impl Engine {
             let key = self.eval_key(&el, key_expr)?;
             keyed.push((key, el));
         }
-        keyed.sort_by(|a, b| sort_key_cmp(&a.0, &b.0));
+        keyed.sort_by(|a, b| a.0.sort_cmp(&b.0));
         Ok(vec![Value::Array(
             keyed.into_iter().map(|(_, v)| v).collect(),
         )])
@@ -568,110 +864,10 @@ impl Engine {
         let parent_values = self.eval_expr(parent)?;
 
         let mut results = Vec::new();
-
-        for parent_val in parent_values {
-            // For headings, find children
-            if let Value::Heading(ref parent_heading) = parent_val {
-                // Get child element kind
-                let child_kind = match child {
-                    Expr::Element { kind, .. } => Some(kind.clone()),
-                    _ => None,
-                };
-
-                if let Some(kind) = child_kind {
-                    // Find headings that are children of this parent
-                    let parent_idx = parent_heading.index;
-                    let parent_level = parent_heading.level;
-
-                    // Byte bounds of this heading's scope:
-                    // - direct (`>`):     up to the next heading of ANY level
-                    //   (this heading's own body only).
-                    // - descendant (`>>`): up to the next heading of level
-                    //   <= parent (the whole subtree).
-                    let scope_start_offset = parent_heading.offset;
-                    let scope_end_offset = self
-                        .context
-                        .headings
-                        .iter()
-                        .skip(parent_idx + 1)
-                        .find(|h| {
-                            if direct {
-                                true
-                            } else {
-                                h.level <= parent_level
-                            }
-                        })
-                        .map(|h| h.offset)
-                        .unwrap_or(self.context.raw_content.len());
-
-                    match kind {
-                        ElementKind::Heading(level_filter) => {
-                            // Find child headings
-                            for (idx, h) in self.context.headings.iter().enumerate() {
-                                if idx <= parent_idx {
-                                    continue;
-                                }
-
-                                // Stop if we hit a heading at same or higher level
-                                if h.level <= parent_level {
-                                    break;
-                                }
-
-                                // Check level filter
-                                if let Some(target_level) = level_filter
-                                    && h.level != target_level
-                                {
-                                    if direct && h.level > target_level {
-                                        // Skip deeper headings in direct mode
-                                        continue;
-                                    }
-                                    if h.level != target_level {
-                                        continue;
-                                    }
-                                }
-
-                                // In direct mode, only include immediate children
-                                if direct {
-                                    // Find if there's an intermediate heading
-                                    let has_intermediate = self.context.headings
-                                        [parent_idx + 1..idx]
-                                        .iter()
-                                        .any(|intermediate| {
-                                            intermediate.level > parent_level
-                                                && intermediate.level < h.level
-                                        });
-                                    if has_intermediate {
-                                        continue;
-                                    }
-                                }
-
-                                results.push(Value::Heading(h.clone()));
-                            }
-                        }
-                        ElementKind::Code => {
-                            // turbovault's per-block start_line is not reliable
-                            // (it reports 1 for every fenced block), so scope by
-                            // re-parsing the heading's byte range instead of
-                            // filtering the global list by line number.
-                            let scope =
-                                &self.context.raw_content[scope_start_offset..scope_end_offset];
-                            results.extend(extract_code_blocks(scope).into_iter().map(Value::Code));
-                        }
-                        ElementKind::Link => {
-                            // Links carry byte offsets, so scope by byte range.
-                            for link in &self.context.links {
-                                if link.offset >= scope_start_offset
-                                    && link.offset < scope_end_offset
-                                {
-                                    results.push(Value::Link(link.clone()));
-                                }
-                            }
-                        }
-                        // Images, tables, and lists carry no source positions in
-                        // the current model, so they cannot be scoped to a
-                        // heading yet. Left unimplemented intentionally.
-                        _ => {}
-                    }
+        if let Expr::Element { kind, .. } = child {
+            for parent_val in &parent_values {
+                if let Value::Heading(parent_heading) = parent_val {
+                    results.extend(self.scoped_elements(parent_heading, kind, direct));
                 }
             }
         }
@@ -705,14 +901,18 @@ impl Engine {
         let result = match op {
             BinaryOp::Eq => Value::Bool(values_equal(&left_val, &right_val)),
             BinaryOp::Ne => Value::Bool(!values_equal(&left_val, &right_val)),
-            BinaryOp::Lt => Value::Bool(compare_values(&left_val, &right_val) < 0),
-            BinaryOp::Le => Value::Bool(compare_values(&left_val, &right_val) <= 0),
-            BinaryOp::Gt => Value::Bool(compare_values(&left_val, &right_val) > 0),
-            BinaryOp::Ge => Value::Bool(compare_values(&left_val, &right_val) >= 0),
+            // jq's order across types, the one `sort` uses: null, booleans,
+            // numbers, strings, arrays, objects. Values of different types
+            // used to compare as equal, so `<` and `>` were false while `<=`
+            // and `>=` were true for the same pair.
+            BinaryOp::Lt => Value::Bool(left_val.sort_cmp(&right_val).is_lt()),
+            BinaryOp::Le => Value::Bool(left_val.sort_cmp(&right_val).is_le()),
+            BinaryOp::Gt => Value::Bool(left_val.sort_cmp(&right_val).is_gt()),
+            BinaryOp::Ge => Value::Bool(left_val.sort_cmp(&right_val).is_ge()),
             BinaryOp::And => Value::Bool(left_val.is_truthy() && right_val.is_truthy()),
             BinaryOp::Or => Value::Bool(left_val.is_truthy() || right_val.is_truthy()),
-            BinaryOp::Add => add_values(&left_val, &right_val),
-            BinaryOp::Sub => sub_values(&left_val, &right_val),
+            BinaryOp::Add => add_values(&left_val, &right_val)?,
+            BinaryOp::Sub => sub_values(&left_val, &right_val)?,
             BinaryOp::Mul => mul_values(&left_val, &right_val)?,
             BinaryOp::Div => div_values(&left_val, &right_val)?,
             BinaryOp::Mod => mod_values(&left_val, &right_val)?,
@@ -739,13 +939,19 @@ impl Engine {
 
         let result = match op {
             UnaryOp::Not => Value::Bool(!val.is_truthy()),
-            UnaryOp::Neg => {
-                if let Value::Number(n) = val {
-                    Value::Number(-n)
-                } else {
-                    Value::Null
+            UnaryOp::Neg => match val {
+                Value::Number(n) => Value::Number(-n),
+                other => {
+                    return Err(QueryError::new(
+                        QueryErrorKind::InvalidOperation(format!(
+                            "{} cannot be negated",
+                            other.kind()
+                        )),
+                        Span::default(),
+                        String::new(),
+                    ));
                 }
-            }
+            },
         };
 
         Ok(vec![result])
@@ -795,25 +1001,29 @@ impl Engine {
         } else if let Some(else_expr) = else_branch {
             self.eval_expr(else_expr)
         } else {
-            Ok(vec![Value::Null])
+            // No `else` passes the input through, as in jq 1.7, so
+            // `if .level == 1 then upper end` leaves other headings alone
+            // rather than turning them into null.
+            Ok(vec![self.context.current.clone()])
         }
     }
 }
 
 // Helper functions
 
-fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
+fn extract_headings(doc: &Document, slug_style: SlugStyle) -> Vec<HeadingValue> {
+    let lines = doc.heading_lines();
     doc.headings
         .iter()
+        .zip(doc.heading_slugs(slug_style))
         .enumerate()
-        .map(|(idx, h)| {
-            // Calculate line number
-            let line = doc.content[..h.offset].lines().count() + 1;
+        .map(|(idx, (h, slug))| {
+            let line = lines[idx];
 
             // Body bounds shared with the document extractor: handles CRLF,
             // setext underlines, and EOF-without-newline uniformly.
-            let content_start = doc.body_start(idx);
             let content_end = doc.section_end(idx);
+            let content_start = doc.body_start(idx).min(content_end);
 
             let content = doc.content[content_start..content_end].trim().to_string();
             let raw_md = doc.content[h.offset..content_end].to_string();
@@ -826,6 +1036,7 @@ fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
                 content,
                 raw_md,
                 index: idx,
+                slug,
             }
         })
         .collect()
@@ -835,7 +1046,6 @@ fn extract_headings(doc: &Document) -> Vec<HeadingValue> {
 #[derive(Default)]
 struct ExtractedBlocks {
     code_blocks: Vec<CodeValue>,
-    links: Vec<LinkValue>,
     images: Vec<ImageValue>,
     tables: Vec<TableValue>,
     lists: Vec<ListValue>,
@@ -868,13 +1078,13 @@ fn collect_inline_images(inline: &[InlineElement], out: &mut ExtractedBlocks) {
     }
 }
 
-fn extract_blocks(doc: &Document) -> ExtractedBlocks {
+/// Extracts every block-level element from `content`, which is a whole
+/// document or, for scoping, one heading's section of it.
+fn extract_blocks(content: &str) -> ExtractedBlocks {
     use crate::parser::content::parse_content;
-    use crate::parser::links::extract_links;
     use crate::parser::output::Block;
 
-    let blocks = parse_content(&doc.content, 1);
-    let links = extract_links(&doc.content);
+    let blocks = parse_content(content, 1);
 
     let mut out = ExtractedBlocks::default();
 
@@ -943,12 +1153,8 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                     }
                 }
                 Block::List { ordered, items } => {
-                    for item in items {
-                        if images == Images::Collect {
-                            collect_inline_images(&item.inline, out);
-                        }
-                        walk(&item.blocks, out, Images::Skip);
-                    }
+                    // Pushed before descending so a nested list follows its
+                    // parent, in document order.
                     out.lists.push(ListValue {
                         ordered: *ordered,
                         items: items
@@ -959,6 +1165,12 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                             })
                             .collect(),
                     });
+                    for item in items {
+                        if images == Images::Collect {
+                            collect_inline_images(&item.inline, out);
+                        }
+                        walk(&item.blocks, out, Images::Skip);
+                    }
                 }
                 Block::Blockquote { content, blocks } => {
                     out.blockquotes.push(BlockquoteValue {
@@ -976,7 +1188,12 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
 
     walk(&blocks, &mut out, Images::Collect);
 
-    out.links = links
+    out
+}
+
+/// Every link in the document, with its byte offset for scoping.
+fn extract_doc_links(content: &str) -> Vec<LinkValue> {
+    crate::parser::links::extract_links(content)
         .into_iter()
         .map(|l| {
             use crate::parser::links::LinkTarget;
@@ -1000,59 +1217,34 @@ fn extract_blocks(doc: &Document) -> ExtractedBlocks {
                 offset: l.offset,
             }
         })
-        .collect();
-
-    out
+        .collect()
 }
 
-/// Parse a markdown fragment and return only its code blocks (including those
-/// nested in lists/blockquotes/details). Used to scope code blocks to a
-/// heading's byte range, since turbovault's per-block line numbers are not
-/// reliable for line-range filtering.
-fn extract_code_blocks(fragment: &str) -> Vec<CodeValue> {
-    use crate::parser::content::parse_content;
-    use crate::parser::output::Block;
-
-    fn walk(blocks: &[Block], out: &mut Vec<CodeValue>) {
-        for block in blocks {
-            match block {
-                Block::Code {
-                    language,
-                    content,
-                    start_line,
-                    end_line,
-                } => out.push(CodeValue {
-                    language: language.clone(),
-                    content: content.clone(),
-                    start_line: *start_line,
-                    end_line: *end_line,
-                }),
-                Block::List { items, .. } => {
-                    for item in items {
-                        walk(&item.blocks, out);
-                    }
-                }
-                Block::Blockquote { blocks, .. } | Block::Details { blocks, .. } => {
-                    walk(blocks, out);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let blocks = parse_content(fragment, 1);
-    let mut out = Vec::new();
-    walk(&blocks, &mut out);
-    out
-}
+/// The most YAML aliases (`*name`) a frontmatter block may use.
+///
+/// Each alias repeats what its anchor holds, and anchors can hold aliases,
+/// so a few hundred lines expand to gigabytes: a 225 KB block took 5 GB
+/// and 8 seconds, on every query, whether or not it read the frontmatter.
+/// Frontmatter written by hand has a handful at most.
+const MAX_FRONTMATTER_ALIASES: usize = 64;
 
 /// Parse the document's YAML frontmatter into an ordered, sorted-key map of
 /// query [`Value`]s. Returns `None` when there is no frontmatter.
+///
+/// Only a block at the very start of the document counts, as
+/// [`crate::parser::frontmatter_range`] finds it. Handed the whole document,
+/// the parser also took a `key: value` block between two `---` rules
+/// further down for frontmatter, over the real one if there was one, and
+/// missed the real one behind a byte order mark.
 fn extract_frontmatter(doc: &Document) -> Option<IndexMap<String, Value>> {
     use turbovault_parser::{ParseOptions, ParsedContent};
 
-    let parsed =
-        ParsedContent::parse_with_options(&doc.content, ParseOptions::none().with_frontmatter());
+    let block = &doc.content[crate::parser::frontmatter_range(&doc.content)?];
+    let block = block.strip_prefix('\u{feff}').unwrap_or(block);
+    if yaml_alias_count(block) > MAX_FRONTMATTER_ALIASES {
+        return None;
+    }
+    let parsed = ParsedContent::parse_with_options(block, ParseOptions::none().with_frontmatter());
     let fm = parsed.frontmatter?;
 
     // Sort keys for stable, deterministic output.
@@ -1065,6 +1257,26 @@ fn extract_frontmatter(doc: &Document) -> Option<IndexMap<String, Value>> {
         map.insert(k, json_to_value(v));
     }
     Some(map)
+}
+
+/// How many YAML aliases `yaml` uses: a `*` that starts a node, after a
+/// line's indentation, a `- `, a `: `, or `[`, `{` and `,` in a flow
+/// collection, followed by a name. A `*` inside text is not counted, so this
+/// can only miss aliases in odd layouts, never refuse ordinary frontmatter.
+fn yaml_alias_count(yaml: &str) -> usize {
+    let bytes = yaml.as_bytes();
+    (0..bytes.len())
+        .filter(|&i| {
+            bytes[i] == b'*'
+                && bytes
+                    .get(i + 1)
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                && match bytes[..i].iter().rposition(|b| *b != b' ' && *b != b'\t') {
+                    None => true,
+                    Some(j) => matches!(bytes[j], b'\n' | b'-' | b':' | b'[' | b'{' | b','),
+                }
+        })
+        .count()
 }
 
 /// Convert a `serde_json::Value` (from parsed frontmatter) into a query
@@ -1099,6 +1311,23 @@ fn literal_to_value(lit: &Literal) -> Value {
 
 /// Decode the parser's encoded `_index` argument expression back into an
 /// [`IndexOp`]. See [`Engine::eval_index`] for the encoding.
+/// An argument count range in words, for arity errors: "no arguments",
+/// "1 argument", "1 to 2 arguments". It printed as a Rust range, `0..=0`.
+fn describe_arity(arity: &std::ops::RangeInclusive<usize>) -> String {
+    let plural = |n: usize| if n == 1 { "argument" } else { "arguments" };
+    match (*arity.start(), *arity.end()) {
+        (0, 0) => "no arguments".to_string(),
+        (a, b) if a == b => format!("{a} {}", plural(a)),
+        (a, b) => format!("{a} to {b} {}", plural(b)),
+    }
+}
+
+/// The function names the parser uses for its own pipe and postfix index
+/// forms. They are not registry functions.
+fn is_internal_form(name: &str) -> bool {
+    matches!(name, "_pipe" | "_index")
+}
+
 fn decode_index_arg(arg: &Expr) -> IndexOp {
     match arg {
         Expr::Literal {
@@ -1160,6 +1389,25 @@ fn apply_index(mut values: Vec<Value>, index: &IndexOp) -> Result<Vec<Value>, Qu
     }
 }
 
+/// Whether `value` passes a bracket text filter: case-insensitive, whole
+/// text when `exact` (a quoted pattern) and a substring otherwise.
+///
+/// A code block is matched by language instead, never its body, since
+/// `.code[rust]` means Rust code blocks. `select(contains(...))` searches
+/// bodies.
+fn text_filter_matches(value: &Value, pattern: &str, exact: bool) -> bool {
+    if let Value::Code(code) = value {
+        return code_matches_language(code, pattern);
+    }
+    let text = value.to_text().to_lowercase();
+    let pattern = pattern.to_lowercase();
+    if exact {
+        text == pattern
+    } else {
+        text.contains(&pattern)
+    }
+}
+
 /// Matches a code block against a language name from a bracket filter.
 ///
 /// The comparison is whole-string and case-insensitive, so `.code[java]` never
@@ -1170,47 +1418,56 @@ fn code_matches_language(code: &CodeValue, language: &str) -> bool {
         .is_some_and(|lang| lang.eq_ignore_ascii_case(language))
 }
 
+/// `==` as jq has it: values of different types are never equal, so
+/// `1 == "1"` and `null == ""` are false. Comparing text made them true.
+/// Arrays, objects and elements are equal when they hold the same values.
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Number(a), Value::Number(b)) => (a - b).abs() < f64::EPSILON,
         (Value::String(a), Value::String(b)) => a == b,
-        _ => a.to_text() == b.to_text(),
+        _ => a.identity_key() == b.identity_key(),
     }
 }
 
-/// Total ordering used by `sort_by`. Numbers sort numerically, strings
-/// lexically; mixed/other types fall back to their text representation so the
-/// sort is always total and deterministic.
-fn sort_key_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
-    match (a, b) {
-        (Value::Number(x), Value::Number(y)) => {
-            x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
+/// jq's error for an operator its operands do not support:
+/// `string ("a") and number (1) cannot be subtracted`. These used to give
+/// `null`, or for `+` the two values' text run together, so `{} + 1` was
+/// `{}1` and a typo in a query passed as a result.
+fn cannot(a: &Value, b: &Value, done: &str) -> QueryError {
+    let describe = |v: &Value| {
+        let mut json = v.to_json().to_string();
+        if json.len() > 20 {
+            let cut = (0..=17)
+                .rev()
+                .find(|&i| json.is_char_boundary(i))
+                .unwrap_or(0);
+            json.truncate(cut);
+            json.push_str("...");
         }
-        (Value::String(x), Value::String(y)) => x.cmp(y),
-        _ => a.to_text().cmp(&b.to_text()),
+        format!("{} ({json})", v.kind())
+    };
+    let mut error = QueryError::new(
+        QueryErrorKind::InvalidOperation(format!(
+            "{} and {} cannot be {done}",
+            describe(a),
+            describe(b)
+        )),
+        Span::default(),
+        String::new(),
+    );
+    if done == "added" && (matches!(a, Value::String(_)) || matches!(b, Value::String(_))) {
+        error = error.with_help("turn a value into text first: (.level | tostring)");
     }
+    error
 }
 
-fn compare_values(a: &Value, b: &Value) -> i32 {
-    match (a, b) {
-        (Value::Number(a), Value::Number(b)) => {
-            if a < b {
-                -1
-            } else if a > b {
-                1
-            } else {
-                0
-            }
-        }
-        (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
-        _ => 0,
-    }
-}
-
-fn add_values(a: &Value, b: &Value) -> Value {
-    match (a, b) {
+/// `+` as jq has it: numbers add, strings, arrays and objects join, and
+/// `null` adds nothing.
+fn add_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
+    Ok(match (a, b) {
+        (Value::Null, other) | (other, Value::Null) => other.clone(),
         (Value::Number(a), Value::Number(b)) => Value::Number(a + b),
         (Value::String(a), Value::String(b)) => Value::String(format!("{}{}", a, b)),
         (Value::Array(a), Value::Array(b)) => {
@@ -1218,14 +1475,30 @@ fn add_values(a: &Value, b: &Value) -> Value {
             result.extend(b.clone());
             Value::Array(result)
         }
-        _ => Value::String(format!("{}{}", a.to_text(), b.to_text())),
-    }
+        // Keys from the right replace the left's.
+        _ => match (a.as_map(), b.as_map()) {
+            (Some(left), Some(right)) => {
+                let mut merged = left.clone();
+                merged.extend(right.iter().map(|(k, v)| (k.clone(), v.clone())));
+                Value::Object(merged)
+            }
+            _ => return Err(cannot(a, b, "added")),
+        },
+    })
 }
 
-fn sub_values(a: &Value, b: &Value) -> Value {
+/// `-` as jq has it: numbers subtract, and an array loses every item that
+/// is in the other.
+fn sub_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => Value::Number(a - b),
-        _ => Value::Null,
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
+        (Value::Array(a), Value::Array(b)) => Ok(Value::Array(
+            a.iter()
+                .filter(|item| !b.iter().any(|gone| values_equal(item, gone)))
+                .cloned()
+                .collect(),
+        )),
+        _ => Err(cannot(a, b, "subtracted")),
     }
 }
 
@@ -1262,41 +1535,59 @@ fn mul_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
             }
             Ok(Value::String(s.repeat(count)))
         }
-        _ => Ok(Value::Null),
+        _ => Err(cannot(a, b, "multiplied")),
     }
 }
 
+fn division_by_zero() -> QueryError {
+    QueryError::new(
+        QueryErrorKind::DivisionByZero,
+        Span::default(),
+        String::new(),
+    )
+}
+
+/// `/` as jq has it: numbers divide, and a string divided by a string is
+/// split on it.
 fn div_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => {
-            if *b == 0.0 {
-                Err(QueryError::new(
-                    QueryErrorKind::DivisionByZero,
-                    Span::default(),
-                    String::new(),
-                ))
-            } else {
-                Ok(Value::Number(a / b))
-            }
-        }
-        _ => Ok(Value::Null),
+        (Value::Number(_), Value::Number(b)) if *b == 0.0 => Err(division_by_zero()),
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a / b)),
+        (Value::String(text), Value::String(sep)) => Ok(split_text(text, sep)),
+        _ => Err(cannot(a, b, "divided")),
     }
 }
 
+/// `text` split at each `sep` into an array, as jq's `/` and `split` do: an
+/// empty `sep` splits into characters, and empty text into nothing. Rust's
+/// `split("")` gave an empty string at each end.
+pub(crate) fn split_text(text: &str, sep: &str) -> Value {
+    let parts: Vec<Value> = if text.is_empty() {
+        Vec::new()
+    } else if sep.is_empty() {
+        text.chars().map(|c| Value::String(c.to_string())).collect()
+    } else {
+        text.split(sep)
+            .map(|s| Value::String(s.to_string()))
+            .collect()
+    };
+    Value::Array(parts)
+}
+
+/// `%` as jq has it: both sides are cut to whole numbers first, so
+/// `5.9 % 3` is `2`, where the float remainder was `2.9000000000000004`.
 fn mod_values(a: &Value, b: &Value) -> Result<Value, QueryError> {
     match (a, b) {
         (Value::Number(a), Value::Number(b)) => {
-            if *b == 0.0 {
-                Err(QueryError::new(
-                    QueryErrorKind::DivisionByZero,
-                    Span::default(),
-                    String::new(),
-                ))
+            // `as` saturates, so a huge or infinite operand stays in range.
+            let (a, b) = (*a as i64, *b as i64);
+            if b == 0 {
+                Err(division_by_zero())
             } else {
-                Ok(Value::Number(a % b))
+                Ok(Value::Number(a.wrapping_rem(b) as f64))
             }
         }
-        _ => Ok(Value::Null),
+        _ => Err(cannot(a, b, "divided")),
     }
 }
 
@@ -1311,6 +1602,92 @@ mod tests {
         let query = parse(query).unwrap();
         let mut engine = Engine::new(&doc);
         engine.execute(&query).unwrap()
+    }
+
+    /// Each result's text, for comparing against a short expected list.
+    fn texts(md: &str, query: &str) -> Vec<String> {
+        eval(md, query).iter().map(Value::to_text).collect()
+    }
+
+    /// An element name after a pipe reads the key or property of that name
+    /// when the input has one. The selector used to win, so each of these
+    /// returned elements from the whole document instead.
+    #[test]
+    fn test_element_names_read_keys_on_inputs_that_have_them() {
+        let md =
+            "---\nimage: cover.png\n---\n# T\n\npara\n\n[l](http://x.example)\n\n![i](i.png)\n";
+        assert_eq!(texts(md, "{p: 1} | .p"), ["1"]);
+        assert_eq!(texts(md, ".h | {a: .text} | .a"), ["T"]);
+        assert_eq!(texts(md, ".fm | .image"), ["cover.png"]);
+        assert_eq!(texts(md, ".fm.image"), ["cover.png"]);
+        assert_eq!(texts(md, "{a: [1, 2]} | .a[1]"), ["2"]);
+
+        // On the document the selector still wins.
+        assert_eq!(texts(md, ".p")[0], "para");
+        assert_eq!(texts(md, ". | .img"), ["i"]);
+        assert_eq!(texts(md, ". | .headings"), ["T"]);
+        assert_eq!(texts(md, ". | .heading_count"), ["1"]);
+        // An object without the key still gets the selector.
+        assert_eq!(texts(md, "{x: 1} | .link"), ["l"]);
+    }
+
+    /// Code under a heading keeps its document line numbers. Scoping used to
+    /// re-parse the section, which numbered its blocks from the section's
+    /// first line, so `.h2[Install] > .code | .start_line` disagreed with
+    /// `.code | .start_line` for the same block.
+    #[test]
+    fn test_scoped_code_blocks_keep_document_line_numbers() {
+        let md = "# Doc\n\n```sh\na\n```\n\n## Install\n\ntext\n\n```bash\nb\n```\n\n\
+                  ### Deep\n\n```rust\nc\n```\n\n## Other\n\n```py\nd\n```\n";
+        let lines = |q: &str| -> Vec<usize> {
+            eval(md, q)
+                .into_iter()
+                .filter_map(|v| match v {
+                    Value::Code(c) => Some(c.start_line),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(lines(".code"), [3, 11, 17, 23]);
+        assert_eq!(lines(".h2[Install] > .code"), [11]);
+        assert_eq!(lines(".h2[Install] >> .code"), [11, 17]);
+        assert_eq!(lines(".h1 >> .code"), [3, 11, 17, 23]);
+        assert_eq!(lines(".h2[Other] > .code"), [23]);
+    }
+
+    /// A selector piped from a heading selects within its section, as `>>`
+    /// does. It used to select from the whole document, so `.h2[0] | .code`
+    /// returned every code block.
+    #[test]
+    fn test_selector_piped_from_a_heading_is_scoped_to_its_section() {
+        let md = "# Doc\n\n```sh\na\n```\n\n## One\n\n```rust\nb\n```\n\n\
+                  ### Deep\n\n```py\nc\n```\n\n## Two\n\n```go\nd\n```\n";
+        assert_eq!(texts(md, ".h2[0] | .code | .lang"), ["rust", "py"]);
+        assert_eq!(texts(md, ".h2[1] | .code | .lang"), ["go"]);
+        assert_eq!(texts(md, ".h2[0] | .h"), ["Deep"]);
+        assert_eq!(texts(md, ".h3 | .h"), Vec::<String>::new());
+        // Each heading scopes its own selection.
+        assert_eq!(texts(md, ".h2 | .code | .lang"), ["rust", "py", "go"]);
+    }
+
+    /// `>` and `>>` returned nothing at all for these kinds, which carry no
+    /// source position. The section is parsed on its own instead.
+    #[test]
+    fn test_hierarchy_scopes_every_block_kind() {
+        let md = "# A\n\nintro\n\n## B\n\n| x | y |\n|---|---|\n| 1 | 2 |\n\n- one\n\n\
+                  > quoted\n\n![pic](p.png)\n\nbody\n\n### C\n\n- deep\n\n## D\n\nlast\n";
+        assert_eq!(eval(md, ".h2[B] > .table").len(), 1);
+        assert_eq!(texts(md, ".h2[B] > .list"), ["one"]);
+        assert_eq!(texts(md, ".h2[B] >> .list"), ["one", "deep"]);
+        assert_eq!(texts(md, ".h2[B] > .blockquote"), ["quoted"]);
+        assert_eq!(texts(md, ".h2[B] > .img"), ["pic"]);
+        assert_eq!(
+            texts(md, ".h2[B] > .para | select(.text == \"body\")"),
+            ["body"]
+        );
+        assert_eq!(texts(md, ".h1 > .para"), ["intro"]);
+        assert_eq!(eval(md, ".h2[D] > .table").len(), 0);
+        assert_eq!(texts(md, ".h2[B] | .list"), ["one", "deep"]);
     }
 
     #[test]
@@ -1354,6 +1731,22 @@ mod tests {
         if let Value::Heading(h) = &results[0] {
             assert_eq!(h.text, "World");
         }
+    }
+
+    /// A link type name filtered every non-link out, so `.h[external]` missed
+    /// "External APIs", and a keyword in brackets was a parse error.
+    #[test]
+    fn test_link_type_words_and_keywords_filter_text_outside_links() {
+        let md = "# External APIs\n\n## Anchor points\n\n## The End\n\n## If Needed\n\n\
+                  [x](https://x.example) [y](#y)\n";
+        assert_eq!(texts(md, ".h[external]"), ["External APIs"]);
+        assert_eq!(texts(md, ".h[anchor]"), ["Anchor points"]);
+        assert_eq!(texts(md, ".h[end]"), ["The End"]);
+        assert_eq!(texts(md, ".h[if]"), ["If Needed"]);
+        assert_eq!(eval(md, ".h[relative]").len(), 0);
+        // On links the word is still the link type.
+        assert_eq!(texts(md, ".link[external]"), ["x"]);
+        assert_eq!(texts(md, ".link[anchor]"), ["y"]);
     }
 
     #[test]
@@ -1529,30 +1922,26 @@ fn main() {}
             [("a".into(), "a.png".into())],
             "a heading's image keeps its alt"
         );
-        // Still wrong, and the other half of the same defect: the alt reaches
-        // the image now, but it was also left behind in the heading's own
-        // text, so a heading renders as `Title a` in the outline and in
-        // `--list`. Tracked at Epistates/turbovault#78.
-        assert_eq!(
-            eval("# Title ![a](a.png)", ".h1 | text")
+        // The other half of the same defect, fixed in turbovault-parser 3.3:
+        // the alt was also left behind in the heading's own text, so the
+        // heading read `Title a` in the outline, `--list` and its anchor
+        // (Epistates/turbovault#78).
+        let heading = |query: &str| -> Vec<String> {
+            eval("# Title ![a](a.png)", query)
                 .into_iter()
                 .map(|v| v.to_text())
-                .collect::<Vec<_>>(),
-            ["Title a"],
-            "upstream fixed the heading text, drop the note in QUERY_LANGUAGE.md"
-        );
+                .collect()
+        };
+        assert_eq!(heading(".h1 | text"), ["Title"]);
+        assert_eq!(heading(".h1 | .slug"), ["title"]);
     }
 
-    /// A list item's indented continuation inside a blockquote is joined onto
-    /// the item with no separator, so `step` and `text` come back as
-    /// `steptext`. The same list outside a quote is right, and so is an
-    /// unindented paragraph inside one, which is what makes this the quote
-    /// re-serializer's continuation path rather than anything list-specific.
-    ///
-    /// Tracked at Epistates/turbovault#77. Pinned so that fixing it upstream
-    /// fails here and the note in `docs/QUERY_LANGUAGE.md` gets removed.
+    /// A list item's indented continuation inside a blockquote was joined onto
+    /// the item with no separator, so `step` and `text` came back as
+    /// `steptext`, until turbovault-parser 2.2.0 (Epistates/turbovault#77).
+    /// The continuation is the item's own paragraph now, in and out of a quote.
     #[test]
-    fn test_a_quoted_list_item_continuation_is_a_known_upstream_gap() {
+    fn test_a_quoted_list_item_continuation_keeps_its_own_block() {
         let item_text = |md: &str| -> Vec<String> {
             eval(md, ".list")
                 .into_iter()
@@ -1563,17 +1952,36 @@ fn main() {}
                 .flat_map(|l| l.items.into_iter().map(|i| i.content))
                 .collect()
         };
+        let paragraphs = |md: &str| -> Vec<String> {
+            eval(md, ".para").into_iter().map(|v| v.to_text()).collect()
+        };
+
+        for md in [
+            "> - step\n>\n>   text\n",
+            "- step\n\n  text\n",
+            "> - step\n>\n> text\n",
+        ] {
+            assert_eq!(item_text(md), ["step"], "{md:?}");
+            assert_eq!(paragraphs(md), ["text"], "{md:?}");
+        }
+    }
+
+    /// A nested list is its own entry since turbovault-parser 2.2.0, and is
+    /// reported after the list holding it, not before.
+    #[test]
+    fn test_nested_lists_are_reported_in_document_order() {
+        let items = eval("- outer\n  - inner\n    - deep\n- second\n", ".list")
+            .into_iter()
+            .filter_map(|v| match v {
+                Value::List(l) => Some(l.items.into_iter().map(|i| i.content).collect()),
+                _ => None,
+            })
+            .collect::<Vec<Vec<String>>>();
 
         assert_eq!(
-            item_text("> - step\n>\n>   text\n"),
-            ["steptext"],
-            "upstream fixed the separator, drop the note in QUERY_LANGUAGE.md"
+            items,
+            [vec!["outer", "second"], vec!["inner"], vec!["deep"]]
         );
-
-        // The two neighbours that are correct, so a fix that only moves the
-        // problem sideways still fails.
-        assert_eq!(item_text("- step\n\n  text\n"), ["step"]);
-        assert_eq!(item_text("> - step\n>\n> text\n"), ["step"]);
     }
 
     /// Links inside a blockquote kept their text but lost their destination
@@ -1689,6 +2097,57 @@ fn main() {}
             image_srcs("- item ![a](a.png)\n\n- second ![b](b.png)"),
             ["a.png", "b.png"],
             "a loose list reports the same images as a tight one"
+        );
+    }
+
+    /// Different types compared as equal, so `<` was false while `<=` was
+    /// true for the same pair. They follow jq's order now, as `sort` does.
+    #[test]
+    fn comparisons_across_types_follow_jq_order() {
+        for (query, expected) in [
+            (r#"1 >= "a""#, "false"),
+            (r#"1 < "a""#, "true"),
+            ("null <= 1", "true"),
+            ("null > 1", "false"),
+            (r#""b" > "a""#, "true"),
+            ("[1, 2] < [1, 3]", "true"),
+        ] {
+            assert_eq!(eval("# a", query)[0].to_text(), expected, "{query}");
+        }
+    }
+
+    /// Only a block opening the document is frontmatter. A `key: value`
+    /// block between two rules further down was reported as frontmatter,
+    /// over the real one, and a byte order mark hid the real one.
+    #[test]
+    fn frontmatter_is_only_the_block_that_opens_the_document() {
+        let keys = |md: &str| -> Vec<String> {
+            eval(md, ".fm | keys")
+                .iter()
+                .flat_map(|v| match v {
+                    Value::Array(items) => items.iter().map(|v| v.to_text()).collect(),
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+        assert!(keys("# H\n\n---\ny: 2\n---\n\n## Two\n").is_empty());
+        assert_eq!(keys("---\nx: 1\n---\n# H\n\n---\ny: 2\n---\n"), ["x"]);
+        assert_eq!(keys("\u{feff}---\nx: 1\n---\n# H\n"), ["x"]);
+        assert_eq!(keys("---\nx: 1\n...\n# H\n"), ["x"]);
+    }
+
+    /// Aliases repeat their anchors, so a small block can expand to
+    /// gigabytes. Past the limit it is not parsed.
+    #[test]
+    fn frontmatter_with_too_many_aliases_is_not_parsed() {
+        let bomb: String = std::iter::once("---\np: &p [1, 2, 3]\n".to_string())
+            .chain((0..100).map(|i| format!("x{i}: &x{i} [*p, *p, *p]\n")))
+            .chain(std::iter::once("---\n# H\n".to_string()))
+            .collect();
+        assert!(eval(&bomb, ".fm").is_empty());
+        assert_eq!(
+            yaml_alias_count("a: *x\nb: [*y, *z]\nc: \"5 * 3\"\nd: **bold**\n"),
+            3
         );
     }
 
