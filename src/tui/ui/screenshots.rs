@@ -178,7 +178,7 @@ fn screenshots() {
     std::fs::create_dir_all(&dir).unwrap();
 
     type Scene = (&'static str, fn(&mut App));
-    let scenes: [Scene; 7] = [
+    let scenes: [Scene; 8] = [
         ("normal", |_| {}),
         ("help", |app| {
             app.execute_action(Action::ToggleHelp);
@@ -202,6 +202,9 @@ fn screenshots() {
         ("links", |app| {
             app.jump_to_heading(0);
             app.execute_action(Action::EnterLinkFollowMode);
+        }),
+        ("files", |app| {
+            app.execute_action(Action::OpenFilePicker);
         }),
     ];
 

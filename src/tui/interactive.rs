@@ -906,64 +906,6 @@ impl InteractiveState {
         }
     }
 
-    /// Get status bar text for current element
-    pub fn status_text(&self) -> String {
-        if let Some(element) = self.current_element() {
-            let position = if self.elements.is_empty() {
-                "0/0".to_string()
-            } else {
-                format!(
-                    "{}/{}",
-                    self.current_index.unwrap_or(0) + 1,
-                    self.elements.len()
-                )
-            };
-
-            match &element.element_type {
-                ElementType::Details { .. } => {
-                    format!(
-                        "[INTERACTIVE] Details({}) | Enter:Toggle Tab:Next Esc:Exit",
-                        position
-                    )
-                }
-                ElementType::Link { .. } => {
-                    format!(
-                        "[INTERACTIVE] Link({}) | Enter:Follow y:Copy Tab:Next Esc:Exit",
-                        position
-                    )
-                }
-                ElementType::Checkbox { .. } => {
-                    format!(
-                        "[INTERACTIVE] Checkbox({}) | Space:Toggle Tab:Next Esc:Exit",
-                        position
-                    )
-                }
-                ElementType::CodeBlock { .. } => {
-                    format!(
-                        "[INTERACTIVE] Code({}) | y:Copy Tab:Next Esc:Exit",
-                        position
-                    )
-                }
-                ElementType::Table { .. } => {
-                    format!(
-                        "[INTERACTIVE] Table({}) | Enter:Navigate y:Copy Tab:Next Esc:Exit",
-                        position
-                    )
-                }
-                ElementType::Image { .. } => {
-                    format!(
-                        "[INTERACTIVE] Image({}) | i:Info y:Copy Tab:Next Esc:Exit",
-                        position
-                    )
-                }
-            }
-        } else if self.elements.is_empty() {
-            "[INTERACTIVE] No interactive elements in this section | Esc:Exit".to_string()
-        } else {
-            "[INTERACTIVE] Tab:Next Shift+Tab:Prev u/d:Page Esc:Exit".to_string()
-        }
-    }
-
     /// Check if an element is nested inside a details block
     fn is_nested_in_details(&self, element: &InteractiveElement) -> bool {
         element
@@ -1038,9 +980,13 @@ impl InteractiveState {
                     let lang = language.as_deref().unwrap_or("code");
                     format!("Code: {}", lang)
                 }
-                ElementType::Table { rows, cols, .. } => {
-                    format!("Table: {}×{}", rows, cols)
-                }
+                ElementType::Table { rows, cols, .. } => match self.selected_cell() {
+                    Some((0, col)) => format!("Table {rows}×{cols}, header {}", col + 1),
+                    Some((row, col)) => {
+                        format!("Table {rows}×{cols}, row {row} column {}", col + 1)
+                    }
+                    None => format!("Table {rows}×{cols}"),
+                },
                 ElementType::Image { alt, .. } => {
                     let text = crate::tui::ui::util::truncate_with_ellipsis(alt, 20);
                     format!("Image: {}", text)
@@ -1128,27 +1074,6 @@ impl InteractiveState {
         matches!(self.detail_mode, Some(DetailMode::Table { .. }))
     }
 
-    /// Get table navigation status text
-    pub fn table_status_text(&self, _rows: usize, _cols: usize) -> String {
-        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
-            && let Some(element) = self.elements.get(*element_idx)
-        {
-            let id = element.id;
-            if let Some(ElementState::Table {
-                selected_row,
-                selected_col,
-            }) = self.element_states.get(&id)
-            {
-                return format!(
-                    "[TABLE] Cell({},{}) | hjkl:Move y:Copy Y:CopyRow r:CopyTable Esc:Exit",
-                    selected_row + 1,
-                    selected_col + 1
-                );
-            }
-        }
-        "[TABLE] hjkl:Move y:Copy Esc:Exit".to_string()
-    }
-
     /// Move to next cell (right)
     pub fn table_move_right(&mut self, cols: usize) {
         if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
@@ -1210,30 +1135,28 @@ impl InteractiveState {
         }
     }
 
-    /// Get the currently selected table cell content
-    pub fn get_table_cell(&self, headers: &[String], rows: &[Vec<String>]) -> Option<String> {
-        if let Some(DetailMode::Table { element_idx }) = &self.detail_mode
-            && let Some(element) = self.elements.get(*element_idx)
-        {
-            let id = element.id;
-            if let Some(ElementState::Table {
+    /// The selected cell in table mode, as (row, column), row 0 being the
+    /// header.
+    pub fn selected_cell(&self) -> Option<(usize, usize)> {
+        let Some(DetailMode::Table { element_idx }) = &self.detail_mode else {
+            return None;
+        };
+        let id = self.elements.get(*element_idx)?.id;
+        match self.element_states.get(&id)? {
+            ElementState::Table {
                 selected_row,
                 selected_col,
-            }) = self.element_states.get(&id)
-            {
-                if *selected_row == 0 {
-                    // Header row
-                    return headers.get(*selected_col).cloned();
-                } else {
-                    // Data row
-                    let data_row = *selected_row - 1;
-                    return rows
-                        .get(data_row)
-                        .and_then(|row| row.get(*selected_col).cloned());
-                }
-            }
+            } => Some((*selected_row, *selected_col)),
+            _ => None,
         }
-        None
+    }
+
+    /// Get the currently selected table cell content
+    pub fn get_table_cell(&self, headers: &[String], rows: &[Vec<String>]) -> Option<String> {
+        match self.selected_cell()? {
+            (0, col) => headers.get(col).cloned(),
+            (row, col) => rows.get(row - 1).and_then(|row| row.get(col).cloned()),
+        }
     }
 
     /// Get the currently selected table row

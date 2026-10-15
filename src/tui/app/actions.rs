@@ -255,38 +255,35 @@ impl App {
                 let count = self.take_count();
                 if self.interactive_state.is_in_table_mode() {
                     // In table mode, move down within table
-                    let (rows, cols) = self.get_table_dimensions();
+                    let (rows, _) = self.get_table_dimensions();
                     for _ in 0..count {
                         self.interactive_state.table_move_down(rows);
                     }
-                    self.status_message =
-                        Some(self.interactive_state.table_status_text(rows + 1, cols));
+                    self.status_message = None;
                 } else {
                     // Normal interactive mode, move to next element
                     for _ in 0..count {
                         self.interactive_state.next();
                     }
                     self.scroll_to_interactive_element(self.content_viewport_height);
-                    self.status_message = Some(self.interactive_state.status_text());
+                    self.status_message = None;
                 }
             }
             InteractivePrevious => {
                 let count = self.take_count();
                 if self.interactive_state.is_in_table_mode() {
                     // In table mode, move up within table
-                    let (rows, cols) = self.get_table_dimensions();
                     for _ in 0..count {
                         self.interactive_state.table_move_up();
                     }
-                    self.status_message =
-                        Some(self.interactive_state.table_status_text(rows + 1, cols));
+                    self.status_message = None;
                 } else {
                     // Normal interactive mode, move to previous element
                     for _ in 0..count {
                         self.interactive_state.previous();
                     }
                     self.scroll_to_interactive_element(self.content_viewport_height);
-                    self.status_message = Some(self.interactive_state.status_text());
+                    self.status_message = None;
                 }
             }
             InteractiveActivate => {
@@ -307,7 +304,7 @@ impl App {
                     self.interactive_state.next();
                 }
                 self.scroll_to_interactive_element(self.content_viewport_height);
-                self.status_message = Some(self.interactive_state.status_text());
+                self.status_message = None;
             }
             InteractivePreviousLink => {
                 let count = self.take_count();
@@ -315,7 +312,7 @@ impl App {
                     self.interactive_state.previous();
                 }
                 self.scroll_to_interactive_element(self.content_viewport_height);
-                self.status_message = Some(self.interactive_state.status_text());
+                self.status_message = None;
             }
             InteractiveLeft => {
                 let count = self.take_count();
@@ -536,7 +533,7 @@ impl App {
                 // If in table mode, exit table mode first (stay in interactive)
                 if self.interactive_state.is_in_table_mode() {
                     self.interactive_state.exit_table_mode();
-                    self.status_message = Some(self.interactive_state.status_text());
+                    self.status_message = None;
                 } else {
                     self.exit_interactive_mode();
                 }
@@ -754,10 +751,10 @@ impl App {
             return;
         }
 
-        let (rows, cols) = self.get_table_dimensions();
+        let (_, cols) = self.get_table_dimensions();
         if cols > 0 {
             self.interactive_state.table_move_left();
-            self.status_message = Some(self.interactive_state.table_status_text(rows + 1, cols));
+            self.status_message = None;
         }
     }
 
@@ -767,10 +764,10 @@ impl App {
             return;
         }
 
-        let (rows, cols) = self.get_table_dimensions();
+        let (_, cols) = self.get_table_dimensions();
         if cols > 0 {
             self.interactive_state.table_move_right(cols);
-            self.status_message = Some(self.interactive_state.table_status_text(rows + 1, cols));
+            self.status_message = None;
         }
     }
 

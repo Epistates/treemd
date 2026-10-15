@@ -22,8 +22,8 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState,
+    Block, BorderType, Borders, Clear, HighlightSpacing, List, ListItem, Paragraph, Scrollbar,
+    ScrollbarOrientation, ScrollbarState,
 };
 use table::render_table;
 use util::detect_checkbox_in_text;
@@ -50,8 +50,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Show search bar if: outline search is active OR in document search mode (typing or viewing results)
     let show_search_bar = app.outline_search.is_on() || app.mode == AppMode::DocSearch;
     let main_layout = DynamicLayout::vertical(area)
-        .section(Section::Title, Constraint::Length(2))
-        .section_if(show_search_bar, Section::Search, Constraint::Length(3))
+        .section(Section::Title, Constraint::Length(1))
+        .section_if(show_search_bar, Section::Search, Constraint::Length(1))
         .section(Section::Content, Constraint::Min(0))
         .section(Section::Status, Constraint::Length(1))
         .section(Section::Footer, Constraint::Length(1))
@@ -160,32 +160,100 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// The top row: the app and the document on the left, its size on the right.
 fn render_title_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let heading_count = app.document.headings.len();
-    let title_text = format!("treemd - {} - {} headings", app.filename, heading_count);
-
-    let title = Paragraph::new(title_text)
-        .style(
+    let theme = &app.theme;
+    let muted = Style::default().fg(theme.help_desc_fg);
+    let left = Line::from(vec![
+        Span::styled(
+            " treemd",
             Style::default()
-                .fg(app.theme.title_bar_fg)
+                .fg(theme.title_bar_fg)
                 .add_modifier(Modifier::BOLD),
-        )
-        .block(Block::default().borders(Borders::BOTTOM));
-    frame.render_widget(title, area);
+        ),
+        Span::styled("  ", muted),
+        Span::styled(
+            app.filename.clone(),
+            Style::default()
+                .fg(theme.bold_fg)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let count = app.document.headings.len();
+    let right = Line::from(Span::styled(
+        format!("{count} heading{} ", if count == 1 { "" } else { "s" }),
+        muted,
+    ))
+    .right_aligned();
+    frame.render_widget(Paragraph::new(left), area);
+    frame.render_widget(Paragraph::new(right), area);
 }
 
+/// A pane's frame: rounded, its border in the focus color, and the focused
+/// pane's title drawn as a chip, so which pane has the keys shows in its
+/// shape as well as its color.
+fn pane_block(theme: &Theme, title: String, focused: bool) -> Block<'static> {
+    let title = if focused {
+        Span::styled(
+            format!(" {title} "),
+            Style::default()
+                .bg(theme.border_focused)
+                .fg(theme.text_on(theme.border_focused))
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(
+            format!(" {title} "),
+            Style::default().fg(theme.help_desc_fg),
+        )
+    };
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme.border_style(focused))
+        .title(title)
+}
+
+/// A pane's scrollbar on its right border: a thumb and no track or arrows,
+/// and nothing at all when everything fits.
+fn render_pane_scrollbar(
+    frame: &mut Frame,
+    theme: &Theme,
+    area: Rect,
+    state: &mut ScrollbarState,
+    overflows: bool,
+) {
+    if !overflows {
+        return;
+    }
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(None)
+        .thumb_symbol("┃")
+        .style(Style::default().fg(theme.help_desc_fg));
+    frame.render_stateful_widget(
+        scrollbar,
+        area.inner(ratatui::layout::Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        state,
+    );
+}
+
+/// The search bar: one row, the kind of search, the query, and how many
+/// match, on the right. Its keys are in the footer.
 fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
-    // Unified search bar rendering for both outline and document search
     let is_doc_search = app.mode == AppMode::DocSearch;
 
-    // Get the current query and display state
     let (query, is_active, match_info) = if is_doc_search {
         let info = if !app.doc_search.matches.is_empty() {
             let current = app.doc_search.current_idx.unwrap_or(0) + 1;
             let total = app.doc_search.matches.len();
-            format!(" [{}/{}]", current, total)
+            format!("{current}/{total}")
         } else if !app.doc_search.query.is_empty() {
-            " [no matches]".to_string()
+            "no matches".to_string()
         } else {
             String::new()
         };
@@ -201,9 +269,9 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
         let info = if app.search_query.is_empty() {
             String::new()
         } else if shown == 0 {
-            " [no matches]".to_string()
+            "no matches".to_string()
         } else {
-            format!(" [{}/{} headings]", shown, total)
+            format!("{shown}/{total} headings")
         };
         (
             &app.search_query,
@@ -212,70 +280,50 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
         )
     };
 
-    let theme = app.theme.clone();
-
-    // Styling based on search type (accents derive from the theme so the
-    // bar respects custom themes and the 256-color compat layer)
-    let (label, title, accent_color) = if is_doc_search {
-        (
-            "Find",
-            " Content Search (Tab: switch to Outline) ",
-            theme.link_fg,
-        )
+    let theme = &app.theme;
+    let label = if is_doc_search {
+        " search "
     } else {
-        (
-            "Filter",
-            " Outline Search (Tab: switch to Content) ",
-            theme.search_match_bg,
-        )
+        " filter "
     };
-
-    // Build search bar with query
-    let mut line_spans = vec![
-        Span::raw(format!("{}: ", label)),
+    let label_color = if is_doc_search {
+        theme.heading_4
+    } else {
+        theme.border_focused
+    };
+    let bar = theme.status_bar_style();
+    let left = Line::from(vec![
+        Span::styled(
+            label,
+            Style::default()
+                .bg(label_color)
+                .fg(theme.text_on(label_color))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
         Span::styled(
             query.clone(),
             Style::default()
-                .fg(accent_color)
+                .fg(theme.status_bar_fg)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(match_info),
-    ];
-
-    // Add hint text
-    let hint = if is_active {
-        "  (Esc: cancel • Ctrl+U: clear • Ctrl+W: del word)"
-    } else if is_doc_search {
-        "  (Esc: clear • Tab: switch • /: edit)"
-    } else {
-        "  (Esc: clear • Tab: switch • s: edit)"
-    };
-    line_spans.push(Span::styled(
-        hint.to_string(),
+    ]);
+    let right = Line::from(Span::styled(
+        format!("{match_info} "),
         Style::default().fg(theme.help_desc_fg),
-    ));
-
-    let paragraph = Paragraph::new(Line::from(line_spans))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(accent_color))
-                .title(title)
-                .style(theme.modal_style()),
-        )
-        .style(Style::default().fg(theme.foreground));
-
-    frame.render_widget(paragraph, area);
+    ))
+    .right_aligned();
+    frame.render_widget(Paragraph::new(left).style(bar), area);
+    frame.render_widget(Paragraph::new(right), area);
 
     if is_active && area.width > 2 {
         use unicode_width::UnicodeWidthStr;
-        let cursor_offset = format!("{label}: {query}").width() as u16;
+        let cursor_offset = format!("{label} {query}").width() as u16;
         let cursor_x = area
             .x
-            .saturating_add(1)
             .saturating_add(cursor_offset)
-            .min(area.right().saturating_sub(2));
-        frame.set_cursor_position((cursor_x, area.y.saturating_add(1)));
+            .min(area.right().saturating_sub(1));
+        frame.set_cursor_position((cursor_x, area.y));
     }
 }
 
@@ -336,65 +384,52 @@ fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let block_style = theme.border_style(app.focus == Focus::Outline);
-
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(block_style)
-                .title(" Outline "),
-        )
+        .block(pane_block(
+            theme,
+            "Outline".to_string(),
+            app.focus == Focus::Outline,
+        ))
         .style(theme.content_style())
         .highlight_style(theme.selection_style())
-        .highlight_symbol("► ");
+        .highlight_symbol("▌")
+        .highlight_spacing(HighlightSpacing::Always)
+        .scroll_padding(2);
 
+    let overflows = app.outline_items.len() > usize::from(area.height.saturating_sub(2));
+    let theme = theme.clone();
     frame.render_stateful_widget(list, area, &mut app.outline_state);
-
-    // Render scrollbar
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-        .begin_symbol(Some("↑"))
-        .end_symbol(Some("↓"))
-        .thumb_symbol("┃")
-        .track_symbol(Some("│"))
-        .style(Style::default().fg(theme.scrollbar_fg));
-
-    frame.render_stateful_widget(
-        scrollbar,
-        area.inner(ratatui::layout::Margin {
-            vertical: 1,
-            horizontal: 0,
-        }),
+    render_pane_scrollbar(
+        frame,
+        &theme,
+        area,
         &mut app.outline_scroll_state,
+        overflows,
     );
 }
 
 fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
-    use crate::tui::app::AppMode;
-
     // Clone theme early to avoid borrow conflicts
     let theme = app.theme.clone();
-    let block_style = theme.border_style(app.focus == Focus::Content);
 
-    let raw_indicator = if app.show_raw_source { "[RAW] " } else { "" };
     let heading = app
         .selected_heading_text()
         .map_or_else(|| "Content".to_string(), str::to_string);
-    let title = if app.mode == AppMode::LinkFollow && !app.links_in_view.is_empty() {
-        format!(
-            " {}{} [Links: {}] ",
-            raw_indicator,
-            heading,
-            app.links_in_view.len()
-        )
+    let title = if app.show_raw_source {
+        format!("{heading} · source")
     } else {
-        format!(" {}{} ", raw_indicator, heading)
+        heading
     };
+
+    // A column of space each side of the text, which used to run into the
+    // border. Images and diagrams are placed in the same area.
+    let block = pane_block(&theme, title, app.focus == Focus::Content)
+        .padding(ratatui::widgets::Padding::horizontal(1));
+    let text_area = block.inner(area);
 
     // The section, wrapped to the pane: built only when something it depends
     // on changed, so a frame that only scrolls slices rows out of it.
-    let inner_width = area.width.saturating_sub(2); // subtract block borders
-    let view = content_view(app, &theme, inner_width);
+    let view = content_view(app, &theme, text_area.width);
     app.content_height = view.rows.len();
     app.apply_element_scroll();
 
@@ -410,37 +445,24 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     let visible = usize::from(area.height.saturating_sub(2));
     let start = app.content_scroll.min(view.rows.len());
     let end = (start + visible).min(view.rows.len());
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(block_style)
-        .title(title);
     let paragraph = Paragraph::new(view.rows[start..end].to_vec())
         .block(block)
         .style(theme.content_style());
     frame.render_widget(paragraph, area);
 
     // Render inline images (first image in content)
-    render_inline_images(frame, app, area);
+    render_inline_images(frame, app, text_area);
 
     // Render mermaid diagrams as image overlays
     #[cfg(all(feature = "mermaid", unix))]
-    render_mermaid_images(frame, app, area);
+    render_mermaid_images(frame, app, text_area);
 
-    // Render scrollbar
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-        .begin_symbol(Some("↑"))
-        .end_symbol(Some("↓"))
-        .thumb_symbol("┃")
-        .track_symbol(Some("│"))
-        .style(Style::default().fg(theme.scrollbar_fg));
-
-    frame.render_stateful_widget(
-        scrollbar,
-        area.inner(ratatui::layout::Margin {
-            vertical: 1,
-            horizontal: 0,
-        }),
+    render_pane_scrollbar(
+        frame,
+        &theme,
+        area,
         &mut app.content_scroll_state.clone(),
+        max_scroll > 0,
     );
 }
 
@@ -558,11 +580,8 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let theme = app.theme.clone();
 
-    // Account for borders and padding
-    let inner = area.inner(ratatui::layout::Margin {
-        vertical: 1,
-        horizontal: 1,
-    });
+    // `area` is the pane's text area, inside its border and padding.
+    let inner = area;
 
     // Maximum image width: 80% of content area
     let max_image_width = ((inner.width as usize * 80) / 100).max(20) as u16;
@@ -713,10 +732,8 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let theme = app.theme.clone();
-    let inner = area.inner(ratatui::layout::Margin {
-        vertical: 1,
-        horizontal: 1,
-    });
+    // `area` is the pane's text area, inside its border and padding.
+    let inner = area;
 
     // Use full content width for mermaid diagrams (block-level elements)
     let image_width = inner.width.max(20);
@@ -3754,7 +3771,7 @@ mod screen_tests {
             [app.command_palette.filtered[app.command_palette.selected]];
         let screen = draw(&mut app, 80, 24).join("\n");
         assert!(
-            screen.contains(&format!("▸ {}", selected.name)),
+            screen.contains(&format!("▶ {}", selected.name)),
             "{} not on screen:\n{screen}",
             selected.name
         );
