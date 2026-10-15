@@ -525,10 +525,10 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
             let command = &PALETTE_COMMANDS[index];
             let mut spans = vec![Span::raw(command.name)];
             if !command.aliases.is_empty() {
-                spans.push(Span::styled(
-                    format!("  {}", command.aliases.join(", ")),
-                    muted,
-                ));
+                // A few are enough to show what to type; Collapse level has
+                // one per level.
+                let aliases: Vec<&str> = command.aliases.iter().take(3).copied().collect();
+                spans.push(Span::styled(format!("  {}", aliases.join(", ")), muted));
             }
             ListItem::new(Line::from(spans))
         })
