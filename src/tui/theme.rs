@@ -148,6 +148,9 @@ pub struct Theme {
     pub help_key_fg: Color,
     pub help_desc_fg: Color,
     pub footer_bg: Color,
+    /// No color at all: what color marked is drawn with bold, underline
+    /// and reverse video instead.
+    pub monochrome: bool,
 }
 
 /// A theme's colors by role. Every field of [`Theme`] is derived from these
@@ -199,6 +202,7 @@ fn quantize(color: Color, mode: ColorMode) -> Color {
     match mode {
         ColorMode::Rgb => color,
         ColorMode::Indexed256 => rgb_to_256(color),
+        ColorMode::Mono => Color::Reset,
     }
 }
 
@@ -280,8 +284,9 @@ impl Theme {
 
     /// The theme as a terminal with `mode` colors can show it.
     pub fn for_terminal(name: ThemeName, mode: ColorMode) -> Self {
-        match name {
-            ThemeName::Terminal => Self::terminal(),
+        match (name, mode) {
+            (_, ColorMode::Mono) => Self::monochrome(),
+            (ThemeName::Terminal, _) => Self::terminal(),
             _ => Self::from_palette(&palette(name), mode),
         }
     }
@@ -344,6 +349,7 @@ impl Theme {
             help_key_fg: key,
             help_desc_fg: muted,
             footer_bg: bg,
+            monochrome: false,
         }
     }
 
@@ -389,6 +395,62 @@ impl Theme {
             help_key_fg: Color::Cyan,
             help_desc_fg: Color::Gray,
             footer_bg: Color::Reset,
+            monochrome: false,
+        }
+    }
+
+    /// No color: every color the terminal's own, and [`Theme::monochrome`]
+    /// set so the style helpers mark with bold, underline and reverse video.
+    fn monochrome() -> Self {
+        Self {
+            name: "Monochrome",
+            monochrome: true,
+            ..Self::all(Color::Reset)
+        }
+    }
+
+    /// Every color `color`.
+    fn all(color: Color) -> Self {
+        Self {
+            name: "",
+            background: color,
+            foreground: color,
+            heading_1: color,
+            heading_2: color,
+            heading_3: color,
+            heading_4: color,
+            heading_5: color,
+            border_focused: color,
+            border_unfocused: color,
+            selection_bg: color,
+            selection_fg: color,
+            status_bar_bg: color,
+            status_bar_fg: color,
+            inline_code_fg: color,
+            inline_code_bg: color,
+            bold_fg: color,
+            italic_fg: color,
+            list_bullet: color,
+            blockquote_border: color,
+            blockquote_fg: color,
+            code_fence: color,
+            title_bar_fg: color,
+            scrollbar_fg: color,
+            selection_indicator_fg: color,
+            selection_indicator_bg: color,
+            link_fg: color,
+            link_selected_bg: color,
+            link_selected_fg: color,
+            table_border: color,
+            search_match_bg: color,
+            search_match_fg: color,
+            search_current_bg: color,
+            search_current_fg: color,
+            help_key_bg: color,
+            help_key_fg: color,
+            help_desc_fg: color,
+            footer_bg: color,
+            monochrome: false,
         }
     }
 
@@ -410,17 +472,64 @@ impl Theme {
         }
     }
 
+    /// `style`, or in monochrome reverse video and bold, which is how a
+    /// colored highlight shows without color.
+    fn or_reversed(&self, style: Style) -> Style {
+        if self.monochrome {
+            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        } else {
+            style
+        }
+    }
+
     pub fn selection_style(&self) -> Style {
-        Style::default()
-            .bg(self.selection_bg)
-            .fg(self.selection_fg)
-            .add_modifier(Modifier::BOLD)
+        self.or_reversed(
+            Style::default()
+                .bg(self.selection_bg)
+                .fg(self.selection_fg)
+                .add_modifier(Modifier::BOLD),
+        )
     }
 
     pub fn status_bar_style(&self) -> Style {
+        if self.monochrome {
+            return Style::default().add_modifier(Modifier::REVERSED);
+        }
         Style::default()
             .bg(self.status_bar_bg)
             .fg(self.status_bar_fg)
+    }
+
+    /// The marker beside a selected element: the arrow, a selected image's
+    /// frame.
+    pub fn marker_style(&self) -> Style {
+        self.or_reversed(
+            Style::default()
+                .fg(self.selection_indicator_fg)
+                .bg(self.selection_indicator_bg)
+                .add_modifier(Modifier::BOLD),
+        )
+    }
+
+    /// A selected link or table cell.
+    pub fn selected_link_style(&self) -> Style {
+        self.or_reversed(
+            Style::default()
+                .fg(self.link_selected_fg)
+                .bg(self.link_selected_bg)
+                .add_modifier(Modifier::BOLD),
+        )
+    }
+
+    /// A chip: a short label on a block of `color`, such as the mode in the
+    /// status bar or the focused pane's title.
+    pub fn chip_style(&self, color: Color) -> Style {
+        self.or_reversed(
+            Style::default()
+                .bg(color)
+                .fg(self.text_on(color))
+                .add_modifier(Modifier::BOLD),
+        )
     }
 
     pub fn inline_code_style(&self) -> Style {
@@ -491,6 +600,9 @@ impl Theme {
 
     /// Style for search matches (non-current)
     pub fn search_match_style(&self) -> Style {
+        if self.monochrome {
+            return Style::default().add_modifier(Modifier::UNDERLINED);
+        }
         Style::default()
             .bg(self.search_match_bg)
             .fg(self.search_match_fg)
@@ -498,10 +610,12 @@ impl Theme {
 
     /// Style for the current/focused search match
     pub fn search_current_style(&self) -> Style {
-        Style::default()
-            .bg(self.search_current_bg)
-            .fg(self.search_current_fg)
-            .add_modifier(Modifier::BOLD)
+        self.or_reversed(
+            Style::default()
+                .bg(self.search_current_bg)
+                .fg(self.search_current_fg)
+                .add_modifier(Modifier::BOLD),
+        )
     }
 
     pub fn modal_text(&self) -> Color {
@@ -548,6 +662,10 @@ impl Theme {
         custom: &crate::config::CustomThemeConfig,
         mode: ColorMode,
     ) -> Self {
+        // No color means none, custom colors included.
+        if mode == ColorMode::Mono {
+            return self;
+        }
         // Helper macro to apply color override if present
         macro_rules! apply_color {
             ($field:ident) => {
@@ -1082,6 +1200,31 @@ mod contrast_tests {
                 Some(name)
             );
         }
+    }
+
+    /// Without color, what color marked still shows: the selection, chips
+    /// and the current match in reverse video, other matches underlined, and
+    /// no color left anywhere.
+    #[test]
+    fn monochrome_marks_without_color() {
+        let theme = Theme::for_terminal(ThemeName::Dracula, ColorMode::Mono);
+        for style in [
+            theme.selection_style(),
+            theme.marker_style(),
+            theme.chip_style(theme.border_focused),
+            theme.search_current_style(),
+            theme.status_bar_style(),
+        ] {
+            assert!(style.add_modifier.contains(Modifier::REVERSED), "{style:?}");
+        }
+        assert!(
+            theme
+                .search_match_style()
+                .add_modifier
+                .contains(Modifier::UNDERLINED)
+        );
+        assert_eq!(theme.foreground, Color::Reset);
+        assert_eq!(theme.heading_1, Color::Reset);
     }
 
     /// The nearest of the 256 colors: the cube's levels are 0, 95, 135...,

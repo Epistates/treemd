@@ -277,6 +277,7 @@ fn main() -> Result<()> {
                 ColorModeArg::Auto => caps.recommended_color_mode,
                 ColorModeArg::Rgb => ColorMode::Rgb,
                 ColorModeArg::Color256 => ColorMode::Indexed256,
+                ColorModeArg::None => ColorMode::Mono,
             }
         } else {
             // Check config file setting before falling back to auto-detection
@@ -284,6 +285,7 @@ fn main() -> Result<()> {
             match config.terminal.color_mode.as_str() {
                 "rgb" => ColorMode::Rgb,
                 "256" => ColorMode::Indexed256,
+                "none" => ColorMode::Mono,
                 // "auto" or any other value falls back to detection
                 _ => caps.recommended_color_mode,
             }

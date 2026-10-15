@@ -199,13 +199,7 @@ fn render_title_bar(frame: &mut Frame, app: &App, area: Rect) {
 /// shape as well as its color.
 fn pane_block(theme: &Theme, title: String, focused: bool) -> Block<'static> {
     let title = if focused {
-        Span::styled(
-            format!(" {title} "),
-            Style::default()
-                .bg(theme.border_focused)
-                .fg(theme.text_on(theme.border_focused))
-                .add_modifier(Modifier::BOLD),
-        )
+        Span::styled(format!(" {title} "), theme.chip_style(theme.border_focused))
     } else {
         Span::styled(
             format!(" {title} "),
@@ -298,13 +292,7 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
     };
     let bar = theme.status_bar_style();
     let left = Line::from(vec![
-        Span::styled(
-            label,
-            Style::default()
-                .bg(label_color)
-                .fg(theme.text_on(label_color))
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(label, theme.chip_style(label_color)),
         Span::raw(" "),
         Span::styled(
             query.clone(),
@@ -694,10 +682,7 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
 
             // If selected, render a selection border around the image
             if is_selected {
-                let border_style = Style::default()
-                    .fg(theme.selection_indicator_fg)
-                    .bg(theme.selection_indicator_bg)
-                    .add_modifier(Modifier::BOLD);
+                let border_style = theme.marker_style();
 
                 let border = Block::default()
                     .borders(Borders::ALL)
@@ -869,10 +854,7 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
                 };
 
                 let render_area = if is_selected {
-                    let border_style = Style::default()
-                        .fg(theme.selection_indicator_fg)
-                        .bg(theme.selection_indicator_bg)
-                        .add_modifier(Modifier::BOLD);
+                    let border_style = theme.marker_style();
 
                     let border = Block::default()
                         .borders(Borders::ALL)
@@ -1125,15 +1107,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let muted = Style::default()
         .fg(theme.help_desc_fg)
         .bg(theme.status_bar_bg);
-    let chip = |label: String, color: Color| {
-        Span::styled(
-            label,
-            Style::default()
-                .bg(color)
-                .fg(theme.text_on(color))
-                .add_modifier(Modifier::BOLD),
-        )
-    };
+    let chip = |label: String, color: Color| Span::styled(label, theme.chip_style(color));
 
     let (mode, mode_color) = mode_chip(app);
     let mut left: Vec<Span> = vec![chip(mode.to_string(), mode_color), Span::raw(" ")];
@@ -1558,16 +1532,7 @@ fn render_markdown_with_blocks(
 
                 // Add selection indicator if selected (with background for visibility)
                 if is_block_selected {
-                    formatted.insert(
-                        0,
-                        Span::styled(
-                            "→ ",
-                            Style::default()
-                                .fg(theme.selection_indicator_fg)
-                                .bg(theme.selection_indicator_bg)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    );
+                    formatted.insert(0, Span::styled("→ ", theme.marker_style()));
                 }
 
                 lines.push(Line::from(formatted));
@@ -1581,16 +1546,7 @@ fn render_markdown_with_blocks(
 
                 // Add selection indicator (with background for visibility)
                 if is_block_selected {
-                    formatted.insert(
-                        0,
-                        Span::styled(
-                            "→ ",
-                            Style::default()
-                                .fg(theme.selection_indicator_fg)
-                                .bg(theme.selection_indicator_bg)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    );
+                    formatted.insert(0, Span::styled("→ ", theme.marker_style()));
                 }
 
                 lines.push(Line::from(formatted));
@@ -1620,13 +1576,7 @@ fn render_markdown_with_blocks(
                     // Mermaid diagram: render header + placeholder lines for image overlay
                     let mut header_spans = vec![];
                     if is_block_selected {
-                        header_spans.push(Span::styled(
-                            "→ ",
-                            Style::default()
-                                .fg(theme.selection_indicator_fg)
-                                .bg(theme.selection_indicator_bg)
-                                .add_modifier(Modifier::BOLD),
-                        ));
+                        header_spans.push(Span::styled("→ ", theme.marker_style()));
                     }
                     header_spans.push(Span::styled("▸ mermaid diagram", theme.code_fence_style()));
                     lines.push(Line::from(header_spans));
@@ -1731,13 +1681,7 @@ fn render_markdown_with_blocks(
 
                                 // Pointer replaces leading spaces, not prepended
                                 if show_pointer {
-                                    spans.push(Span::styled(
-                                        "→ ",
-                                        Style::default()
-                                            .fg(theme.selection_indicator_fg)
-                                            .bg(theme.selection_indicator_bg)
-                                            .add_modifier(Modifier::BOLD),
-                                    ));
+                                    spans.push(Span::styled("→ ", theme.marker_style()));
                                 } else {
                                     spans.push(Span::raw("  "));
                                 }
@@ -1776,13 +1720,7 @@ fn render_markdown_with_blocks(
                                         let pre_pointer_indent =
                                             " ".repeat(total_indent.saturating_sub(2));
                                         spans.push(Span::raw(pre_pointer_indent));
-                                        spans.push(Span::styled(
-                                            "→ ",
-                                            Style::default()
-                                                .fg(theme.selection_indicator_fg)
-                                                .bg(theme.selection_indicator_bg)
-                                                .add_modifier(Modifier::BOLD),
-                                        ));
+                                        spans.push(Span::styled("→ ", theme.marker_style()));
                                     } else {
                                         spans.push(Span::raw(" ".repeat(total_indent)));
                                     }
@@ -1824,13 +1762,7 @@ fn render_markdown_with_blocks(
 
                         // Pointer replaces leading spaces, not prepended
                         if pointer_line == Some(0) {
-                            spans.push(Span::styled(
-                                "→ ",
-                                Style::default()
-                                    .fg(theme.selection_indicator_fg)
-                                    .bg(theme.selection_indicator_bg)
-                                    .add_modifier(Modifier::BOLD),
-                            ));
+                            spans.push(Span::styled("→ ", theme.marker_style()));
                         } else {
                             spans.push(Span::raw("  "));
                         }
@@ -1899,13 +1831,7 @@ fn render_markdown_with_blocks(
 
                             // Add selection indicator on first line of nested block
                             if is_nested_selected && line_idx == 0 {
-                                indented_spans.push(Span::styled(
-                                    "→ ",
-                                    Style::default()
-                                        .fg(theme.selection_indicator_fg)
-                                        .bg(theme.selection_indicator_bg)
-                                        .add_modifier(Modifier::BOLD),
-                                ));
+                                indented_spans.push(Span::styled("→ ", theme.marker_style()));
                                 indented_spans.push(Span::raw("   ")); // 3 spaces (5 - 2 for arrow)
                             } else {
                                 indented_spans.push(Span::raw("     ")); // 5 spaces indent
@@ -1926,16 +1852,8 @@ fn render_markdown_with_blocks(
                         && line.spans.first().is_some_and(|s| s.content == "     ")
                     {
                         line.spans[0] = Span::raw("   ");
-                        line.spans.insert(
-                            0,
-                            Span::styled(
-                                "→ ",
-                                Style::default()
-                                    .fg(theme.selection_indicator_fg)
-                                    .bg(theme.selection_indicator_bg)
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                        );
+                        line.spans
+                            .insert(0, Span::styled("→ ", theme.marker_style()));
                     }
                 }
             }
@@ -2033,13 +1951,7 @@ fn render_markdown_with_blocks(
                 // The actual image will be rendered as a StatefulImage widget
                 let mut img_line = vec![];
                 if is_block_selected {
-                    img_line.push(Span::styled(
-                        "→ ",
-                        Style::default()
-                            .fg(theme.selection_indicator_fg)
-                            .bg(theme.selection_indicator_bg)
-                            .add_modifier(Modifier::BOLD),
-                    ));
+                    img_line.push(Span::styled("→ ", theme.marker_style()));
                 }
                 img_line.push(Span::styled("🖼 ", Style::default().fg(theme.list_bullet)));
                 img_line.push(Span::styled(
@@ -2080,13 +1992,7 @@ fn render_markdown_with_blocks(
 
                 // Add selection indicator (with background for visibility)
                 if is_block_selected {
-                    summary_spans.push(Span::styled(
-                        "→ ",
-                        Style::default()
-                            .fg(theme.selection_indicator_fg)
-                            .bg(theme.selection_indicator_bg)
-                            .add_modifier(Modifier::BOLD),
-                    ));
+                    summary_spans.push(Span::styled("→ ", theme.marker_style()));
                 }
 
                 // Show ▼ when expanded, ▶ when collapsed
@@ -2196,13 +2102,7 @@ fn render_markdown_with_blocks(
 
                                 // Add selection indicator for first line of selected nested block
                                 if is_nested_selected && line_idx == 0 {
-                                    spans.push(Span::styled(
-                                        "→ ",
-                                        Style::default()
-                                            .fg(theme.selection_indicator_fg)
-                                            .bg(theme.selection_indicator_bg)
-                                            .add_modifier(Modifier::BOLD),
-                                    ));
+                                    spans.push(Span::styled("→ ", theme.marker_style()));
                                 } else {
                                     spans.push(Span::raw("  ")); // Indent
                                 }
@@ -2571,16 +2471,9 @@ fn render_code_block(
     // `fill_block_background` leaves spans that already carry a background
     // alone, so the indicator keeps its own colors either way.
     if selected && let Some(first) = lines.first_mut() {
-        first.spans.insert(
-            0,
-            Span::styled(
-                "→ ",
-                Style::default()
-                    .fg(theme.selection_indicator_fg)
-                    .bg(theme.selection_indicator_bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        );
+        first
+            .spans
+            .insert(0, Span::styled("→ ", theme.marker_style()));
     }
 
     if let Some(bg) = highlighter.code_block_bg() {
@@ -2810,19 +2703,12 @@ fn render_inline_elements(
             InlineElement::Link { text, .. } => {
                 if is_selected {
                     // Add selection indicator before selected link (with background for visibility)
-                    spans.push(Span::styled(
-                        "▸ ",
-                        Style::default()
-                            .fg(theme.selection_indicator_fg)
-                            .bg(theme.selection_indicator_bg)
-                            .add_modifier(Modifier::BOLD),
-                    ));
+                    spans.push(Span::styled("▸ ", theme.marker_style()));
                 }
                 let style = if is_selected {
                     // Highlighted selected link - matches table cell selection style
-                    Style::default()
-                        .fg(theme.link_selected_fg)
-                        .bg(theme.link_selected_bg)
+                    theme
+                        .selected_link_style()
                         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
                 } else {
                     // Normal link style

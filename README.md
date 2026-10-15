@@ -477,7 +477,7 @@ tree_style = "compact"          # "compact" (default, gapless box characters) or
 outline_heading_markers = true  # Show #/##/### level markers in outline sidebar
 
 [terminal]
-color_mode = "auto"    # "auto", "rgb", or "256"
+color_mode = "auto"    # "auto", "rgb", "256", or "none" (no color; NO_COLOR picks this too)
 
 [content]
 hide_frontmatter = true  # Hide YAML frontmatter (---\n...\n---) in content view
@@ -663,7 +663,12 @@ Override settings for a single session:
 treemd --theme Dracula README.md
 treemd --color-mode 256 README.md
 treemd --color-mode rgb README.md
+treemd --color-mode none README.md
 ```
+
+With [`NO_COLOR`](https://no-color.org) set, treemd draws without color unless
+`--color-mode` or the config picks a mode: the selection, chips and the
+current match in reverse video, other matches underlined.
 
 ## Contributing
 

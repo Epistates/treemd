@@ -172,13 +172,7 @@ pub fn render_table(
         top_border_spans.push(Span::raw("  "));
     } else if is_selected {
         // Not in table nav mode: show arrow if table is selected as element
-        top_border_spans.push(Span::styled(
-            "→ ",
-            Style::default()
-                .fg(theme.selection_indicator_fg)
-                .bg(theme.selection_indicator_bg)
-                .add_modifier(Modifier::BOLD),
-        ));
+        top_border_spans.push(Span::styled("→ ", theme.marker_style()));
     }
 
     let mut top_border = String::from("┌");
@@ -344,10 +338,7 @@ pub fn render_table_row(
             let is_selected = ctx.selected_cell == Some((ctx.row_num, i));
 
             let style = if is_selected {
-                Style::default()
-                    .fg(ctx.theme.link_selected_fg)
-                    .bg(ctx.theme.link_selected_bg)
-                    .add_modifier(Modifier::BOLD)
+                ctx.theme.selected_link_style().add_modifier(Modifier::BOLD)
             } else if ctx.is_header {
                 Style::default()
                     .fg(ctx.theme.heading_color(3))

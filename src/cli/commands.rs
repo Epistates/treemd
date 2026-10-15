@@ -270,6 +270,8 @@ pub enum ColorModeArg {
     /// Force 256-color mode
     #[value(name = "256")]
     Color256,
+    /// No color, as NO_COLOR asks: bold, underline and reverse video only
+    None,
 }
 
 #[derive(Debug, Clone, ValueEnum)]

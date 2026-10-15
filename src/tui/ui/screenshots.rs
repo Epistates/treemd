@@ -151,6 +151,10 @@ See the [README](https://github.com/epistates/treemd) and [Install](#install).\n
 ## Install\n\n```sh\ncargo install treemd\n```\n\n## License\n\nMIT\n";
 
 fn app(theme: ThemeName) -> App {
+    app_in(theme, ColorMode::Rgb)
+}
+
+fn app_in(theme: ThemeName, mode: ColorMode) -> App {
     let mut config = crate::Config::default();
     config.ui.theme = format!("{theme:?}");
     let mut app = App::new(
@@ -158,7 +162,7 @@ fn app(theme: ThemeName) -> App {
         "README.md".into(),
         std::path::PathBuf::from("README.md"),
         config,
-        ColorMode::Rgb,
+        mode,
         false,
     );
     app.jump_to_heading(1);
@@ -215,6 +219,13 @@ fn screenshots() {
             let file = dir.join(format!("{theme:?}-{name}.svg"));
             std::fs::write(file, shot(&mut app, 120, 34)).unwrap();
         }
+    }
+    // NO_COLOR: no color at all.
+    for (name, setup) in scenes {
+        let mut app = app_in(ThemeName::OceanDark, ColorMode::Mono);
+        setup(&mut app);
+        let file = dir.join(format!("mono-{name}.svg"));
+        std::fs::write(file, shot(&mut app, 120, 34)).unwrap();
     }
     // A narrow terminal, where the footer has to choose.
     for (name, setup) in scenes {

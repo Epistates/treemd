@@ -64,6 +64,7 @@ fn adapt(color: Color, mode: ColorMode) -> Color {
     match mode {
         ColorMode::Rgb => color,
         ColorMode::Indexed256 => rgb_to_256(color),
+        ColorMode::Mono => Color::Reset,
     }
 }
 

@@ -4,6 +4,10 @@ use supports_color::{Stream, on};
 pub enum ColorMode {
     Rgb,        // True color (16M colors)
     Indexed256, // 256-color palette
+    /// No color: the terminal's own foreground and background, with bold,
+    /// underline and reverse video marking what color marked. Chosen by
+    /// `NO_COLOR` (<https://no-color.org>) or `--color-mode none`.
+    Mono,
 }
 
 #[derive(Debug)]
@@ -49,6 +53,15 @@ impl TerminalCapabilities {
                 ColorMode::Indexed256
             };
             (false, mode)
+        };
+
+        // NO_COLOR asks for no color unless the user picks otherwise; an
+        // explicit --color-mode or config color_mode still wins.
+        let recommended_color_mode = if std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
+        {
+            ColorMode::Mono
+        } else {
+            recommended_color_mode
         };
 
         Self {
