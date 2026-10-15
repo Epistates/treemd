@@ -270,7 +270,7 @@ After following a link, `b` / `Backspace` and `F` go back and forward from the m
 
 #### Selecting and copying text
 
-treemd captures the mouse for scroll-wheel navigation, which by default suppresses your terminal's native click-drag selection. To grab an arbitrary substring:
+The wheel scrolls whichever pane the pointer is over, a click on a heading selects it (a second click folds or unfolds it), and a click on the text focuses it. Capturing the mouse for that suppresses your terminal's native click-drag selection. To grab an arbitrary substring:
 
 - **Hold `Shift` while dragging** — most terminals (iTerm2, kitty, GNOME Terminal, Konsole, Windows Terminal) bypass application mouse capture and select natively.
 - **Press `M`** to release mouse capture entirely, then select and copy as usual; press `M` again to restore scroll-wheel navigation.

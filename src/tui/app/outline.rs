@@ -191,17 +191,7 @@ impl App {
 
     pub fn next(&mut self) {
         if self.focus == Focus::Outline {
-            let i = match self.outline_state.selected() {
-                Some(i) => {
-                    if i >= self.outline_items.len().saturating_sub(1) {
-                        i
-                    } else {
-                        i + 1
-                    }
-                }
-                None => 0,
-            };
-            self.select_outline_index(i);
+            self.outline_step(true);
         } else {
             // Scroll content - stop when last line is at viewport bottom
             self.scroll_content_down();
@@ -210,14 +200,37 @@ impl App {
 
     pub fn previous(&mut self) {
         if self.focus == Focus::Outline {
-            let i = match self.outline_state.selected() {
-                Some(i) => i.saturating_sub(1),
-                None => 0,
-            };
-            self.select_outline_index(i);
+            self.outline_step(false);
         } else {
             // Scroll content
             self.scroll_content_up();
+        }
+    }
+
+    /// Select the next outline row, or the previous, whichever pane has
+    /// the focus.
+    pub(crate) fn outline_step(&mut self, forward: bool) {
+        let last = self.outline_items.len().saturating_sub(1);
+        let i = match self.outline_state.selected() {
+            Some(i) if forward => (i + 1).min(last),
+            Some(i) => i.saturating_sub(1),
+            None => 0,
+        };
+        self.select_outline_index(i);
+    }
+
+    /// A click on the outline's `row`-th visible row: select that heading,
+    /// or fold or unfold it when it is already selected.
+    pub(crate) fn click_outline_row(&mut self, row: usize) {
+        let index = self.outline_state.offset() + row;
+        if index >= self.outline_items.len() {
+            return;
+        }
+        self.focus = Focus::Outline;
+        if self.outline_state.selected() == Some(index) {
+            self.toggle_expand();
+        } else {
+            self.select_outline_index(index);
         }
     }
 

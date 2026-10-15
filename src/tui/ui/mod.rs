@@ -91,6 +91,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Layout::horizontal([Constraint::Percentage(100)]).split(content_area)
     };
 
+    app.pane_areas = crate::tui::app::PaneAreas {
+        outline: effective_show_outline.then(|| content_chunks[0]),
+        content: Some(content_chunks[usize::from(effective_show_outline)]),
+    };
+
     // Render outline (left pane) only if effectively visible (user toggle AND enough width)
     if effective_show_outline {
         render_outline(frame, app, content_chunks[0]);

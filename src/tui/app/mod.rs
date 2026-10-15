@@ -123,6 +123,13 @@ impl OutlineSearch {
     }
 }
 
+/// Where the last frame drew the two panes, for the mouse to find them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PaneAreas {
+    pub outline: Option<Rect>,
+    pub content: Option<Rect>,
+}
+
 /// A popup shown in front of the current mode. It takes the keys until it
 /// closes, and only one is open at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +209,8 @@ pub struct App {
     pub content_viewport_height: u16, // Actual viewport height for scroll calculations
     /// The popup in front of the current mode, if any.
     pub overlay: Option<Overlay>,
+    /// Where the panes were drawn, for mouse clicks and the wheel.
+    pub pane_areas: PaneAreas,
     pub help_scroll: u16,
     /// The help popup's last scroll position and page height, in rows, as
     /// laid out by the frame that drew it.
@@ -500,6 +509,7 @@ impl App {
             content_height: content_lines,
             content_viewport_height: 20, // Default, will be updated by UI on first render
             overlay: None,
+            pane_areas: PaneAreas::default(),
             help_scroll: 0,
             help_max_scroll: u16::MAX,
             help_page: 1,
