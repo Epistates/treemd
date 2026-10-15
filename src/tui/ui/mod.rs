@@ -416,8 +416,11 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // A column of space each side of the text, which used to run into the
     // border. Images and diagrams are placed in the same area.
-    let block = pane_block(&theme, title, app.focus == Focus::Content)
-        .padding(ratatui::widgets::Padding::horizontal(1));
+    // With the outline hidden, by the user or for want of width, the keys
+    // act on what is left, and this pane looks it.
+    let focused = app.focus == Focus::Content || app.pane_areas.outline.is_none();
+    let block =
+        pane_block(&theme, title, focused).padding(ratatui::widgets::Padding::horizontal(1));
     let text_area = block.inner(area);
 
     // The section, wrapped to the pane: built only when something it depends
