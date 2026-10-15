@@ -84,47 +84,35 @@ fn fit_columns_to_budget(col_widths: &mut [usize], budget: usize) {
     }
 }
 
-/// Calculate column widths using content-weighted area approach
+/// How wide a cell's text is on screen. Inline code is drawn without its
+/// backticks, so they take no room.
+fn cell_width(cell: &str) -> usize {
+    if cell.contains('`') {
+        terminal_width(&cell.replace('`', ""))
+    } else {
+        terminal_width(cell)
+    }
+}
+
+/// Each column's natural width: its widest cell, header included.
 ///
-/// Instead of using max cell width, use average cell width weighted by content.
-/// This gives fairer distribution when one column has a single outlier value.
+/// A column was sized at 70% of its average cell and 30% of its widest, to
+/// keep one long value from taking the table, so `Previous` wrapped in a
+/// column of `Next` and `Previous` with the pane half empty. That only
+/// matters when the table does not fit, and [`fit_columns_to_budget`] then
+/// takes the space from the widest columns first.
 fn calculate_column_widths(headers: &[String], rows: &[Vec<String>]) -> Vec<usize> {
-    let col_count = headers.len();
-
-    if rows.is_empty() {
-        // No data rows, use header widths
-        return headers.iter().map(|h| terminal_width(h).max(1)).collect();
-    }
-
-    let mut col_widths: Vec<usize> = vec![0; col_count];
-
-    // Calculate average width per column from data rows (not headers)
-    // This focuses on actual content, as forthrin suggested
-    for (i, _header) in headers.iter().enumerate() {
-        let mut total_width = 0usize;
-        let mut cell_count = 0usize;
-        let mut max_width = 0usize;
-
-        for row in rows {
-            if let Some(cell) = row.get(i) {
-                let cell_width = terminal_width(cell);
-                total_width += cell_width;
-                cell_count += 1;
-                max_width = max_width.max(cell_width);
-            }
-        }
-
-        if let Some(avg_width) = total_width.checked_div(cell_count) {
-            // Use weighted average: blend of average and max
-            // 70% average, 30% max — balances fairness with readability
-            col_widths[i] = (avg_width * 7 + max_width * 3) / 10;
-        }
-
-        // Ensure column is at least as wide as header
-        col_widths[i] = col_widths[i].max(terminal_width(&headers[i])).max(1);
-    }
-
-    col_widths
+    headers
+        .iter()
+        .enumerate()
+        .map(|(i, header)| {
+            rows.iter()
+                .filter_map(|row| row.get(i))
+                .map(|cell| cell_width(cell))
+                .fold(cell_width(header), usize::max)
+                .max(1)
+        })
+        .collect()
 }
 
 /// Render a complete table with headers, alignments, and rows
@@ -373,14 +361,16 @@ pub fn render_table_row(
                 let formatted = format_inline_markdown(&line_text, ctx.theme);
                 let rendered_width: usize =
                     formatted.iter().map(|s| terminal_width(&s.content)).sum();
+                // The same one-space margin `align_text` gives a plain cell;
+                // without it a code cell sat against the left border.
                 let padding_total = width.saturating_sub(rendered_width);
                 let (lead, trail) = match alignment {
-                    Alignment::Right => (padding_total, 0),
+                    Alignment::Right => (padding_total.saturating_sub(1), padding_total.min(1)),
                     Alignment::Center => {
                         let half = padding_total / 2;
                         (half, padding_total - half)
                     }
-                    _ => (0, padding_total),
+                    _ => (padding_total.min(1), padding_total.saturating_sub(1)),
                 };
                 if lead > 0 {
                     spans.push(Span::styled(" ".repeat(lead), style));
@@ -425,6 +415,41 @@ mod tests {
 
     mod render_table_tests {
         use super::*;
+
+        fn text(lines: &[Line]) -> Vec<String> {
+            lines
+                .iter()
+                .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+                .collect()
+        }
+
+        /// A column was sized from a blend of its average and widest cell,
+        /// so `Previous` wrapped beside `Next` with room to spare. A table
+        /// that fits gets its natural widths.
+        #[test]
+        fn a_table_that_fits_wraps_nothing() {
+            let headers = vec!["Key".to_string(), "Action".to_string()];
+            let rows = vec![
+                vec!["`j`".to_string(), "Next".to_string()],
+                vec!["`k`".to_string(), "Previous".to_string()],
+            ];
+            let aligns = [Alignment::None, Alignment::None];
+            let lines = render_table(
+                &headers,
+                &aligns,
+                &rows,
+                &test_theme(),
+                false,
+                false,
+                None,
+                Some(80),
+            );
+            let lines = text(&lines);
+            // Top, header, separator, two rows, bottom: no wrapped rows.
+            assert_eq!(lines.len(), 6, "{lines:#?}");
+            assert_eq!(lines[3], "│ j   │ Next     │");
+            assert_eq!(lines[4], "│ k   │ Previous │");
+        }
 
         #[test]
         fn test_empty_headers_returns_empty() {
