@@ -1,7 +1,7 @@
 ---
 name: treemd
 description: Markdown document analysis and navigation using the treemd CLI. Use when exploring markdown structure (heading trees, section extraction), querying markdown elements via tql (treemd query language), or piping markdown content for programmatic analysis. Also use before reading or editing large markdown files to survey structure, locate relevant sections, and avoid loading entire documents into context.
-version: 1.0.2
+version: 1.0.3
 homepage: https://github.com/Epistates/treemd
 license: MIT
 ---
@@ -40,7 +40,7 @@ Understand the document skeleton before diving in.
 
 ```bash
 treemd --tree FILE.md              # Visual tree with box-drawing characters
-treemd --count FILE.md             # Heading count by level (h1–h6 breakdown + total)
+treemd --count FILE.md             # Heading count by level (h1 to h6 breakdown + total)
 treemd -l FILE.md | head -20       # Quick scan of all headings
 ```
 
@@ -55,7 +55,7 @@ treemd --at-line 150 FILE.md               # "Which heading covers line 150?"
 treemd -l -n FILE.md                       # Each heading with its [start-end] line range
 ```
 
-> **Tip for agents**: `-n` (combine with `-l` or `--tree`) appends a `[start-end]` line range to every heading in plain output, e.g. `## Installation [12-34]`. `start` is the heading's own line; `end` is the last line before the next heading at the same or a shallower level (or the document's last line). This lets you read only the lines for the section you need (e.g. via `Read` with an offset/limit) instead of loading the whole file, and is much cheaper than parsing `-o json`. Note that `-o json`'s `position.line` is not the same number: it is the line the section's body starts on, one below the heading for an ATX heading and two below for a setext one. The tql `.line` property matches `-n`.
+> **Tip for agents**: `-n` (combine with `-l` or `--tree`) appends a `[start-end]` line range to every heading in plain output, e.g. `## Installation [12-34]`. `start` is the heading's own line; `end` is the last line before the next heading at the same or a shallower level (or the document's last line). This lets you read only the lines for the section you need (e.g. via `Read` with an offset/limit) instead of loading the whole file, and is much cheaper than parsing `-o json`. Note that `-o json`'s `position.line` is not the same number: it is the line the section's body starts on (the first non-blank line after the heading, or the line after it when the section has no body), not the heading's own line. The tql `.line` property matches `-n`.
 
 ### Step 3: Extract
 
@@ -66,7 +66,7 @@ treemd -s "Full Heading Text" FILE.md     # Extract heading + content (full head
 cat FILE.md | treemd -s "Full Heading Text" -  # Pipe stdin, extract from stream
 ```
 
-> **Important**: `-s` requires the **full heading text** (including emoji and parentheses). Case is ignored, so `-s "installation"` finds `## Installation`, but a partial match fails: given a heading `## 📦 Installation (from source)`, `treemd -s "Installation"` exits `1` with `Section 'Installation' not found`, while the full text succeeds. Use `-l --filter` first to recover the exact heading, then pass it verbatim. The `-o` flag has no effect in `-s` mode: output is always plain markdown.
+> **Important**: `-s` requires the **full heading text** (including emoji and parentheses). Case is ignored, so `-s "installation"` finds `## Installation`, but a partial match fails: given a heading `## 📦 Installation (from source)`, `treemd -s "Installation"` exits `1` with `Section 'Installation' not found`, while the full text succeeds. Use `-l --filter` first to recover the exact heading, then pass it verbatim. `-o` cannot be used with `-s` (it needs `--list` or `--tree`, else exit `2`): output is always plain markdown.
 
 #### Output Format Options
 
@@ -76,7 +76,7 @@ Attach `-o` to `--list` or `--tree` only (not `-s`):
 - `-o json`: JSON for scripting/parsing. The shape differs by mode: `--list -o json` emits a nested document object (`.document.metadata` plus a recursive `.document.sections[]` tree carrying each section's content and blocks), while `--tree -o json` emits a flat array of `{"level", "text"}` objects.
 - `-o tree`: Box-drawing tree structure (`--list -o tree` prints the same tree as `--tree`)
 
-For tql (`-q`) queries, use `--query-output` instead of `-o`. Available formats:
+For tql (`-q`) queries, use `--query-output` instead of `-o` (`-q` with `-o` is a usage error, exit `2`). Available formats:
 
 - `--query-output plain`: Human-readable text (default)
 - `--query-output json`: Compact JSON, always an array (`[]` for no results), even for one result
@@ -147,6 +147,7 @@ Full tql syntax reference: `references/query-language.md`.
 
 ```bash
 cat README.md | treemd -l -            # Read markdown from stdin
+cat README.md | treemd -l              # A pipe works without the -
 ```
 
 ## TUI Mode
@@ -156,12 +157,13 @@ Reserved for human interactive sessions only. Not usable by agents.
 ```bash
 treemd FILE.md          # Launch dual-pane interactive viewer
 treemd ./docs/          # Open file picker in directory
-treemd *.md             # Open multi-file picker
 ```
+
+Only one file is opened. Extra file arguments are reported and ignored.
 
 Keybindings: vim-style (`j`/`k` for up/down, `h`/`l` for collapse/expand, `/` for search, `q` for quit).
 
-Themes: `--theme <OceanDark|Nord|Dracula|Solarized|Monokai|Gruvbox|TokyoNight|CatppuccinMocha>`
+Themes: `--theme <OceanDark|Nord|Dracula|Solarized|Monokai|Gruvbox|TokyoNight|CatppuccinMocha|OneDark|RosePine|Kanagawa|Everforest|GitHubDark|CatppuccinLatte|SolarizedLight|GitHubLight|Terminal>`. An unknown name exits `2`.
 
 ## Integration Patterns
 
