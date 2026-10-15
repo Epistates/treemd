@@ -1,7 +1,7 @@
 use crate::tui::terminal_compat::ColorMode;
 use ratatui::style::{Color, Modifier, Style};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, strum::EnumIter)]
 pub enum ThemeName {
     OceanDark,
     Nord,

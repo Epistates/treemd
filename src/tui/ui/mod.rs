@@ -1,5 +1,7 @@
 mod layout;
 mod popups;
+#[cfg(test)]
+mod screenshots;
 mod table;
 pub mod util;
 
