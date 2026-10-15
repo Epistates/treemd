@@ -458,6 +458,22 @@ impl Theme {
         self.selection_bg
     }
 
+    /// The readable text color on `bg`: whichever of the theme's
+    /// background, its text, black and white contrasts most with it. For a
+    /// terminal color, whose value is unknown, the theme's background.
+    pub fn text_on(&self, bg: Color) -> Color {
+        [
+            self.background,
+            self.foreground,
+            Color::Rgb(0, 0, 0),
+            Color::Rgb(255, 255, 255),
+        ]
+        .into_iter()
+        .filter_map(|fg| contrast(fg, bg).map(|ratio| (ratio, fg)))
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map_or(self.background, |(_, fg)| fg)
+    }
+
     /// A popup's own colors: its background and its text. Setting only the
     /// background left unstyled text in the terminal's default color, light
     /// gray on a light theme's popup.

@@ -213,4 +213,11 @@ fn screenshots() {
             std::fs::write(file, shot(&mut app, 120, 34)).unwrap();
         }
     }
+    // A narrow terminal, where the footer has to choose.
+    for (name, setup) in scenes {
+        let mut app = app(ThemeName::OceanDark);
+        setup(&mut app);
+        let file = dir.join(format!("narrow-{name}.svg"));
+        std::fs::write(file, shot(&mut app, 60, 20)).unwrap();
+    }
 }

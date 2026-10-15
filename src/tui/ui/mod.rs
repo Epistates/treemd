@@ -8,6 +8,7 @@ pub mod util;
 use layout::{DynamicLayout, Section};
 
 use crate::config::CodeFences;
+use crate::keybindings::{Action, KeybindingMode};
 use crate::tui::app::{App, AppMode, Focus, OutlineSearch, Overlay};
 use crate::tui::content_view::ContentView;
 use crate::tui::theme::Theme;
@@ -1018,223 +1019,359 @@ fn render_image_modal(frame: &mut Frame, app: &mut App, area: Rect) {
 /// The persistent mode chip shown at the left edge of the status bar.
 /// Visible even while a status message occupies the rest of the bar, so the
 /// user never loses track of which mode they're in.
-fn mode_chip(app: &App) -> Option<(&'static str, Style)> {
-    use crate::tui::app::AppMode;
+fn mode_chip(app: &App) -> (&'static str, Color) {
+    use crate::keybindings::KeybindingMode as M;
     let theme = &app.theme;
-
-    let chip_style = |accent: Color| {
-        Style::default()
-            .bg(accent)
-            .fg(theme.background)
-            .add_modifier(Modifier::BOLD)
-    };
-
-    match app.mode {
-        AppMode::Interactive => {
-            let label = if app.interactive_state.is_in_table_mode() {
-                " TABLE "
-            } else {
-                " INTERACTIVE "
-            };
-            Some((label, chip_style(theme.heading_2)))
-        }
-        AppMode::LinkFollow => Some((" LINKS ", chip_style(theme.heading_3))),
-        AppMode::DocSearch => Some((" SEARCH ", chip_style(theme.heading_4))),
-        AppMode::CellEdit => Some((" EDIT ", chip_style(theme.heading_5))),
-        AppMode::CommandPalette => Some((" PALETTE ", chip_style(theme.heading_1))),
-        AppMode::FilePicker => Some((" FILES ", chip_style(theme.heading_3))),
+    match app.current_keybinding_mode() {
+        M::Interactive => (" INTERACTIVE ", theme.heading_2),
+        M::InteractiveTable => (" TABLE ", theme.heading_2),
+        M::LinkFollow | M::LinkSearch => (" LINKS ", theme.heading_3),
+        M::DocSearch => (" SEARCH ", theme.heading_4),
+        M::CellEdit => (" EDIT ", theme.heading_5),
+        M::CommandPalette => (" COMMAND ", theme.heading_1),
+        M::FilePicker | M::FileSearch => (" FILES ", theme.heading_3),
+        M::Help => (" HELP ", theme.heading_1),
+        M::ThemePicker => (" THEME ", theme.heading_1),
+        M::ConfirmDialog => (" CONFIRM ", theme.heading_4),
+        M::ImageViewer => (" IMAGE ", theme.heading_2),
         // Outline search is a panel over Normal mode rather than a mode of
-        // its own. The chip used to wait for an AppMode::Search that nothing
-        // ever set, so it never showed.
-        AppMode::Normal if app.outline_search.is_on() => {
-            Some((" FILTER ", chip_style(theme.heading_4)))
-        }
-        _ => None,
+        // its own.
+        M::Search => (" FILTER ", theme.heading_4),
+        M::Normal if app.outline_search.is_on() => (" FILTER ", theme.heading_4),
+        M::Normal => (" NORMAL ", theme.border_focused),
     }
 }
 
+/// The headings above and including the selected one, as `A › B › C`.
+fn breadcrumb(app: &App) -> Option<String> {
+    let index = app.selected_heading_index()?;
+    let headings = &app.document.headings;
+    let mut level = headings.get(index)?.level;
+    let mut path = vec![headings[index].text.as_str()];
+    for heading in headings[..index].iter().rev() {
+        if heading.level < level {
+            path.push(heading.text.as_str());
+            level = heading.level;
+        }
+    }
+    path.reverse();
+    Some(path.join(" › "))
+}
+
+/// Where the selection or the view is, for the right end of the status bar.
+fn position(app: &App) -> String {
+    use crate::tui::app::AppMode;
+    match app.mode {
+        AppMode::Interactive => {
+            let total = app.interactive_state.elements.len();
+            let current = app.interactive_state.current_index.map_or(0, |i| i + 1);
+            format!("{current}/{total}")
+        }
+        AppMode::LinkFollow => {
+            let total = app.links_in_view.len();
+            let current = app.link_picker.selected.map_or(0, |i| i + 1);
+            format!("link {current}/{total}")
+        }
+        _ => match app.focus {
+            Focus::Outline => {
+                let total = app.outline_items.len();
+                let current = app.outline_state.selected().map_or(0, |i| i + 1);
+                format!("{current}/{total}")
+            }
+            Focus::Content => {
+                let bottom = (app.content_scroll + app.content_viewport_height as usize)
+                    .min(app.content_height);
+                let percent = (bottom * 100)
+                    .checked_div(app.content_height)
+                    .unwrap_or(100)
+                    .min(100);
+                format!("ln {} · {percent}%", app.content_scroll + 1)
+            }
+        },
+    }
+}
+
+/// The status bar: the mode chip, then what is selected and any state worth
+/// keeping in view (unsaved edits, the todo filter, a bookmark), and the
+/// position pinned to the right. A status message takes the middle while it
+/// lasts.
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     use crate::tui::app::AppMode;
 
     let theme = &app.theme;
-    let mut spans: Vec<Span> = Vec::new();
-    if let Some((label, style)) = mode_chip(app) {
-        spans.push(Span::styled(label, style));
-        spans.push(Span::raw(" "));
-    }
-
-    // If there's a status message, it occupies the rest of the bar (the mode
-    // chip stays visible on the left)
-    if let Some(ref msg) = app.status_message {
-        spans.push(Span::styled(
-            format!(" {} ", msg),
+    let bar = theme.status_bar_style();
+    let muted = Style::default()
+        .fg(theme.help_desc_fg)
+        .bg(theme.status_bar_bg);
+    let chip = |label: String, color: Color| {
+        Span::styled(
+            label,
             Style::default()
-                .bg(theme.selection_bg)
-                .fg(theme.selection_fg)
+                .bg(color)
+                .fg(theme.text_on(color))
                 .add_modifier(Modifier::BOLD),
-        ));
-        let status = Paragraph::new(Line::from(spans)).style(theme.status_bar_style());
-        frame.render_widget(status, area);
-        return;
-    }
-
-    // Pending vim-style count prefix (e.g. the "12" of "12j")
-    if let Some(count) = app.count_prefix {
-        spans.push(Span::styled(
-            format!(" {} ", count),
-            Style::default()
-                .bg(theme.selection_bg)
-                .fg(theme.selection_fg)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw(" "));
-    }
-
-    let status_text = if app.mode == AppMode::Interactive {
-        // Interactive mode status with position info
-        let total = app.interactive_state.elements.len();
-        let current = app
-            .interactive_state
-            .current_index
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let percentage = if total > 0 && current > 0 {
-            current * 100 / total
-        } else {
-            0
-        };
-
-        // Get element-specific hint (shows current element info)
-        let element_hint = app.interactive_state.get_status_hint();
-
-        format!(
-            " {}/{} ({}%) • {}",
-            current, total, percentage, element_hint
         )
-    } else if app.mode == AppMode::LinkFollow {
-        // Link follow mode status
-        let link_count = app.links_in_view.len();
-        let selected = app.link_picker.selected.map(|i| i + 1).unwrap_or(0);
+    };
 
-        let link_info = if link_count > 0 {
-            // Show current link details
-            let current_link = app
+    let (mode, mode_color) = mode_chip(app);
+    let mut left: Vec<Span> = vec![chip(mode.to_string(), mode_color), Span::raw(" ")];
+    if app.filter_by_todos {
+        left.push(chip(" TODO ".to_string(), theme.heading_4));
+        left.push(Span::raw(" "));
+    }
+    if let Some(count) = app.count_prefix {
+        left.push(chip(format!(" {count} "), theme.selection_bg));
+        left.push(Span::raw(" "));
+    }
+
+    if let Some(ref msg) = app.status_message {
+        left.push(Span::styled(
+            msg.clone(),
+            Style::default()
+                .fg(theme.status_bar_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else {
+        let context = match app.mode {
+            AppMode::Interactive => app.interactive_state.get_status_hint(),
+            AppMode::LinkFollow => app
                 .link_picker
                 .selected
-                .and_then(|idx| app.links_in_view.get(idx));
+                .and_then(|i| app.links_in_view.get(i))
+                .map(|link| {
+                    use crate::parser::LinkTarget;
+                    let target = match &link.target {
+                        LinkTarget::Anchor(a) => format!("#{a}"),
+                        LinkTarget::RelativeFile { path, anchor } => match anchor {
+                            Some(a) => format!("{}#{a}", path.display()),
+                            None => path.display().to_string(),
+                        },
+                        LinkTarget::WikiLink { target, .. } => format!("[[{target}]]"),
+                        LinkTarget::External(url) => util::truncate_with_ellipsis(url, 48),
+                    };
+                    format!("{} → {target}", link.text)
+                })
+                .unwrap_or_else(|| "No links in this section".to_string()),
+            _ => breadcrumb(app).unwrap_or_else(|| app.filename.clone()),
+        };
+        left.push(Span::styled(context, bar));
+    }
 
-            if let Some(link) = current_link {
-                use crate::parser::LinkTarget;
-                let target_str = match &link.target {
-                    LinkTarget::Anchor(a) => format!("#{}", a),
-                    LinkTarget::RelativeFile { path, anchor } => {
-                        if let Some(a) = anchor {
-                            format!("{}#{}", path.display(), a)
-                        } else {
-                            path.display().to_string()
-                        }
-                    }
-                    LinkTarget::WikiLink { target, .. } => format!("[[{}]]", target),
-                    LinkTarget::External(url) => {
-                        // Truncate long URLs
-                        util::truncate_with_ellipsis(url, 40)
-                    }
-                };
+    let mut right: Vec<Span> = Vec::new();
+    if app.has_unsaved_changes() {
+        let count = app.pending_edits.len();
+        right.push(Span::styled(
+            format!("● {count} unsaved  "),
+            Style::default()
+                .fg(theme.search_current_bg)
+                .bg(theme.status_bar_bg)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if app.show_raw_source {
+        right.push(Span::styled("raw  ", muted));
+    }
+    if app.latex_filter_active() {
+        right.push(Span::styled("latex hidden  ", muted));
+    }
+    if app.bookmark_position.is_some() {
+        right.push(Span::styled("⚑  ", muted));
+    }
+    if !app.file_history.is_empty() {
+        right.push(Span::styled(
+            format!("← {}  ", app.file_history.len()),
+            muted,
+        ));
+    }
+    right.push(Span::styled(format!("{} ", position(app)), bar));
 
-                format!(
-                    "Link {}/{}: \"{}\" → {}",
-                    selected, link_count, link.text, target_str
-                )
-            } else {
-                format!("Link {}/{}", selected, link_count)
+    let right = Line::from(right);
+    let right_width = (right.width() as u16).min(area.width / 2);
+    let [left_area, right_area] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(right_width)]).areas(area);
+    frame.render_widget(Paragraph::new(Line::from(left)).style(bar), left_area);
+    frame.render_widget(Paragraph::new(right.right_aligned()).style(bar), right_area);
+}
+
+/// A footer hint: keys bound to actions, or a note with no key.
+enum Hint {
+    Keys(KeybindingMode, &'static [Action], &'static str),
+    Note(&'static str),
+}
+
+/// The hints for the mode the keys are read in, most useful first.
+fn footer_hints(app: &App) -> Vec<Hint> {
+    use crate::tui::app::OutlineSearch;
+    use crate::tui::interactive::ElementType;
+    use Action::*;
+    use Hint::{Keys, Note};
+    use KeybindingMode as M;
+
+    match app.current_keybinding_mode() {
+        M::Normal if app.outline_search == OutlineSearch::Applied => vec![
+            Keys(M::Normal, &[Next, Previous], "move"),
+            Keys(M::Normal, &[NextMatch, PrevMatch], "next match"),
+            Keys(M::Normal, &[EnterSearchMode], "new filter"),
+            Keys(M::Normal, &[ExitMode], "clear"),
+        ],
+        M::Normal => match app.focus {
+            Focus::Outline => vec![
+                Keys(M::Normal, &[Next, Previous], "move"),
+                Keys(M::Normal, &[ToggleExpand], "fold"),
+                Keys(M::Normal, &[EnterDocSearch], "search"),
+                Keys(M::Normal, &[EnterSearchMode], "filter"),
+                Keys(M::Normal, &[EnterInteractiveMode], "interact"),
+                Keys(M::Normal, &[EnterLinkFollowMode], "links"),
+                Keys(M::Normal, &[OpenFilePicker], "files"),
+                Keys(M::Normal, &[ToggleThemePicker], "theme"),
+                Keys(M::Normal, &[OpenCommandPalette], "commands"),
+            ],
+            Focus::Content => vec![
+                Keys(M::Normal, &[Next, Previous], "scroll"),
+                Keys(M::Normal, &[EnterDocSearch], "search"),
+                Keys(M::Normal, &[EnterInteractiveMode], "interact"),
+                Keys(M::Normal, &[EnterLinkFollowMode], "links"),
+                Keys(M::Normal, &[CopyContent], "copy"),
+                Keys(M::Normal, &[ToggleFocus], "outline"),
+                Keys(M::Normal, &[OpenCommandPalette], "commands"),
+            ],
+        },
+        M::Search => vec![
+            Note("type to filter headings"),
+            Keys(M::Search, &[ConfirmAction], "keep"),
+            Keys(M::Search, &[ToggleSearchMode], "search text"),
+            Keys(M::Search, &[ExitMode], "cancel"),
+        ],
+        M::DocSearch if app.doc_search.active => vec![
+            Note("type to search"),
+            Keys(M::DocSearch, &[ConfirmAction], "done"),
+            Keys(M::DocSearch, &[ToggleSearchMode], "filter headings"),
+            Keys(M::DocSearch, &[ExitMode], "cancel"),
+        ],
+        M::DocSearch => vec![
+            Keys(M::DocSearch, &[NextMatch, PrevMatch], "next/prev"),
+            Keys(M::DocSearch, &[ScrollDown, ScrollUp], "scroll"),
+            Keys(M::DocSearch, &[EnterDocSearch], "edit"),
+            Keys(M::DocSearch, &[ExitMode], "clear"),
+        ],
+        M::Help => vec![
+            Keys(M::Help, &[HelpScrollDown, HelpScrollUp], "scroll"),
+            Keys(M::Help, &[First, Last], "top/end"),
+            Keys(M::Help, &[ToggleHelp], "close"),
+        ],
+        M::ThemePicker => vec![
+            Keys(
+                M::ThemePicker,
+                &[ThemePickerNext, ThemePickerPrevious],
+                "preview",
+            ),
+            Keys(M::ThemePicker, &[ApplyTheme], "keep"),
+            Keys(M::ThemePicker, &[ToggleThemePicker], "cancel"),
+        ],
+        M::Interactive => {
+            let nav = Keys(
+                M::Interactive,
+                &[InteractiveNext, InteractivePrevious],
+                "move",
+            );
+            let act = |what| Keys(M::Interactive, &[InteractiveActivate], what);
+            let mut hints = vec![nav];
+            match app
+                .interactive_state
+                .current_element()
+                .map(|elem| &elem.element_type)
+            {
+                Some(ElementType::Checkbox { .. }) => hints.push(act("toggle")),
+                Some(ElementType::Table { .. }) => hints.push(act("cells")),
+                Some(ElementType::Link { .. }) => hints.push(act("follow")),
+                Some(ElementType::Details { .. }) => hints.push(act("expand")),
+                Some(ElementType::Image { .. }) => hints.push(act("view")),
+                Some(ElementType::CodeBlock { .. }) | None => {}
             }
-        } else {
-            "No links in current section".to_string()
-        };
-
-        format!(" {} ", link_info)
-    } else {
-        // Normal mode status - show position based on focus
-        let (focus_indicator, position_info) = match app.focus {
-            Focus::Outline => {
-                let selected_idx = app.outline_state.selected().unwrap_or(0);
-                let total = app.outline_items.len();
-                let percentage = ((selected_idx + 1) * 100).checked_div(total).unwrap_or(0);
-                (
-                    "Outline",
-                    format!("{}/{} ({}%)", selected_idx + 1, total, percentage),
-                )
-            }
-            Focus::Content => {
-                // Show content scroll position
-                let scroll_pos = app.content_scroll;
-                let content_height = app.content_height;
-                let viewport = app.content_viewport_height as usize;
-                let bottom_line = (scroll_pos + viewport).min(content_height);
-                let percentage = (bottom_line * 100)
-                    .checked_div(content_height)
-                    .unwrap_or(0)
-                    .min(100);
-                (
-                    "Content",
-                    format!("Line {} ({}%)", scroll_pos + 1, percentage),
-                )
-            }
-        };
-
-        let outline_status = if app.show_outline {
-            format!("Outline:{}%", app.outline_width)
-        } else {
-            "Outline:Hidden".to_string()
-        };
-
-        let bookmark_indicator = if app.bookmark_position.is_some() {
-            " ⚑"
-        } else {
-            ""
-        };
-
-        let history_indicator = if !app.file_history.is_empty() {
-            format!(" ← {} ", app.file_history.len())
-        } else {
-            "".to_string()
-        };
-
-        format!(
-            " [{}] {}{}{} • {}",
-            focus_indicator, position_info, bookmark_indicator, history_indicator, outline_status
-        )
-    };
-
-    let theme_name = format!(" • Theme:{}", app.theme.name);
-    let raw_indicator = if app.show_raw_source { " [RAW]" } else { "" };
-    let latex_indicator = if app.latex_filter_active() {
-        " [LaTeX filtered]"
-    } else {
-        ""
-    };
-    let status_text = format!(
-        "{}{}{}{}",
-        status_text, theme_name, raw_indicator, latex_indicator
-    );
-
-    spans.push(Span::raw(status_text));
-    let status = Paragraph::new(Line::from(spans)).style(theme.status_bar_style());
-
-    frame.render_widget(status, area);
+            hints.push(Keys(M::Interactive, &[CopyContent], "copy"));
+            hints.push(Keys(M::Interactive, &[OpenInEditor], "edit"));
+            hints.push(Keys(M::Interactive, &[ExitInteractiveMode], "done"));
+            hints
+        }
+        M::InteractiveTable => vec![
+            Keys(
+                M::InteractiveTable,
+                &[InteractiveNext, InteractivePrevious],
+                "row",
+            ),
+            Keys(
+                M::InteractiveTable,
+                &[InteractiveLeft, InteractiveRight],
+                "column",
+            ),
+            Keys(M::InteractiveTable, &[InteractiveActivate], "edit"),
+            Keys(M::InteractiveTable, &[CopyTableCell], "copy"),
+            Keys(M::InteractiveTable, &[ExitMode], "done"),
+        ],
+        M::LinkFollow => vec![
+            Keys(M::LinkFollow, &[NextLink, PreviousLink], "move"),
+            Keys(M::LinkFollow, &[FollowLink], "follow"),
+            Keys(M::LinkFollow, &[LinkSearch], "search"),
+            Keys(M::LinkFollow, &[CopyContent], "copy"),
+            Keys(M::LinkFollow, &[ExitMode], "done"),
+        ],
+        M::LinkSearch => vec![
+            Note("type to filter links"),
+            Keys(M::LinkSearch, &[FollowLink], "follow"),
+            Keys(M::LinkSearch, &[ExitMode], "stop"),
+        ],
+        M::FilePicker => vec![
+            Keys(M::FilePicker, &[Next, Previous], "move"),
+            Keys(M::FilePicker, &[FollowLink], "open"),
+            Keys(M::FilePicker, &[LinkSearch], "search"),
+            Keys(M::FilePicker, &[ParentDirectory], "up"),
+            Keys(M::FilePicker, &[ToggleHidden], "hidden"),
+            Keys(M::FilePicker, &[ExitMode], "close"),
+        ],
+        M::FileSearch => vec![
+            Note("type to filter files"),
+            Keys(M::FileSearch, &[FollowLink], "open"),
+            Keys(M::FileSearch, &[ExitMode], "stop"),
+        ],
+        M::CommandPalette => vec![
+            Note("type a command"),
+            Keys(
+                M::CommandPalette,
+                &[CommandPaletteNext, CommandPalettePrev],
+                "move",
+            ),
+            Keys(M::CommandPalette, &[CommandPaletteAutocomplete], "complete"),
+            Keys(M::CommandPalette, &[ConfirmAction], "run"),
+            Keys(M::CommandPalette, &[ExitMode], "cancel"),
+        ],
+        M::CellEdit => vec![
+            Note("type the new value"),
+            Keys(M::CellEdit, &[ConfirmAction], "save"),
+            Keys(M::CellEdit, &[CancelAction], "cancel"),
+        ],
+        M::ConfirmDialog => vec![
+            Keys(M::ConfirmDialog, &[ConfirmAction], "yes"),
+            Keys(M::ConfirmDialog, &[CancelAction], "no"),
+        ],
+        M::ImageViewer => vec![
+            Keys(M::ImageViewer, &[TogglePlayback], "play/pause"),
+            Keys(M::ImageViewer, &[PreviousFrame, NextFrame], "frame"),
+            Keys(M::ImageViewer, &[ExitMode], "close"),
+        ],
+    }
 }
 
 /// Render the footer with context-aware keybinding hints.
 ///
-/// Key labels are derived from the live keybindings (like the help overlay)
-/// so the footer stays accurate when the user remaps keys.
+/// The hints are the ones for the mode the keys are read in, so they never
+/// name a key that is typing text or driving a popup. Key labels come from
+/// the live keybindings, so they follow a remap. On a narrow terminal hints
+/// drop from the end, but the one for help always stays.
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
-    use crate::keybindings::{Action, KeybindingMode};
-    use crate::tui::app::AppMode;
-
     let theme = &app.theme;
+    let key_style = theme.help_key_style();
+    let desc_style = theme.help_desc_style();
 
-    // Look up the display label for an action's bound keys (e.g. "j/k")
     let label = |mode: KeybindingMode, actions: &[Action]| -> String {
         actions
             .iter()
@@ -1242,162 +1379,53 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             .collect::<Vec<String>>()
             .join("/")
     };
-
-    // (mode, actions, description) per hint; labels resolved from bindings
-    type Hint = (KeybindingMode, &'static [Action], &'static str);
-    let hints: Vec<Hint> = match app.mode {
-        AppMode::Interactive => {
-            use Action::*;
-            use KeybindingMode::{Interactive, InteractiveTable};
-
-            // Check if we're in table mode
-            if app.interactive_state.is_in_table_mode() {
+    let render = |hint: &Hint| -> Vec<Span<'static>> {
+        match hint {
+            Hint::Keys(mode, actions, desc) => {
+                let key = label(*mode, actions);
+                if key.is_empty() {
+                    // Unbound in the user's config: there is no key to show.
+                    return Vec::new();
+                }
                 vec![
-                    (
-                        InteractiveTable,
-                        &[InteractiveNext, InteractivePrevious],
-                        "Row",
-                    ),
-                    (
-                        InteractiveTable,
-                        &[InteractiveLeft, InteractiveRight],
-                        "Col",
-                    ),
-                    (InteractiveTable, &[InteractiveActivate], "Edit"),
-                    (InteractiveTable, &[CopyTableCell], "Copy"),
-                    (InteractiveTable, &[ExitMode], "Exit Table"),
+                    Span::styled(format!(" {key} "), key_style),
+                    Span::styled(format!(" {desc}  "), desc_style),
                 ]
-            } else {
-                // Get current element type for context-specific hints
-                use crate::tui::interactive::ElementType;
-
-                let nav: Hint = (
-                    Interactive,
-                    &[InteractiveNext, InteractivePrevious],
-                    "Navigate",
-                );
-                let exit: Hint = (Interactive, &[ExitInteractiveMode], "Exit");
-                match app.interactive_state.current_element() {
-                    Some(elem) => match &elem.element_type {
-                        ElementType::Checkbox { .. } => {
-                            vec![nav, (Interactive, &[InteractiveActivate], "Toggle"), exit]
-                        }
-                        ElementType::Table { .. } => vec![
-                            nav,
-                            (Interactive, &[InteractiveActivate], "Enter Table"),
-                            (Interactive, &[CopyContent], "Copy"),
-                            exit,
-                        ],
-                        ElementType::Link { .. } => vec![
-                            nav,
-                            (Interactive, &[InteractiveActivate], "Follow"),
-                            (Interactive, &[CopyContent], "Copy URL"),
-                            exit,
-                        ],
-                        ElementType::Details { .. } => {
-                            vec![nav, (Interactive, &[InteractiveActivate], "Expand"), exit]
-                        }
-                        ElementType::CodeBlock { .. } => {
-                            vec![nav, (Interactive, &[CopyContent], "Copy"), exit]
-                        }
-                        ElementType::Image { .. } => {
-                            vec![nav, (Interactive, &[InteractiveActivate], "Open"), exit]
-                        }
-                    },
-                    None => vec![nav, (Interactive, &[InteractiveActivate], "Action"), exit],
-                }
             }
-        }
-        AppMode::LinkFollow => {
-            use Action::*;
-            use KeybindingMode::LinkFollow;
-            vec![
-                (LinkFollow, &[NextLink], "Next Link"),
-                (LinkFollow, &[FollowLink], "Follow"),
-                (LinkFollow, &[CopyContent], "Copy URL"),
-                (LinkFollow, &[ExitMode], "Exit"),
-            ]
-        }
-        AppMode::DocSearch => {
-            use Action::*;
-            use KeybindingMode::DocSearch;
-            vec![
-                (DocSearch, &[NextMatch, PrevMatch], "Next/Prev"),
-                (DocSearch, &[ToggleSearchMode], "Outline Search"),
-                (DocSearch, &[ConfirmAction], "Accept"),
-                (DocSearch, &[ExitMode], "Cancel"),
-            ]
-        }
-        AppMode::CellEdit => {
-            use Action::*;
-            use KeybindingMode::CellEdit;
-            vec![
-                (CellEdit, &[ConfirmAction], "Save"),
-                (CellEdit, &[CancelAction], "Cancel"),
-            ]
-        }
-        AppMode::CommandPalette => {
-            use Action::*;
-            use KeybindingMode::CommandPalette;
-            vec![
-                (
-                    CommandPalette,
-                    &[CommandPaletteNext, CommandPalettePrev],
-                    "Navigate",
-                ),
-                (CommandPalette, &[ConfirmAction], "Select"),
-                (CommandPalette, &[ExitMode], "Cancel"),
-            ]
-        }
-        _ => {
-            use Action::*;
-            use KeybindingMode::Normal;
-            // Normal mode - show based on focus
-            match app.focus {
-                Focus::Outline => {
-                    vec![
-                        (Normal, &[Next, Previous], "Navigate"),
-                        (Normal, &[ToggleExpand], "Expand"),
-                        (Normal, &[EnterDocSearch], "Search"),
-                        (Normal, &[EnterInteractiveMode], "Interactive"),
-                        (Normal, &[EnterLinkFollowMode], "Links"),
-                        (Normal, &[ToggleHelp], "Help"),
-                    ]
-                }
-                Focus::Content => {
-                    vec![
-                        (Normal, &[Next, Previous], "Scroll"),
-                        (Normal, &[EnterDocSearch], "Search"),
-                        (Normal, &[EnterInteractiveMode], "Interactive"),
-                        (Normal, &[EnterLinkFollowMode], "Links"),
-                        (Normal, &[CopyContent], "Copy"),
-                        (Normal, &[ToggleHelp], "Help"),
-                    ]
-                }
-            }
+            Hint::Note(text) => vec![Span::styled(
+                format!(" {text}  "),
+                desc_style.add_modifier(Modifier::ITALIC),
+            )],
         }
     };
+    let width = |spans: &[Span]| spans.iter().map(Span::width).sum::<usize>();
 
-    // Build styled spans using flat_map pattern
-    let spans: Vec<Span> = hints
-        .iter()
-        .filter_map(|(mode, actions, desc)| {
-            let key = label(*mode, actions);
-            if key.is_empty() {
-                return None; // action unbound in user config — hide the hint
-            }
-            Some(vec![
-                Span::styled(format!(" {} ", key), theme.help_key_style()),
-                Span::styled(format!("{} ", desc), theme.help_desc_style()),
-            ])
-        })
-        .flatten()
-        .collect();
+    // Every other mode's hints say how to leave it.
+    let help = if app.current_keybinding_mode() == KeybindingMode::Normal {
+        render(&Hint::Keys(
+            KeybindingMode::Normal,
+            &[Action::ToggleHelp],
+            "help",
+        ))
+    } else {
+        Vec::new()
+    };
 
-    let line = Line::from(spans);
-    let footer = Paragraph::new(line).style(theme.footer_style());
+    let budget = usize::from(area.width).saturating_sub(width(&help));
+    let mut spans: Vec<Span> = Vec::new();
+    for hint in footer_hints(app) {
+        let hint = render(&hint);
+        if width(&spans) + width(&hint) > budget {
+            break;
+        }
+        spans.extend(hint);
+    }
+    spans.extend(help);
 
-    frame.render_widget(footer, area);
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(theme.footer_style()),
+        area,
+    );
 }
 
 use crate::parser::content::parse_content;
