@@ -63,7 +63,7 @@ Use it to:
 | **Bookmarks** | Mark positions (`m`) and jump back (`'`) |
 | **Callouts** | GFM alerts and Obsidian callouts (`> [!NOTE]`, `> [!WARNING]`, …) rendered with icons and accent colors |
 | **Remote documents** | Open URLs directly: `treemd https://…` or `treemd github:owner/repo` |
-| **8 color themes** | Nord, Dracula, Solarized, Monokai, Gruvbox, Tokyo Night, Catppuccin Mocha, Ocean Dark |
+| **17 color themes** | Dark: Ocean Dark, Nord, Dracula, Solarized Dark, Monokai, Gruvbox, Tokyo Night, Catppuccin Mocha, One Dark, Rose Pine, Kanagawa, Everforest, GitHub Dark. Light: Catppuccin Latte, Solarized Light, GitHub Light. And Terminal, which uses your terminal's own colors. Each is held to WCAG contrast, in 256-color terminals too |
 | **Customizable keybindings** | Remap any key via [config file](#custom-keybindings) |
 
 ### CLI Mode
@@ -471,7 +471,7 @@ The file is created automatically when you change settings (theme with `t`, outl
 
 ```toml
 [ui]
-theme = "Nord"                  # OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
+theme = "Nord"                  # see the list below; press t to preview them all
 outline_width = 30              # 20, 30, or 40
 tree_style = "compact"          # "compact" (default, gapless box characters) or "spaced"; used by --tree
 outline_heading_markers = true  # Show #/##/### level markers in outline sidebar
@@ -485,6 +485,19 @@ hide_latex = true        # Hide LaTeX math expressions ($...$, $$...$$, \begin{.
 code_fences = "full"     # "full", "label", or "none" (see below)
 slug_style = "treemd"    # "treemd" or "github" (see below)
 ```
+
+### Themes
+
+Press `t` to preview every theme on the open document; `Enter` keeps one.
+Set one in the config by its name:
+
+| Dark | Light | Other |
+|------|-------|-------|
+| `OceanDark` (default), `Nord`, `Dracula`, `Solarized`, `Monokai`, `Gruvbox`, `TokyoNight`, `CatppuccinMocha`, `OneDark`, `RosePine`, `Kanagawa`, `Everforest`, `GitHubDark` | `CatppuccinLatte`, `SolarizedLight`, `GitHubLight` | `Terminal`: your terminal's own background and 16 colors |
+
+Every theme's text meets WCAG contrast against what it is drawn on, in
+24-bit color and in 256-color terminals. Code blocks follow the theme
+unless `code_theme` names one.
 
 ### Heading Anchors
 
@@ -624,7 +637,7 @@ Customize syntax highlighting in code blocks using Sublime Text `.tmTheme` files
 
 ```toml
 [ui]
-code_theme = "base16-ocean.dark"  # Default theme
+code_theme = "auto"  # the default: follows the UI theme, so light themes get light code
 ```
 
 **Built-in themes:** `base16-ocean.dark`, `base16-ocean.light`, `base16-eighties.dark`, `base16-mocha.dark`, `InspiredGitHub`, `Solarized (dark)`, `Solarized (light)`
@@ -661,7 +674,7 @@ Contributions are welcome! Please feel free to submit a [Pull Request](https://g
 **Completed:**
 - [x] Query language (jq-like syntax)
 - [x] Stdin/pipe support
-- [x] 8 color themes
+- [x] 17 color themes, light ones included
 - [x] Configuration file
 - [x] Link following with history
 - [x] WikiLinks support

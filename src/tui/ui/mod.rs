@@ -40,6 +40,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     let area = frame.area();
 
+    // The theme's background and text color under everything, so no cell a
+    // widget leaves unstyled shows the terminal's own: a light theme had a
+    // dark title bar. The terminal theme's colors are the terminal's.
+    frame.render_widget(Block::new().style(app.theme.content_style()), area);
+
     // Create dynamic main layout
     // Show search bar if: outline search is active OR in document search mode (typing or viewing results)
     let show_search_bar = app.outline_search.is_on() || app.mode == AppMode::DocSearch;
@@ -255,7 +260,7 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(accent_color))
                 .title(title)
-                .style(Style::default().bg(theme.modal_bg())),
+                .style(theme.modal_style()),
         )
         .style(Style::default().fg(theme.foreground));
 
@@ -2922,7 +2927,7 @@ mod tests {
 
     fn code_lines(fences: CodeFences, bg: CodeBlockBackground, lang: Option<&str>) -> Vec<String> {
         let hl = SyntaxHighlighter::new("base16-ocean.dark", None, bg, ColorMode::Rgb);
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         render_code_block(lang, "let x = 1;\n", &hl, &theme, false, fences, Some(30))
             .iter()
             .map(|line| {
@@ -2971,7 +2976,7 @@ mod tests {
             CodeBlockBackground::FromTheme,
             ColorMode::Rgb,
         );
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         let lines = render_code_block(
             Some("rust"),
             "let x = 1;\nlet yy = 22;\n",
@@ -3004,7 +3009,7 @@ mod tests {
                 CodeBlockBackground::Off,
                 ColorMode::Rgb,
             );
-            let theme = Theme::ocean_dark();
+            let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
             render_code_block(
                 Some("rust"),
                 "let x = 1;\n",
@@ -3055,7 +3060,7 @@ mod tests {
             CodeBlockBackground::FromTheme,
             ColorMode::Rgb,
         );
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         let lines = render_code_block(
             Some("rust"),
             "let x = 1;\n",
@@ -3081,7 +3086,7 @@ mod tests {
             CodeBlockBackground::FromTheme,
             ColorMode::Rgb,
         );
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         let width: u16 = 30;
 
         for selected in [false, true] {
@@ -3114,7 +3119,7 @@ mod tests {
         // Syntect themes are always 24-bit. On a 256-color terminal both the
         // block background and the token foregrounds have to be quantized, or
         // code is the only part of the UI still emitting truecolor.
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
 
         let rgb = SyntaxHighlighter::new(
             "base16-ocean.dark",
@@ -3170,7 +3175,7 @@ mod tests {
             CodeBlockBackground::Color(Color::Rgb(40, 40, 50)),
             ColorMode::Rgb,
         );
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         let width: u16 = 30;
 
         for line in render_code_block(
@@ -3229,7 +3234,7 @@ mod tests {
 
     #[test]
     fn callout_render_produces_header_and_body() {
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         let lines = render_callout_lines("[!NOTE]\nbody text", &theme).unwrap();
         assert_eq!(lines.len(), 2);
         let header: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
@@ -3240,7 +3245,7 @@ mod tests {
 
     #[test]
     fn non_callout_blockquote_is_untouched() {
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         assert!(render_callout_lines("just a quote", &theme).is_none());
     }
 
@@ -3258,7 +3263,7 @@ mod tests {
             panic!("expected a blockquote, got {:?}", blocks);
         };
 
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         let lines = render_callout_lines(content, &theme).unwrap();
         let row =
             |i: usize| -> String { lines[i].spans.iter().map(|s| s.content.as_ref()).collect() };
@@ -3280,7 +3285,7 @@ mod tests {
     /// two together rather than trusting them to stay in step.
     #[test]
     fn rendered_callout_line_count_matches_the_rows_drawn() {
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         for content in [
             "[!NOTE] Hi",
             "[!NOTE] Hi\nText.",
@@ -3308,7 +3313,7 @@ mod tests {
     /// leaves a bare styled `rust` where ```` ```rust ```` was written.
     #[test]
     fn a_fence_inside_a_callout_survives_the_inline_formatter() {
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         let lines = render_callout_lines("[!NOTE] Hi\nText.\n\n```rust\nfn main() {}\n```", &theme)
             .unwrap();
         let row =
@@ -3327,7 +3332,7 @@ mod tests {
     /// Text after a closing fence is prose again, not code.
     #[test]
     fn a_callout_leaves_the_fence_when_it_closes() {
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         let lines =
             render_callout_lines("[!NOTE] Hi\n```\ncode\n```\nafter `x` here", &theme).unwrap();
         assert_eq!(lines.len(), 5, "header, two fences, code, trailing prose");
@@ -3392,7 +3397,7 @@ mod tests {
             CodeBlockBackground::Off,
             ColorMode::Rgb,
         );
-        let theme = Theme::ocean_dark();
+        let theme = Theme::from_name(crate::tui::theme::ThemeName::OceanDark);
         let rows = std::collections::HashMap::new();
 
         let cases = [
@@ -3483,7 +3488,7 @@ mod tests {
         render_markdown_enhanced(
             md,
             &hl,
-            &Theme::ocean_dark(),
+            &Theme::from_name(crate::tui::theme::ThemeName::OceanDark),
             selected,
             None,
             Some(80),

@@ -84,7 +84,7 @@ pub(crate) fn svg(buffer: &Buffer) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" font-family="Menlo, monospace" font-size="14">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" font-family="Menlo, monospace" font-size="14" shape-rendering="crispEdges">"#
     );
     let _ = writeln!(
         out,

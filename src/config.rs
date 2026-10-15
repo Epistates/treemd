@@ -349,7 +349,7 @@ fn default_theme() -> String {
 }
 
 fn default_code_theme() -> String {
-    "base16-ocean.dark".to_string()
+    "auto".to_string()
 }
 
 fn default_outline_width() -> u16 {
@@ -516,35 +516,25 @@ impl Config {
         Ok(())
     }
 
-    /// Parse theme name from string
+    /// The configured theme, `OceanDark` when the name is not one.
     pub fn theme_name(&self) -> ThemeName {
-        match self.ui.theme.as_str() {
-            "OceanDark" => ThemeName::OceanDark,
-            "Nord" => ThemeName::Nord,
-            "Dracula" => ThemeName::Dracula,
-            "Solarized" => ThemeName::Solarized,
-            "Monokai" => ThemeName::Monokai,
-            "Gruvbox" => ThemeName::Gruvbox,
-            "TokyoNight" => ThemeName::TokyoNight,
-            "CatppuccinMocha" => ThemeName::CatppuccinMocha,
-            _ => ThemeName::OceanDark, // Default fallback
+        self.ui.theme.parse().unwrap_or(ThemeName::OceanDark)
+    }
+
+    /// The code theme for `theme`: the configured one, or with `auto` (the
+    /// default) the one that goes with the UI theme, so a light theme gets
+    /// light code blocks.
+    pub fn code_theme_for(&self, theme: ThemeName) -> &str {
+        if self.ui.code_theme.eq_ignore_ascii_case("auto") {
+            theme.code_theme()
+        } else {
+            &self.ui.code_theme
         }
     }
 
     /// Update theme and save config
     pub fn set_theme(&mut self, theme: ThemeName) -> Result<(), Box<dyn std::error::Error>> {
-        self.ui.theme = match theme {
-            ThemeName::OceanDark => "OceanDark",
-            ThemeName::Nord => "Nord",
-            ThemeName::Dracula => "Dracula",
-            ThemeName::Solarized => "Solarized",
-            ThemeName::Monokai => "Monokai",
-            ThemeName::Gruvbox => "Gruvbox",
-            ThemeName::TokyoNight => "TokyoNight",
-            ThemeName::CatppuccinMocha => "CatppuccinMocha",
-        }
-        .to_string();
-
+        self.ui.theme = theme.config_name().to_string();
         self.save()
     }
 
@@ -674,7 +664,7 @@ mod tests {
     fn config_default_is_sane() {
         let c = Config::default();
         assert_eq!(c.ui.theme, "OceanDark");
-        assert_eq!(c.ui.code_theme, "base16-ocean.dark");
+        assert_eq!(c.ui.code_theme, "auto");
         assert_eq!(c.ui.outline_width, 30);
         assert_eq!(c.ui.tree_style, "compact");
         assert!(c.ui.outline_heading_markers);

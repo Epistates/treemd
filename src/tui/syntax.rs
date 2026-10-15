@@ -42,6 +42,11 @@ pub struct SyntaxHighlighter {
     /// Config override if one was given, otherwise the code theme's own
     /// background so it agrees with the token colors.
     code_block_bg: Option<Color>,
+    /// What the config asked for behind code blocks, kept so a new code
+    /// theme can work its background out again.
+    background: CodeBlockBackground,
+    /// The directory of the user's own `.tmTheme` files.
+    theme_dir: Option<PathBuf>,
     /// What the terminal can display. Syntect always reports 24-bit color, so
     /// every color leaving this type is mapped through it.
     color_mode: ColorMode,
@@ -54,12 +59,49 @@ pub struct SyntaxHighlighter {
 ///
 /// Syntect themes are always 24-bit, so on a 256-color terminal every token
 /// color and the block background have to be quantized the same way
-/// `Theme::with_color_mode_custom` quantizes the rest of the UI.
+/// `Theme::for_terminal` quantizes the rest of the UI.
 fn adapt(color: Color, mode: ColorMode) -> Color {
     match mode {
         ColorMode::Rgb => color,
         ColorMode::Indexed256 => rgb_to_256(color),
     }
+}
+
+/// The code theme called `name`, from the built-in set or `theme_dir`,
+/// falling back to the default with a warning.
+fn load_theme(name: &str, theme_dir: Option<&PathBuf>) -> Theme {
+    let mut theme_set = ThemeSet::load_defaults();
+    if let Some(dir) = theme_dir
+        && let Ok(paths) = ThemeSet::discover_theme_paths(dir)
+    {
+        for path in paths {
+            match ThemeSet::get_theme(&path) {
+                Ok(theme) => {
+                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                        theme_set.themes.insert(name.to_owned(), theme);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("warning: skipping theme {}: {}", path.display(), e);
+                }
+            }
+        }
+    }
+
+    theme_set
+        .themes
+        .get(name)
+        .or_else(|| {
+            if name != DEFAULT_CODE_THEME {
+                eprintln!(
+                    "warning: code theme '{}' not found, using '{}'",
+                    name, DEFAULT_CODE_THEME
+                );
+            }
+            theme_set.themes.get(DEFAULT_CODE_THEME)
+        })
+        .cloned()
+        .expect("syntect default themes must contain base16-ocean.dark")
 }
 
 impl SyntaxHighlighter {
@@ -69,56 +111,34 @@ impl SyntaxHighlighter {
         background: CodeBlockBackground,
         color_mode: ColorMode,
     ) -> Self {
-        let syntax_set = SyntaxSet::load_defaults_newlines();
-        let mut theme_set = ThemeSet::load_defaults();
-        if let Some(dir) = theme_dir
-            && let Ok(paths) = ThemeSet::discover_theme_paths(dir)
-        {
-            for path in paths {
-                match ThemeSet::get_theme(&path) {
-                    Ok(theme) => {
-                        if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                            theme_set.themes.insert(name.to_owned(), theme);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("warning: skipping theme {}: {}", path.display(), e);
-                    }
-                }
-            }
-        }
-
-        let theme = theme_set
-            .themes
-            .get(theme)
-            .or_else(|| {
-                if theme != DEFAULT_CODE_THEME {
-                    eprintln!(
-                        "warning: code theme '{}' not found, using '{}'",
-                        theme, DEFAULT_CODE_THEME
-                    );
-                }
-                theme_set.themes.get(DEFAULT_CODE_THEME)
-            })
-            .cloned()
-            .expect("syntect default themes must contain base16-ocean.dark");
-
-        let code_block_bg = match background {
-            CodeBlockBackground::Off => None,
-            CodeBlockBackground::Color(c) => Some(c),
-            CodeBlockBackground::FromTheme => {
-                theme.settings.background.map(|c| Color::Rgb(c.r, c.g, c.b))
-            }
-        }
-        .map(|c| adapt(c, color_mode));
-
-        Self {
-            syntax_set,
-            theme,
-            code_block_bg,
+        let mut highlighter = Self {
+            syntax_set: SyntaxSet::load_defaults_newlines(),
+            theme: Theme::default(),
+            code_block_bg: None,
+            background,
+            theme_dir,
             color_mode,
             cache: RefCell::new(HashMap::new()),
+        };
+        highlighter.set_theme(theme);
+        highlighter
+    }
+
+    /// Highlight with the code theme called `name` from now on. The syntax
+    /// definitions, the slow part to load, are kept.
+    pub fn set_theme(&mut self, name: &str) {
+        self.theme = load_theme(name, self.theme_dir.as_ref());
+        self.code_block_bg = match self.background {
+            CodeBlockBackground::Off => None,
+            CodeBlockBackground::Color(c) => Some(c),
+            CodeBlockBackground::FromTheme => self
+                .theme
+                .settings
+                .background
+                .map(|c| Color::Rgb(c.r, c.g, c.b)),
         }
+        .map(|c| adapt(c, self.color_mode));
+        self.cache.borrow_mut().clear();
     }
 
     /// Background to paint behind a code block, if any.

@@ -252,6 +252,17 @@ fn main() -> Result<()> {
 
         // Apply theme override from CLI if provided
         if let Some(ref theme_name) = args.theme {
+            // A misspelled name used to fall back to Ocean Dark in silence.
+            if theme_name.parse::<treemd::tui::theme::ThemeName>().is_err() {
+                let names: Vec<&str> = treemd::tui::theme::ThemeName::all()
+                    .map(|name| name.config_name())
+                    .collect();
+                eprintln!(
+                    "error: unknown theme '{theme_name}'; themes are {}",
+                    names.join(", ")
+                );
+                process::exit(2);
+            }
             config.ui.theme = theme_name.clone();
         }
 

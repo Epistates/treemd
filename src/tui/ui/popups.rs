@@ -7,11 +7,11 @@ use crate::tui::app::App;
 use crate::tui::help_text;
 use crate::tui::theme::Theme;
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
 use super::util::popup_area;
@@ -48,7 +48,7 @@ pub fn render_help_popup(frame: &mut Frame, app: &mut App, area: Rect) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.modal_border()))
             .title(" Help ")
-            .style(Style::default().bg(theme.modal_bg())),
+            .style(theme.modal_style()),
     );
 
     frame.render_widget(paragraph, popup_area);
@@ -248,7 +248,7 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.modal_border()))
             .title(" Link Navigator ")
-            .style(Style::default().bg(theme.modal_bg())),
+            .style(theme.modal_style()),
     );
 
     frame.render_widget(paragraph, popup_area);
@@ -276,111 +276,118 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Render the theme picker popup
+///
+/// Every theme, each with a strip of its own heading and accent colors, the
+/// saved one ticked. Moving the selection previews the theme on the whole
+/// screen; Enter keeps it and Esc goes back.
 pub fn render_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
     use crate::tui::theme::ThemeName;
+    use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState};
 
     let theme = &app.theme;
+    let saved_theme = app.theme_picker_original.unwrap_or(app.current_theme);
+    let names: Vec<ThemeName> = ThemeName::all().collect();
+    let name_width = names
+        .iter()
+        .map(|name| name.display_name().len())
+        .max()
+        .unwrap_or(0);
 
-    // All available themes
-    let themes = [
-        (
-            ThemeName::OceanDark,
-            "Ocean Dark",
-            "Base16 Ocean with cool blues",
-        ),
-        (ThemeName::Nord, "Nord", "Arctic, north-bluish palette"),
-        (
-            ThemeName::Dracula,
-            "Dracula",
-            "Dark theme with vibrant colors",
-        ),
-        (
-            ThemeName::Solarized,
-            "Solarized",
-            "Precision colors for machines and people",
-        ),
-        (
-            ThemeName::Monokai,
-            "Monokai",
-            "Sublime Text's iconic scheme",
-        ),
-        (ThemeName::Gruvbox, "Gruvbox", "Retro groove color scheme"),
-        (
-            ThemeName::TokyoNight,
-            "Tokyo Night",
-            "Modern night theme for low-light",
-        ),
-        (
-            ThemeName::CatppuccinMocha,
-            "Catppuccin Mocha",
-            "Soothing pastel theme for night coding",
-        ),
-    ];
+    let items: Vec<ListItem> = names
+        .iter()
+        .map(|&name| {
+            let sample = Theme::for_terminal(name, app.color_mode);
+            let mut spans = vec![Span::raw(format!("{:<name_width$}  ", name.display_name()))];
+            for color in [
+                sample.heading_1,
+                sample.heading_2,
+                sample.heading_3,
+                sample.heading_4,
+                sample.border_focused,
+            ] {
+                spans.push(Span::styled("●", Style::default().fg(color)));
+            }
+            if name == saved_theme {
+                spans.push(Span::styled(
+                    "  ✓",
+                    Style::default().fg(theme.modal_key_fg()),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
 
-    // Create centered popup area
-    // Min 35 cols for theme names, min 12 rows for all themes + header
-    let popup_area = popup_area(area, 60, 50, 35, 12);
-
-    // Clear background
+    let selected = names
+        .get(app.theme_picker_selected)
+        .copied()
+        .unwrap_or(app.current_theme);
+    let height = (names.len() as u16 + 5).min(area.height);
+    let width = (name_width as u16 + 22).max(44).min(area.width);
+    let popup_area = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
     frame.render_widget(Clear, popup_area);
 
-    // Create lines for each theme
-    let mut lines = vec![
-        Line::from(vec![Span::styled(
-            "Select Theme (j/k: preview, Enter: save, Esc: cancel)",
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.modal_border()))
+        .title(Span::styled(
+            " Theme ",
+            Style::default()
+                .fg(theme.modal_title())
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(
+            Line::from(vec![
+                Span::styled(" j/k", Style::default().fg(theme.modal_key_fg())),
+                Span::styled(" preview  ", Style::default().fg(theme.modal_description())),
+                Span::styled("Enter", Style::default().fg(theme.modal_key_fg())),
+                Span::styled(" save  ", Style::default().fg(theme.modal_description())),
+                Span::styled("Esc", Style::default().fg(theme.modal_key_fg())),
+                Span::styled(" cancel ", Style::default().fg(theme.modal_description())),
+            ])
+            .centered(),
+        )
+        .style(theme.modal_style());
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // The list, then a blank row and the selected theme's description.
+    let [list_area, _, about_area] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    let list = List::new(items)
+        .highlight_symbol("▶ ")
+        .highlight_spacing(HighlightSpacing::Always)
+        .highlight_style(
+            Style::default()
+                .fg(theme.modal_selected_fg())
+                .add_modifier(Modifier::BOLD),
+        )
+        .scroll_padding(1);
+    let mut state = ListState::default().with_selected(Some(app.theme_picker_selected));
+    frame.render_stateful_widget(list, list_area, &mut state);
+
+    let about = if selected.is_light() {
+        format!("  {} · light", selected.description())
+    } else {
+        format!("  {}", selected.description())
+    };
+    frame.render_widget(
+        Paragraph::new(about).style(
             Style::default()
                 .fg(theme.modal_description())
                 .add_modifier(Modifier::ITALIC),
-        )]),
-        Line::from(""),
-    ];
-
-    for (idx, (theme_name, name, description)) in themes.iter().enumerate() {
-        let is_selected = idx == app.theme_picker_selected;
-        // Show ✓ next to the saved theme (original), not the preview
-        let saved_theme = app.theme_picker_original.unwrap_or(app.current_theme);
-        let is_saved = *theme_name == saved_theme;
-
-        let (prefix, style) = if is_selected {
-            (
-                "▶ ",
-                Style::default()
-                    .fg(theme.modal_selected_fg())
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else {
-            ("  ", Style::default().fg(theme.modal_text()))
-        };
-
-        let current_marker = if is_saved { " ✓" } else { "" };
-        let line_text = format!("{}{}{}", prefix, name, current_marker);
-
-        lines.push(Line::from(vec![Span::styled(line_text, style)]));
-
-        // Add description on next line if selected
-        if is_selected {
-            lines.push(Line::from(vec![Span::styled(
-                format!("  {}", description),
-                Style::default()
-                    .fg(theme.modal_description())
-                    .add_modifier(Modifier::ITALIC),
-            )]));
-        }
-    }
-
-    lines.push(Line::from(""));
-
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.modal_border()))
-                .title(" Theme Selector ")
-                .style(Style::default().bg(theme.modal_bg())),
-        )
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(paragraph, popup_area);
+        ),
+        about_area,
+    );
 }
 
 /// Render the cell edit overlay for table editing
@@ -436,7 +443,7 @@ pub fn render_cell_edit_overlay(frame: &mut Frame, app: &App, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.modal_border()))
-            .style(Style::default().bg(theme.modal_bg())),
+            .style(theme.modal_style()),
     );
 
     frame.render_widget(paragraph, edit_area);
@@ -496,7 +503,7 @@ pub fn render_file_create_confirm(frame: &mut Frame, message: &str, theme: &Them
                 .title(" Confirm ")
                 .title_style(Style::default().fg(theme.modal_title()))
                 .border_style(Style::default().fg(theme.modal_border()))
-                .style(Style::default().bg(theme.modal_bg())),
+                .style(theme.modal_style()),
         );
 
     frame.render_widget(paragraph, area);
@@ -541,7 +548,7 @@ pub fn render_save_width_confirm(frame: &mut Frame, width: u16, theme: &Theme) {
                 .title(" Confirm ")
                 .title_style(Style::default().fg(theme.modal_title()))
                 .border_style(Style::default().fg(theme.modal_border()))
-                .style(Style::default().bg(theme.modal_bg())),
+                .style(theme.modal_style()),
         );
 
     frame.render_widget(paragraph, area);
@@ -606,7 +613,7 @@ pub fn render_save_before_quit_confirm(frame: &mut Frame, edit_count: usize, the
                 .title(" Confirm Quit ")
                 .title_style(Style::default().fg(theme.modal_title()))
                 .border_style(Style::default().fg(theme.modal_border()))
-                .style(Style::default().bg(theme.modal_bg())),
+                .style(theme.modal_style()),
         );
 
     frame.render_widget(paragraph, area);
@@ -678,7 +685,7 @@ pub fn render_save_before_nav_confirm(frame: &mut Frame, edit_count: usize, them
                 .title(" Confirm Navigation ")
                 .title_style(Style::default().fg(theme.modal_title()))
                 .border_style(Style::default().fg(theme.modal_border()))
-                .style(Style::default().bg(theme.modal_bg())),
+                .style(theme.modal_style()),
         );
 
     frame.render_widget(paragraph, area);
@@ -700,7 +707,7 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.modal_border()))
-        .style(Style::default().bg(theme.modal_bg()));
+        .style(theme.modal_style());
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1105,7 +1112,7 @@ pub fn render_file_picker(frame: &mut Frame, app: &App, area: Rect) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.modal_border()))
             .title(" File Picker ")
-            .style(Style::default().bg(theme.modal_bg())),
+            .style(theme.modal_style()),
     );
 
     frame.render_widget(paragraph.scroll((scroll_offset, 0)), popup_area);

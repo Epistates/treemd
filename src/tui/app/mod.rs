@@ -297,7 +297,7 @@ pub struct App {
 
     // Configuration persistence
     config: Config,
-    color_mode: ColorMode,
+    pub(crate) color_mode: ColorMode,
 
     // Pending file to open in external editor (set by link following, consumed by main loop)
     pub pending_editor_file: Option<PathBuf>,
@@ -437,14 +437,13 @@ impl App {
 
         // Load theme from config, apply color mode, then apply custom colors
         let current_theme = config.theme_name();
-        let theme = Theme::from_name(current_theme)
-            .with_color_mode(color_mode, current_theme)
+        let theme = Theme::for_terminal(current_theme, color_mode)
             .with_custom_colors(&config.theme, color_mode);
 
         // Load sublime color scheme directory
         let code_theme_dir = config.code_theme_dir_path();
         // Load sublime color scheme name (for code highlighting)
-        let code_theme = config.ui.code_theme.as_str();
+        let code_theme = config.code_theme_for(current_theme).to_string();
         // Code block background: unset falls back to the code theme's own, and
         // the literal "none" turns it off for anyone who prefers code to sit on
         // the terminal background. Quantizing for 256-color terminals is left
@@ -507,7 +506,7 @@ impl App {
             outline_search: OutlineSearch::Off,
             search_query: String::new(),
             highlighter: SyntaxHighlighter::new(
-                code_theme,
+                &code_theme,
                 code_theme_dir,
                 code_block_bg,
                 color_mode,
@@ -1149,59 +1148,48 @@ impl App {
         } else {
             // Opening picker - store current theme and set selection
             self.theme_picker_original = Some(self.current_theme);
-            self.theme_picker_selected = match self.current_theme {
-                ThemeName::OceanDark => 0,
-                ThemeName::Nord => 1,
-                ThemeName::Dracula => 2,
-                ThemeName::Solarized => 3,
-                ThemeName::Monokai => 4,
-                ThemeName::Gruvbox => 5,
-                ThemeName::TokyoNight => 6,
-                ThemeName::CatppuccinMocha => 7,
-            };
+            self.theme_picker_selected = ThemeName::all()
+                .position(|theme| theme == self.current_theme)
+                .unwrap_or(0);
             self.overlay = Some(Overlay::ThemePicker);
         }
     }
 
-    /// Convert theme picker selection index to ThemeName
-    fn theme_name_from_index(idx: usize) -> ThemeName {
-        match idx {
-            0 => ThemeName::OceanDark,
-            1 => ThemeName::Nord,
-            2 => ThemeName::Dracula,
-            3 => ThemeName::Solarized,
-            4 => ThemeName::Monokai,
-            5 => ThemeName::Gruvbox,
-            6 => ThemeName::TokyoNight,
-            7 => ThemeName::CatppuccinMocha,
-            _ => ThemeName::OceanDark,
+    /// Apply a theme preview (doesn't save to config). With the code theme
+    /// on `auto`, code blocks follow the theme too.
+    fn apply_theme_preview(&mut self, theme_name: ThemeName) {
+        let code_theme_changes = self.config.code_theme_for(theme_name)
+            != self.config.code_theme_for(self.current_theme);
+        self.current_theme = theme_name;
+        self.theme = Theme::for_terminal(theme_name, self.color_mode)
+            .with_custom_colors(&self.config.theme, self.color_mode);
+        if code_theme_changes {
+            let code_theme = self.config.code_theme_for(theme_name).to_string();
+            self.highlighter.set_theme(&code_theme);
         }
     }
 
-    /// Apply a theme preview (doesn't save to config)
-    fn apply_theme_preview(&mut self, theme_name: ThemeName) {
-        self.current_theme = theme_name;
-        self.theme = Theme::from_name(theme_name)
-            .with_color_mode(self.color_mode, theme_name)
-            .with_custom_colors(&self.config.theme, self.color_mode);
+    /// Move the theme picker by `step`, previewing the theme it lands on.
+    fn step_theme_picker(&mut self, step: isize) {
+        let count = ThemeName::all().count();
+        let next = self
+            .theme_picker_selected
+            .saturating_add_signed(step)
+            .min(count - 1);
+        if next != self.theme_picker_selected {
+            self.theme_picker_selected = next;
+            if let Some(theme) = ThemeName::all().nth(next) {
+                self.apply_theme_preview(theme);
+            }
+        }
     }
 
     pub fn theme_picker_next(&mut self) {
-        if self.theme_picker_selected < 7 {
-            self.theme_picker_selected += 1;
-            // Apply theme preview immediately
-            let theme_name = Self::theme_name_from_index(self.theme_picker_selected);
-            self.apply_theme_preview(theme_name);
-        }
+        self.step_theme_picker(1);
     }
 
     pub fn theme_picker_previous(&mut self) {
-        if self.theme_picker_selected > 0 {
-            self.theme_picker_selected -= 1;
-            // Apply theme preview immediately
-            let theme_name = Self::theme_name_from_index(self.theme_picker_selected);
-            self.apply_theme_preview(theme_name);
-        }
+        self.step_theme_picker(-1);
     }
 
     pub fn apply_selected_theme(&mut self) {
