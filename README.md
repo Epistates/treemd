@@ -153,7 +153,7 @@ treemd docs/            # Open file picker in specified directory
 | `g` / `G` or `Home` / `End` | Jump to top/bottom |
 | `p` | Jump to parent heading |
 | `Ctrl+e` / `Ctrl+y` | Scroll the content a line, keeping the selection |
-| `d` / `u` or `PageDown` / `PageUp` | Page down/up |
+| `d` / `u`, `Ctrl+d` / `Ctrl+u`, `Ctrl+f` / `Ctrl+b` or `PageDown` / `PageUp` | Page down/up |
 | `Tab` / `Shift+Tab` | Switch focus between outline and content |
 | `5j` etc. | Repeat motion with a vim count prefix (digits `1`-`9` start a count, shown in the status bar) |
 
@@ -169,7 +169,7 @@ treemd docs/            # Open file picker in specified directory
 | `w` | Toggle outline visibility |
 | `[` / `]` | Adjust outline width (20%, 30%, 40%) |
 | `#` | Toggle heading level markers in outline |
-| `T` | Filter outline by open todos |
+| `T` | Filter outline by open todos (`Esc` clears it) |
 
 </details>
 
@@ -263,7 +263,7 @@ After following a link, `b` / `Backspace` and `F` go back and forward from the m
 | `m` | Set bookmark |
 | `'` | Jump to bookmark |
 | `?` | Toggle help overlay |
-| `q` / `Ctrl+c` | Quit (`Esc` backs out of searches/modes; in a search or prompt, `Ctrl+c` cancels it) |
+| `q` / `Ctrl+c` | Quit. In help, the theme picker and the file picker they close it instead; `Esc` backs out of searches and modes, and in a search or prompt `Ctrl+c` cancels it |
 | `Ctrl+z` | Suspend to the shell (`fg` to return) |
 
 </details>

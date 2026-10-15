@@ -123,7 +123,7 @@ fn main() -> Result<()> {
     } else {
         let picker_placeholder = || {
             treemd::input::InputSource::Stdin(
-                "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
+                "# Select a file\n\nPress o to open a markdown file.".to_string(),
             )
         };
         let cli_mode = !launches_tui(&args);

@@ -357,6 +357,7 @@ impl App {
             GoBack => {
                 // Check if there's anything to go back to
                 if self.file_history.is_empty() {
+                    self.set_status_message("No previous file");
                     return ActionResult::Continue;
                 }
                 // Check for unsaved changes
@@ -370,6 +371,7 @@ impl App {
             GoForward => {
                 // Check if there's anything to go forward to
                 if self.file_future.is_empty() {
+                    self.set_status_message("No next file");
                     return ActionResult::Continue;
                 }
                 // Check for unsaved changes
@@ -571,6 +573,8 @@ impl App {
                     self.file_picker.active = false;
                 }
             }
+            // Esc backs out of the todo filter, as it does a search.
+            AppMode::Normal if self.filter_by_todos => self.toggle_todo_filter(),
             AppMode::Normal
             | AppMode::ConfirmFileCreate
             | AppMode::ConfirmSaveWidth

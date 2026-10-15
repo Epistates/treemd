@@ -140,18 +140,19 @@ impl TerminalCapabilities {
             return None;
         }
 
+        // Stdin is read a line at a time here, before raw mode, so it is
+        // Enter that continues. Every Darwin before 26 was called Sequoia.
         Some(format!(
-            "⚠️  Terminal Compatibility Notice\n\n\
-             Apple Terminal.app on macOS {} has limited RGB color support.\n\
-             Switching to 256-color mode for better compatibility.\n\n\
-             For the best experience, consider using:\n\
-             • iTerm2 (https://iterm2.com/)\n\
-             • Kitty (https://sw.kovidgoyal.net/kitty/)\n\
-             • Alacritty (https://alacritty.org/)\n\n\
-             Press any key to continue...",
+            "Terminal compatibility\n\n\
+             Apple Terminal{} shows only 256 colors, so treemd uses its\n\
+             256-color themes there.\n\n\
+             For full color, try iTerm2 (https://iterm2.com/),\n\
+             Kitty (https://sw.kovidgoyal.net/kitty/) or\n\
+             Ghostty (https://ghostty.org/).\n\n\
+             Press Enter to continue...",
             self.macos_version
-                .map(|v| format!("Sequoia (Darwin {})", v))
-                .unwrap_or_else(|| "< 26".to_string())
+                .map(|v| format!(" (Darwin {v})"))
+                .unwrap_or_default()
         ))
     }
 }

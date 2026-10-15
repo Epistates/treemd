@@ -620,13 +620,19 @@ impl App {
         // Set status message
         if self.filter_by_todos {
             let count = self.outline_items.len();
+            if count == 0 {
+                // Filtering to nothing left an empty outline at `1/0`.
+                self.toggle_todo_filter();
+                self.set_status_message("No headings have open todos");
+                return;
+            }
             self.set_status_message(&format!(
-                "Todo filter ON: {} heading{} with open todos",
+                "Showing {} heading{} with open todos",
                 count,
                 if count == 1 { "" } else { "s" }
             ));
         } else {
-            self.set_status_message("Todo filter OFF: showing all headings");
+            self.set_status_message("Showing all headings");
         }
     }
 
@@ -718,6 +724,7 @@ impl App {
 
     pub fn jump_to_bookmark(&mut self) {
         let Some(key) = self.bookmark_position.clone() else {
+            self.set_status_message("No bookmark yet: m sets one");
             return;
         };
         match heading_keys(&self.document).iter().position(|k| *k == key) {
