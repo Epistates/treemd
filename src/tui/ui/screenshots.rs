@@ -143,12 +143,13 @@ fn shot(app: &mut App, width: u16, height: u16) -> String {
 
 const SAMPLE: &str = "# treemd\n\nA markdown navigator with **tree-based** structural navigation.\n\n\
 ## Features\n\n- Two panes: an *outline* and the content\n- [x] Queries with `tql`\n- [ ] Images in the terminal\n\n\
-> Read documents the way you think about them: by structure.\n\n\
+> [!TIP]\n> Press `t` to try every theme on the open document.\n\n\
 ```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n\n\
 | Key | Action |\n|-----|--------|\n| `j` | Next |\n| `k` | Previous |\n\n\
 See the [README](https://github.com/epistates/treemd) and [Install](#install).\n\n\
 ### Navigation\n\nMove with `j` and `k`.\n\n### Search\n\nPress `/`.\n\n\
-## Install\n\n```sh\ncargo install treemd\n```\n\n## License\n\nMIT\n";
+## Install\n\n### Cargo\n\n```sh\ncargo install treemd\n```\n\n### Homebrew\n\n```sh\nbrew install treemd\n```\n\n\
+## Configuration\n\n### Themes\n\nSeventeen of them.\n\n### Keybindings\n\nRemap any key.\n\n## License\n\nMIT\n";
 
 fn app(theme: ThemeName) -> App {
     app_in(theme, ColorMode::Rgb)

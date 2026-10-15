@@ -175,11 +175,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- **The README matches what treemd does.** Callouts were listed as planned though they ship; `/` searches the current section, not the whole document; `tree_style` defaults to `compact`, not `spaced`, and only affects `--tree`; on macOS `~/.config/treemd/config.toml` is used when it exists; and the keybinding modes list was missing `FilePicker` and `FileSearch`
+- **The README is rewritten.** It opens with a screenshot of the current UI and a gallery of themes, both rendered by the test suite, in place of a 4.3 MB recording of the old one. It lists every key the TUI binds, `Ctrl+l`, `Ctrl+z` undo, link search and the file picker's keys among those it missed, and every config setting with its default. Callouts were listed as planned though they ship, `/` searches the current section rather than the whole document, `tree_style` defaults to `compact` and only affects `--tree`, and on macOS `~/.config/treemd/config.toml` is used when it exists. The roadmap and the comparison table, both out of date, are gone
+- **`--help` keeps its lists as written.** clap joined the example lines and value lists into one run-on line. `--color-mode` lists `none`, `--query-output` names `json-pretty`, and `-o` describes its values once
 - **`--query-help` covers the whole language.** It listed `any` and `all` as taking no argument, called `.h2["Installation"]` an exact match when it ignores case, and left out `.para`, `.frontmatter`, `keys`, `values`, `has`, `type`, `empty`, the operators, `//`, conditionals and object construction
 - **The query guide describes the language that ships.** It claimed to be verified against 0.7.0, listed a REPL and shell completion for query syntax as done, documented `.content` as both including and excluding subsections (it includes them), and gave a grammar in which a comma bound tighter than a pipe and a `regex` production that does not exist. The grammar now matches the parser, and the guide covers streams and collection functions, selectors after a pipe, operators and the JSON array output
 - **`docs/QUERY_IMPLEMENTATION.md` is removed.** It was the design written before the query engine existed and described a different one, built on pulldown-cmark, logos and rustyline with a `--repl` flag. Nothing linked to it. The query guide and `src/query` are the reference
-- **The agent skill describes `-s`, `--filter` and `position.line` correctly.** It said `-s` needs an exact match (it ignores case), called `--filter` fuzzy (it is a case-insensitive substring), and said `-o json`'s `position.line` carries the same information as `-n` (it is the line the section body starts on, below the heading). Its `jq` examples read JSON query output as a bare object; they take the first element of the array now, and its tql reference matches `--query-help`
+- **The agent skill describes `-s`, `--filter` and `position.line` correctly.** It said `-s` needs an exact match (it ignores case), called `--filter` fuzzy (it is a case-insensitive substring), and said `-o json`'s `position.line` carries the same information as `-n` (it is the line the section body starts on, below the heading). Its `jq` examples read JSON query output as a bare object; they take the first element of the array now, and its tql reference matches `--query-help`. It also listed eight of the themes, promised a multi-file picker for `treemd *.md`, and said `-o` is ignored beside `-s` or `-q`, where it is a usage error
 - **The library docs show only the parser and the query language.** The `config`, `input`, `keybindings` and `tui` modules, and the `App` and `Config` re-exports, exist for the `treemd` binary but were documented as library API. They remain public, so nothing that uses them breaks, but are hidden from docs.rs and may change in any release
 
 ### Internal
@@ -187,6 +188,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`app.rs` is split by concern, and what has the keyboard is decided in one place.** The 7,800-line file is now `src/tui/app/`, with key dispatch, the outline, search, the palette, link navigation, the file picker, editing, interactive mode and images each in a module of their own. Help and the theme picker are one `overlay`, the outline search is one `OutlineSearch` state instead of two flags, and typing, pasting and Backspace all ask the keybinding mode which field they go to, rather than each checking the flags again
 - **Property tests over generated input.** `tests/properties.rs` parses generated documents built from the constructs that have broken before and runs generated queries against them, neither of which may panic. The content pane's wrapping is held to never exceeding the pane or losing text, and a table edit to changing one line and undoing exactly. That last one found the pipe-less header bug above. `PROPTEST_CASES` sets how long they search
 - **The integration tests clean up after themselves.** Each run left a temporary directory per test behind
+- **Screenshots of every screen in every theme.** `just screenshots` renders eight screens in each theme, in monochrome and in a 60-column terminal as SVGs, to review a UI change across all of them. `just readme-images` makes the README's images from them
 - **The Linux glibc binaries run on glibc 2.28 and newer.** They were built on the newest Ubuntu runner and needed its glibc, 2.39, so the 0.9.1 downloads failed with "GLIBC_2.39 not found" on Debian 12, Ubuntu 22.04 and RHEL 9. Both are now built with cargo-zigbuild against glibc 2.28, a release fails if either uses a newer glibc symbol, and the x86_64 one is run in Debian 10 before it ships
 - **A release cannot ship with a target missing.** Packaging checks that all seven binaries are there, and build artifacts are kept for a week rather than a day, so one target can be rebuilt later without the others expiring. Every job has a time limit, and the release packaging also runs on every pull request, twice, to show it works and gives the same bytes
 - **`just release-preflight` checks that the commit being tagged is `origin/main`**, so a tag cannot carry unpushed local commits, and `just release-tag` says when to publish to crates.io: after the release workflow passes
@@ -350,14 +352,14 @@ The rest are tracked at [turbovault#68](https://github.com/Epistates/turbovault/
 ### Added
 
 - **Toggle mouse capture for text selection** - New `M` shortcut and `:toggle mouse capture` palette command release the mouse so the terminal's native click-drag selection works for copying arbitrary text; toggle back to restore scroll-wheel navigation. The README also documents the `Shift`+drag bypass supported by most terminals
-- **Toggle heading markers in outline** - New `outline_heading_markers` config option, `#` keyboard shortcut, and `:toggle heading markers` palette command to show/hide `#`/`##`/`###` level prefixes in the outline sidebar (default: true) ([#57](https://github.com/Epistates/treemd/pull/57)) — thanks to [@alisaifee](https://github.com/alisaifee)
+- **Toggle heading markers in outline** - New `outline_heading_markers` config option, `#` keyboard shortcut, and `:toggle heading markers` palette command to show/hide `#`/`##`/`###` level prefixes in the outline sidebar (default: true) ([#57](https://github.com/Epistates/treemd/pull/57)), thanks to [@alisaifee](https://github.com/alisaifee)
 
 ### Fixed
 
 - **Table copy keys did nothing useful** - In interactive table mode `y`/`Y`/`r` had been silently rebound to generic copy/raw-source actions during the action-dispatch refactor, so cell, row, and copy-as-markdown copy were inoperative. Restored via dedicated `CopyTableCell`/`CopyTableRow`/`CopyTableMarkdown` actions wired to the existing handlers, with a regression test
 - **Inline backticks render as plain text** - Inline code in table cells/headers, headings, and blockquotes now renders as styled inline code via `format_inline_markdown()` instead of literal backticks ([#51](https://github.com/Epistates/treemd/issues/51), [#53](https://github.com/Epistates/treemd/pull/53)). Resolves the known issue carried in 0.5.11; requires `turbovault-parser` 1.5.0
-- **Navigation to duplicate headings** - Selecting an outline entry whose text appears multiple times always jumped to the first occurrence. `HeadingNode`/`OutlineItem` now carry a position index, and all content-extraction, selection-restore, and rendering paths resolve by index. `extract_section(text)` is preserved for the CLI `--section` flag, delegating to a new `extract_section_at_index()` ([#56](https://github.com/Epistates/treemd/pull/56)) — thanks to [@alisaifee](https://github.com/alisaifee)
-- **snake_case corruption in subscript rendering** - Terms like `i_am_a_snake` were mangled because `_x` was always treated as a LaTeX subscript. Subscript conversion now applies to `_{x}` unconditionally and to bare `_x` only when not mid-identifier ([#58](https://github.com/Epistates/treemd/pull/58)) — thanks to [@alisaifee](https://github.com/alisaifee)
+- **Navigation to duplicate headings** - Selecting an outline entry whose text appears multiple times always jumped to the first occurrence. `HeadingNode`/`OutlineItem` now carry a position index, and all content-extraction, selection-restore, and rendering paths resolve by index. `extract_section(text)` is preserved for the CLI `--section` flag, delegating to a new `extract_section_at_index()` ([#56](https://github.com/Epistates/treemd/pull/56)), thanks to [@alisaifee](https://github.com/alisaifee)
+- **snake_case corruption in subscript rendering** - Terms like `i_am_a_snake` were mangled because `_x` was always treated as a LaTeX subscript. Subscript conversion now applies to `_{x}` unconditionally and to bare `_x` only when not mid-identifier ([#58](https://github.com/Epistates/treemd/pull/58)), thanks to [@alisaifee](https://github.com/alisaifee)
 - **Mermaid image sizing and scrolling** - Mermaid diagrams now expand to fit terminal width and scroll correctly ([#53](https://github.com/Epistates/treemd/pull/53))
 
 ### Changed
@@ -393,7 +395,7 @@ The rest are tracked at [turbovault#68](https://github.com/Epistates/turbovault/
 
 ### Added
 
-- **Toggle hidden files and directories in file picker** - Press `h` in the file picker to toggle visibility of dot-prefixed files and directories (e.g. `.obsidian/`, `.notes.md`); rebindable via the keybindings config ([#52](https://github.com/Epistates/treemd/pull/52)) — thanks to [@ktaka-ccmp](https://github.com/ktaka-ccmp) for the original directory-toggle implementation, extended in follow-up to cover hidden files as well
+- **Toggle hidden files and directories in file picker** - Press `h` in the file picker to toggle visibility of dot-prefixed files and directories (e.g. `.obsidian/`, `.notes.md`); rebindable via the keybindings config ([#52](https://github.com/Epistates/treemd/pull/52)), thanks to [@ktaka-ccmp](https://github.com/ktaka-ccmp) for the original directory-toggle implementation, extended in follow-up to cover hidden files as well
 
 ### Fixed
 
@@ -477,9 +479,9 @@ The rest are tracked at [turbovault#68](https://github.com/Epistates/turbovault/
 
 - **Gapless cursor** - Command palette cursor uses reverse-video space instead of `█` for gap-free rendering ([#43](https://github.com/Epistates/treemd/issues/43))
 
-- **Image position misalignment** — Block images and paragraphs with inline images now reserve the correct number of placeholder lines in the interactive element indexer, matching the renderer (17 for block images, 14 for inline image paragraphs)
+- **Image position misalignment** - Block images and paragraphs with inline images now reserve the correct number of placeholder lines in the interactive element indexer, matching the renderer (17 for block images, 14 for inline image paragraphs)
 
-- **Images not loading with non-standard extensions** — Added `with_guessed_format()` to all image loading paths so content-type detection no longer relies solely on file extension
+- **Images not loading with non-standard extensions** - Added `with_guessed_format()` to all image loading paths so content-type detection no longer relies solely on file extension
 
 - **LaTeX subscript mangling code spans** - Inline code containing underscores (e.g., `` `post_tweet` ``) was corrupted by the LaTeX subscript converter, turning `_t` → `ₜ`, `_r` → `ᵣ`, etc.
   - Code spans (`` ` ``), double-backtick spans, and fenced code blocks are now protected from all LaTeX transformations
@@ -499,7 +501,7 @@ The rest are tracked at [turbovault#68](https://github.com/Epistates/turbovault/
 - **Performance: Directory scanning** - Single-pass classification using `entry.file_type()` instead of separate `is_file()`/`is_dir()` stat syscalls
 - **Refactoring** - Extracted `max_content_scroll()`, `effective_picker_dir()`, `navigate_picker_to_dir()`, `is_markdown_extension()`, and `filter_by_name()` helpers to eliminate code duplication
 - **Bug fix** - `scan_markdown_files()` now recognizes `.mdown` extension (was missing from file picker scan)
-- **Performance: Image protocol caching** — Images are now decoded from disk once when elements are indexed, then cached as `StatefulProtocol` objects. Previously, every ~16ms render frame re-decoded and re-created protocols from disk.
+- **Performance: Image protocol caching** - Images are now decoded from disk once when elements are indexed, then cached as `StatefulProtocol` objects. Previously, every ~16ms render frame re-decoded and re-created protocols from disk.
 
 ## [0.5.7] - 2026-02-26
 
