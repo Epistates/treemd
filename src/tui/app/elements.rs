@@ -217,10 +217,9 @@ impl App {
         if self.interactive_state.elements.is_empty() {
             self.status_message = Some("⚠ No interactive elements in this section".to_string());
         } else {
-            self.status_message = Some(format!(
-                "✓ Interactive mode: {} elements found (Tab to cycle)",
-                self.interactive_state.elements.len()
-            ));
+            // The chip, the element in the status bar and the footer say
+            // the rest.
+            self.status_message = None;
         }
     }
 
@@ -283,11 +282,10 @@ impl App {
                 }
                 Ok(())
             }
-            ElementType::Table { rows, cols, .. } => {
+            ElementType::Table { .. } => {
                 // Enter table navigation mode
                 self.interactive_state.enter_table_mode()?;
-                self.status_message =
-                    Some(self.interactive_state.table_status_text(rows + 1, *cols));
+                self.status_message = None;
                 Ok(())
             }
         }

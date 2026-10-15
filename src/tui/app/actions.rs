@@ -255,38 +255,35 @@ impl App {
                 let count = self.take_count();
                 if self.interactive_state.is_in_table_mode() {
                     // In table mode, move down within table
-                    let (rows, cols) = self.get_table_dimensions();
+                    let (rows, _) = self.get_table_dimensions();
                     for _ in 0..count {
                         self.interactive_state.table_move_down(rows);
                     }
-                    self.status_message =
-                        Some(self.interactive_state.table_status_text(rows + 1, cols));
+                    self.status_message = None;
                 } else {
                     // Normal interactive mode, move to next element
                     for _ in 0..count {
                         self.interactive_state.next();
                     }
                     self.scroll_to_interactive_element(self.content_viewport_height);
-                    self.status_message = Some(self.interactive_state.status_text());
+                    self.status_message = None;
                 }
             }
             InteractivePrevious => {
                 let count = self.take_count();
                 if self.interactive_state.is_in_table_mode() {
                     // In table mode, move up within table
-                    let (rows, cols) = self.get_table_dimensions();
                     for _ in 0..count {
                         self.interactive_state.table_move_up();
                     }
-                    self.status_message =
-                        Some(self.interactive_state.table_status_text(rows + 1, cols));
+                    self.status_message = None;
                 } else {
                     // Normal interactive mode, move to previous element
                     for _ in 0..count {
                         self.interactive_state.previous();
                     }
                     self.scroll_to_interactive_element(self.content_viewport_height);
-                    self.status_message = Some(self.interactive_state.status_text());
+                    self.status_message = None;
                 }
             }
             InteractiveActivate => {
@@ -307,7 +304,7 @@ impl App {
                     self.interactive_state.next();
                 }
                 self.scroll_to_interactive_element(self.content_viewport_height);
-                self.status_message = Some(self.interactive_state.status_text());
+                self.status_message = None;
             }
             InteractivePreviousLink => {
                 let count = self.take_count();
@@ -315,7 +312,7 @@ impl App {
                     self.interactive_state.previous();
                 }
                 self.scroll_to_interactive_element(self.content_viewport_height);
-                self.status_message = Some(self.interactive_state.status_text());
+                self.status_message = None;
             }
             InteractiveLeft => {
                 let count = self.take_count();
@@ -360,6 +357,7 @@ impl App {
             GoBack => {
                 // Check if there's anything to go back to
                 if self.file_history.is_empty() {
+                    self.set_status_message("No previous file");
                     return ActionResult::Continue;
                 }
                 // Check for unsaved changes
@@ -373,6 +371,7 @@ impl App {
             GoForward => {
                 // Check if there's anything to go forward to
                 if self.file_future.is_empty() {
+                    self.set_status_message("No next file");
                     return ActionResult::Continue;
                 }
                 // Check for unsaved changes
@@ -536,7 +535,7 @@ impl App {
                 // If in table mode, exit table mode first (stay in interactive)
                 if self.interactive_state.is_in_table_mode() {
                     self.interactive_state.exit_table_mode();
-                    self.status_message = Some(self.interactive_state.status_text());
+                    self.status_message = None;
                 } else {
                     self.exit_interactive_mode();
                 }
@@ -574,6 +573,8 @@ impl App {
                     self.file_picker.active = false;
                 }
             }
+            // Esc backs out of the todo filter, as it does a search.
+            AppMode::Normal if self.filter_by_todos => self.toggle_todo_filter(),
             AppMode::Normal
             | AppMode::ConfirmFileCreate
             | AppMode::ConfirmSaveWidth
@@ -754,10 +755,10 @@ impl App {
             return;
         }
 
-        let (rows, cols) = self.get_table_dimensions();
+        let (_, cols) = self.get_table_dimensions();
         if cols > 0 {
             self.interactive_state.table_move_left();
-            self.status_message = Some(self.interactive_state.table_status_text(rows + 1, cols));
+            self.status_message = None;
         }
     }
 
@@ -767,10 +768,10 @@ impl App {
             return;
         }
 
-        let (rows, cols) = self.get_table_dimensions();
+        let (_, cols) = self.get_table_dimensions();
         if cols > 0 {
             self.interactive_state.table_move_right(cols);
-            self.status_message = Some(self.interactive_state.table_status_text(rows + 1, cols));
+            self.status_message = None;
         }
     }
 

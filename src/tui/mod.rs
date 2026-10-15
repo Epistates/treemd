@@ -24,10 +24,11 @@ use crate::keybindings::{Action, KeybindingMode};
 use crate::tui::image_cache::IMAGE_WORK_POLL_INTERVAL;
 use color_eyre::Result;
 use crossterm::ExecutableCommand;
-use crossterm::event::{KeyCode, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use opensesame::{Editor, EditorConfig};
 use ratatui::DefaultTerminal;
+use ratatui::layout::Rect;
 use std::io::stdout;
 use std::path::Path;
 use std::time::Duration;
@@ -480,13 +481,60 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
 /// outline/content panes would require knowing the laid-out rects, which the
 /// renderer hasn't published yet.
 fn handle_mouse(app: &mut App, mouse: MouseEvent) {
-    // The wheel is the arrow keys of whatever is in front, so keybindings
-    // stay authoritative and a modal scrolls itself. Mapped to Normal mode's
-    // Next and Previous, it moved the content behind an open help screen,
-    // palette or picker.
+    use ratatui::layout::Position;
+
     if app.is_image_modal_open() {
         return;
     }
+
+    // With the panes in front, the mouse works on the pane under it: the
+    // wheel scrolls the content or moves through the outline wherever the
+    // focus is, and a click selects a heading or focuses a pane. The wheel
+    // used to go to the focused pane, so over the text it stepped from
+    // heading to heading, and clicks did nothing.
+    let panes_in_front = matches!(
+        app.current_keybinding_mode(),
+        KeybindingMode::Normal | KeybindingMode::Search | KeybindingMode::DocSearch
+    );
+    if panes_in_front {
+        let at = Position::new(mouse.column, mouse.row);
+        let over = |area: Option<Rect>| area.is_some_and(|area| area.contains(at));
+        let (outline, content) = (app.pane_areas.outline, app.pane_areas.content);
+        match mouse.kind {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if over(outline) => {
+                app.outline_step(mouse.kind == MouseEventKind::ScrollDown);
+                return;
+            }
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if over(content) => {
+                let action = if mouse.kind == MouseEventKind::ScrollDown {
+                    crate::keybindings::Action::ScrollDown
+                } else {
+                    crate::keybindings::Action::ScrollUp
+                };
+                // Three lines a notch, as most terminals scroll.
+                for _ in 0..3 {
+                    let _ = app.execute_action(action);
+                }
+                return;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(area) = outline.filter(|area| area.contains(at)) {
+                    // Inside the border.
+                    if mouse.row > area.y && mouse.row < area.bottom().saturating_sub(1) {
+                        app.click_outline_row(usize::from(mouse.row - area.y - 1));
+                    }
+                } else if over(content) {
+                    app.focus = app::Focus::Content;
+                }
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    // Anything else in front, help, a picker or the palette, takes the
+    // wheel as its arrow keys, so keybindings stay authoritative and a
+    // popup scrolls itself.
     // In search, Up and Down step through the matches, which is not what a
     // wheel is for; it scrolls the text there.
     if app.mode == app::AppMode::DocSearch {
@@ -584,5 +632,67 @@ mod tests {
             selected,
             "without help it moves"
         );
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// The wheel went to the focused pane wherever the pointer was, so over
+    /// the text it stepped through headings, and clicks did nothing. It now
+    /// works on the pane under the pointer, and a click selects or focuses.
+    #[test]
+    fn the_mouse_works_on_the_pane_under_it() {
+        let body: String = (0..80).map(|i| format!("line {i}\n\n")).collect();
+        let md = format!("# A\n\n{body}# B\n\n# C\n");
+        let mut app = App::new(
+            crate::parser::parse_markdown(&md),
+            "t.md".into(),
+            std::path::PathBuf::from("t.md"),
+            crate::Config::default(),
+            ColorMode::Rgb,
+            false,
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| ui::render(frame, &mut app)).unwrap();
+        let outline = app.pane_areas.outline.unwrap();
+        let content = app.pane_areas.content.unwrap();
+        let selected = app.outline_state.selected();
+
+        // The wheel over the text scrolls it, and leaves the outline alone.
+        handle_mouse(
+            &mut app,
+            mouse(MouseEventKind::ScrollDown, content.x + 5, content.y + 5),
+        );
+        assert_eq!(app.content_scroll, 3);
+        assert_eq!(app.outline_state.selected(), selected);
+
+        // A click on a heading selects it; another on it folds it.
+        handle_mouse(
+            &mut app,
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                outline.x + 3,
+                outline.y + 3,
+            ),
+        );
+        assert_eq!(app.selected_heading_text(), Some("C"));
+
+        // A click on the text focuses it.
+        handle_mouse(
+            &mut app,
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                content.x + 5,
+                content.y + 5,
+            ),
+        );
+        assert_eq!(app.focus, app::Focus::Content);
     }
 }

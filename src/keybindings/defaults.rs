@@ -78,6 +78,11 @@ fn add_normal_mode(kb: &mut Keybindings) {
     bind(kb, Normal, "PageDown", PageDown);
     bind(kb, Normal, "u", PageUp);
     bind(kb, Normal, "PageUp", PageUp);
+    // As in vim and less
+    bind(kb, Normal, "Ctrl+d", PageDown);
+    bind(kb, Normal, "Ctrl+u", PageUp);
+    bind(kb, Normal, "Ctrl+f", PageDown);
+    bind(kb, Normal, "Ctrl+b", PageUp);
     bind(kb, Normal, "Home", First);
     bind(kb, Normal, "End", Last);
     bind(kb, Normal, "p", JumpToParent);
@@ -167,6 +172,8 @@ fn add_help_mode(kb: &mut Keybindings) {
     bind(kb, Help, "PageDown", PageDown);
     bind(kb, Help, "u", PageUp);
     bind(kb, Help, "PageUp", PageUp);
+    bind(kb, Help, "Ctrl+d", PageDown);
+    bind(kb, Help, "Ctrl+u", PageUp);
     bind(kb, Help, "g", First);
     bind(kb, Help, "G", Last);
     bind(kb, Help, "Home", First);
@@ -180,9 +187,9 @@ fn add_help_mode(kb: &mut Keybindings) {
     bind(kb, Help, "y", CopyContent);
     bind(kb, Help, "Y", CopyAnchor);
 
-    // Quit
-    bind(kb, Help, "q", Quit);
-    bind(kb, Help, "Ctrl+c", Quit);
+    // q closes help, as it closes a pager; Ctrl+c does what q does
+    bind(kb, Help, "q", ToggleHelp);
+    bind(kb, Help, "Ctrl+c", ToggleHelp);
 }
 
 fn add_theme_picker_mode(kb: &mut Keybindings) {
@@ -204,8 +211,9 @@ fn add_theme_picker_mode(kb: &mut Keybindings) {
     bind(kb, ThemePicker, "Y", CopyAnchor);
 
     // Quit
-    bind(kb, ThemePicker, "q", Quit);
-    bind(kb, ThemePicker, "Ctrl+c", Quit);
+    // q cancels, putting the theme back, as Esc does
+    bind(kb, ThemePicker, "q", ToggleThemePicker);
+    bind(kb, ThemePicker, "Ctrl+c", ToggleThemePicker);
 }
 
 fn add_interactive_mode(kb: &mut Keybindings) {
@@ -235,6 +243,8 @@ fn add_interactive_mode(kb: &mut Keybindings) {
     bind(kb, Interactive, "PageDown", PageDown);
     bind(kb, Interactive, "u", PageUp);
     bind(kb, Interactive, "PageUp", PageUp);
+    bind(kb, Interactive, "Ctrl+d", PageDown);
+    bind(kb, Interactive, "Ctrl+u", PageUp);
     bind(kb, Interactive, "g", First);
     bind(kb, Interactive, "G", Last);
     bind(kb, Interactive, "Home", First);
@@ -407,6 +417,8 @@ fn add_doc_search_mode(kb: &mut Keybindings) {
     bind(kb, DocSearch, "PageDown", PageDown);
     bind(kb, DocSearch, "u", PageUp);
     bind(kb, DocSearch, "PageUp", PageUp);
+    bind(kb, DocSearch, "Ctrl+d", PageDown);
+    bind(kb, DocSearch, "Ctrl+u", PageUp);
     bind(kb, DocSearch, "g", First);
     bind(kb, DocSearch, "G", Last);
     bind(kb, DocSearch, "q", Quit);
@@ -503,8 +515,8 @@ fn add_file_picker_mode(kb: &mut Keybindings) {
 
     // Exit
     bind(kb, FilePicker, "Escape", ExitMode);
-    bind(kb, FilePicker, "q", Quit);
-    bind(kb, FilePicker, "Ctrl+c", Quit);
+    bind(kb, FilePicker, "q", ExitMode);
+    bind(kb, FilePicker, "Ctrl+c", ExitMode);
 }
 
 fn add_file_search_mode(kb: &mut Keybindings) {

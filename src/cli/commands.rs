@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use clap_complete::engine::{ArgValueCompleter, CompletionCandidate, ValueCompleter};
 
 #[cfg(feature = "unstable-dynamic")]
-const LONG_ABOUT: &str = "treemd - A modern markdown viewer combining tree-based navigation with interactive TUI.\n\n\
-Launch without flags for interactive mode with dual-pane interface, vim-style navigation,\n\
-syntax highlighting, and real-time search. Use flags for CLI mode to extract, filter,\n\
-and analyze markdown structure.\n\n\
+const LONG_ABOUT: &str = "treemd - read markdown by its structure.\n\n\
+With a file and no flags, treemd opens the TUI: an outline of the headings beside the\n\
+content, with search, link following and table editing. The flags below list, extract\n\
+and query a document from the shell instead.\n\n\
 Examples:\n  \
 treemd README.md              # Interactive TUI mode\n  \
 treemd -l README.md           # List all headings\n  \
@@ -17,10 +17,10 @@ treemd -s Installation doc.md # Extract section\n  \
 treemd --setup-completions    # Set up shell completions";
 
 #[cfg(not(feature = "unstable-dynamic"))]
-const LONG_ABOUT: &str = "treemd - A modern markdown viewer combining tree-based navigation with interactive TUI.\n\n\
-Launch without flags for interactive mode with dual-pane interface, vim-style navigation,\n\
-syntax highlighting, and real-time search. Use flags for CLI mode to extract, filter,\n\
-and analyze markdown structure.\n\n\
+const LONG_ABOUT: &str = "treemd - read markdown by its structure.\n\n\
+With a file and no flags, treemd opens the TUI: an outline of the headings beside the\n\
+content, with search, link following and table editing. The flags below list, extract\n\
+and query a document from the shell instead.\n\n\
 Examples:\n  \
 treemd README.md              # Interactive TUI mode\n  \
 treemd -l README.md           # List all headings\n  \
@@ -61,6 +61,7 @@ pub struct Cli {
     ///   cat doc.md | treemd -l   # Pipe markdown
     ///   treemd https://raw.githubusercontent.com/rust-lang/rust/HEAD/README.md
     ///   treemd github:epistates/treemd
+    #[arg(verbatim_doc_comment)]
     #[arg(add = markdown_file_completer())]
     pub file: Vec<PathBuf>,
 
@@ -68,6 +69,7 @@ pub struct Cli {
     ///
     /// Generates the treemd(1) man page for packaging:
     ///   treemd --man-page > treemd.1
+    #[arg(verbatim_doc_comment)]
     #[arg(long = "man-page")]
     pub man_page: bool,
 
@@ -109,9 +111,9 @@ pub struct Cli {
     /// Appends the 1-indexed line range to every heading in --list or --tree
     /// plain output: `start` is the line the heading itself is on, `end` is
     /// the last line before the next heading at the same or a shallower
-    /// level (or the last line of the document). Lets a downstream reader —
-    /// human or LLM — fetch only the lines for a section of interest instead
-    /// of loading the whole file.
+    /// level (or the last line of the document). A reader, human or LLM, can
+    /// then fetch only the lines of the section it needs instead of the whole
+    /// file.
     ///
     /// Example: -l -n prints `## Installation [12-34]`
     #[arg(short = 'n', long = "line-numbers", requires = "listing")]
@@ -123,6 +125,7 @@ pub struct Cli {
     ///   1 = # (h1), 2 = ## (h2), 3 = ### (h3), etc.
     ///
     /// Example: -L 2 shows only ## headings
+    #[arg(verbatim_doc_comment)]
     #[arg(
         short = 'L',
         long = "level",
@@ -133,12 +136,6 @@ pub struct Cli {
     pub level: Option<usize>,
 
     /// Output format for --list and --tree modes
-    ///
-    /// Controls how headings are displayed:
-    ///   plain - Human-readable text (default)
-    ///   json  - JSON: with --list, the whole document as nested sections
-    ///           with their content; with --tree, an array of the headings
-    ///   tree  - Box-drawing tree structure, as --tree prints
     #[arg(
         short = 'o',
         long = "output",
@@ -175,18 +172,13 @@ pub struct Cli {
     /// Set theme for TUI mode
     ///
     /// Override the saved theme preference. Available themes:
-    /// OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
+    /// OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha, OneDark, RosePine, Kanagawa, Everforest, GitHubDark, CatppuccinLatte, SolarizedLight, GitHubLight, Terminal
     ///
     /// Example: --theme Nord
     #[arg(long = "theme", value_name = "THEME")]
     pub theme: Option<String>,
 
-    /// Force color mode (auto, rgb, 256)
-    ///
-    /// Override automatic terminal detection:
-    ///   auto - Detect terminal capabilities (default)
-    ///   rgb  - Force true color (16M colors)
-    ///   256  - Force 256-color palette
+    /// Force a color mode instead of detecting one
     ///
     /// Example: --color-mode 256
     #[arg(long = "color-mode", value_name = "MODE")]
@@ -221,6 +213,7 @@ pub struct Cli {
     ///   -q '.h | select(contains("API"))' # Headings with "API"
     ///
     /// See --query-help for full documentation.
+    #[arg(verbatim_doc_comment)]
     #[arg(short = 'q', long = "query", value_name = "EXPR")]
     pub query: Option<String>,
 
@@ -232,20 +225,22 @@ pub struct Cli {
     /// - Built-in functions
     /// - Pipe composition
     /// - Output formats
+    #[arg(verbatim_doc_comment)]
     #[arg(long = "query-help")]
     pub query_help: bool,
 
     /// Output format for query results
     ///
     /// Controls how query results are displayed:
-    ///   plain  - Human-readable text (default)
-    ///   json   - Compact JSON
-    ///   jsonp  - Pretty-printed JSON
-    ///   jsonl  - Line-delimited JSON
-    ///   md     - Raw markdown
-    ///   tree   - Tree structure
+    ///   plain       - Human-readable text (default)
+    ///   json        - Compact JSON, always an array
+    ///   json-pretty - Pretty-printed JSON array (alias: jsonp)
+    ///   jsonl       - One JSON value per line
+    ///   md          - Raw markdown
+    ///   tree        - Tree structure
     ///
     /// Example: -q '.h2' --query-output json
+    #[arg(verbatim_doc_comment)]
     #[arg(long = "query-output", value_name = "FORMAT")]
     pub query_output: Option<String>,
 
@@ -270,15 +265,18 @@ pub enum ColorModeArg {
     /// Force 256-color mode
     #[value(name = "256")]
     Color256,
+    /// No color, as NO_COLOR asks: bold, underline and reverse video only
+    None,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum OutputFormat {
-    /// Plain text output
+    /// Human-readable text
     Plain,
-    /// JSON output
+    /// With --list, the whole document as nested sections with their
+    /// content; with --tree, an array of the headings
     Json,
-    /// Tree format with box-drawing
+    /// A box-drawing tree, as --tree prints
     Tree,
 }
 

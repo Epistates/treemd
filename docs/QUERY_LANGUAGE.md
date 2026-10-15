@@ -58,7 +58,9 @@ treemd -q '.h2 | count' doc.md                  # Number of h2s
 
 A bracketed word is matched as text, keywords included, so `.h[end]` finds
 "The End". Everything up to the `]` is the text, spaces and punctuation
-included: `.h[Getting Started]`, `.code[c++]`, `.code[objective-c]`.
+included: `.h[Getting Started]`, `.code[c++]`, `.code[objective-c]`. A regex
+in brackets is not recognized: it is read as literal text, which matches
+nothing, or fails to parse with exit `3`.
 
 ### Code Blocks
 
@@ -102,7 +104,7 @@ ordinary text filters, so `.h[external]` finds "External APIs".
 `.img` finds images written standalone, inline in a sentence, in a heading,
 inside a blockquote, wrapped in a link, and in a list item whether the list is
 tight or loose. A heading's image is not part of its text: `# Title ![a](a.png)`
-is `.h1` text `Title`, anchor `title`.
+is `.h1` text `Title`, slug `title`.
 
 `.list` reports every list in document order, a nested list right after the
 list that holds it. A nested list is its own entry rather than text in its
@@ -122,9 +124,9 @@ A selector does not always mean "everywhere in the document":
 
 - **On a heading, it looks inside that heading's section**, the same as `>>`.
   `.h2[0] | .code` is the code under the first h2, and
-  `.h | {title: .text, code: [.code | .lang]}` lists each section's own
-  languages. `.frontmatter` belongs to the document and is the same from
-  anywhere.
+  `.h | {title: .text, code: [.code | .lang]}` lists the languages in each
+  section, subsections included. `.frontmatter` belongs to the document and
+  is the same from anywhere.
 - **On a value that has a key or property of the same name, it reads that
   key.** `.fm | .image` is the front matter's `image` field, and
   `{p: 1} | .p` is `1`, not every paragraph. On the document itself the
@@ -298,8 +300,8 @@ parentheses** is not implemented. `(.h1, .h2) | text` fails with
 | `.lang` | string? | Language identifier |
 | `.text` | string | Code content |
 | `.lines` | number | Line count |
-| `.start_line` | number | Starting line in source |
-| `.end_line` | number | Ending line in source |
+| `.start_line` | number | Line of the opening fence (1-indexed) |
+| `.end_line` | number | Line of the closing fence (1-indexed) |
 
 ### Link Properties
 
@@ -339,8 +341,9 @@ pipe functions; `.img | alt` reports `Unknown function`.
 | Document | `.heading_count`, `.word_count`, `.text` |
 | Object, front matter | any key, as `.key` |
 
-Asking for a property a value does not have is an error,
-`Property 'x' not found on object`, rather than `null` as in jq.
+Asking an element for a property it does not have is an error,
+`Property 'nme' not found on heading`, rather than `null` as in jq. Objects
+and front matter are the exception: a missing key is `null`.
 
 ---
 
@@ -450,7 +453,7 @@ section. On the document, or on their own, they count the whole document.
 | `empty` | Is null, or an empty string, array or object | `select(.content \| empty)` |
 | `any(f)` | Any value matches | `.code \| any(.lang == "rust")` |
 | `all(f)` | All values match | `.h \| all(.level <= 3)` |
-| `not` | Negate | `select(.draft \| not)` |
+| `not` | Negate | `.fm \| .draft \| not` |
 | `type` | Type name: `heading`, `code`, `string`, `number`, ... | `.h[0] \| type` |
 
 Unlike jq, `empty` is a test that returns `true` or `false`; it does not
@@ -474,15 +477,18 @@ produce an empty stream.
 | `( )` | Grouping |
 
 Any other pair of types is an error, as in jq, so `.text + 1` fails with
-`string ("Intro") and number (1) cannot be added` and exits `5`. Turn a
+`Invalid operation: string ("Intro") and number (1) cannot be added` and
+exits `5`. Turn a
 number into text first: `.text + " " + (.level | tostring)`.
 
 From tightest to loosest: `* / %`, `+ -`, `//`, comparisons, `== !=`, `not`,
 `and`, `or`, `> >>` between selectors, `|`, `,`. A prefix `not` takes the
 whole comparison after it, so `not .level == 2` is `not (.level == 2)`.
 
-`//` falls back on any falsy value, which is wider than jq, where only
-`null` and `false` do.
+`//` differs from jq in two ways. It falls back on any falsy value, where
+jq's only `null` and `false` do. And it binds tighter than a comparison,
+where jq's binds looser than everything but `|` and `,`, so `2 // 1 == 1` is
+`false` here and `2` in jq.
 
 ---
 
@@ -565,8 +571,8 @@ still an error.
 ## Output Formats
 
 Queries select their format with `--query-output`, **not** `-o`. The `-o` flag
-applies to `--list`/`--tree` and is silently ignored alongside `-q`, so
-`treemd -q '.h2' -o json` prints plain text and exits `0`. Supported values are
+applies to `--list`/`--tree` and needs one of them, so
+`treemd -q '.h2' -o json` is a usage error and exits `2`. Supported values are
 `plain` (default), `json`, `json-pretty` (alias `jsonp`), `jsonl`, `md`, and
 `tree`.
 
@@ -599,6 +605,10 @@ $ treemd -q '.h2' --query-output jsonl doc.md         # one object per line
 Every element carries a `type` tag. The same JSON is used when an element is
 printed inside an object, as in `{a: .h1[0]} | text`.
 
+The array wraps the results of the query, so a query that itself returns one
+array, such as `[.h2 | text]`, prints `[["Introduction","Installation"]]`. Take
+`.[0]` in `jq` to unwrap it.
+
 ### Line-Delimited (for Piping)
 
 ```bash
@@ -611,7 +621,7 @@ Usage
 ### Raw Markdown
 
 ```bash
-$ treemd -q '.h1[Install] | md' doc.md
+$ treemd -q '.h2[Install] | md' doc.md
 ## Installation
 
 Run the following command:
@@ -735,12 +745,15 @@ error: Function 'count' takes no arguments, got 1
 ```
 
 A filter that matches nothing is **not** an error: it prints nothing and
-exits `0`, so scripts should test for empty output rather than exit status:
+exits `0`, as jq does. Pass `-e` to exit `1` instead when nothing matches:
 
 ```
 $ treemd -q '.h1[Missing]' doc.md
 $ echo $?
 0
+$ treemd -q '.h1[Missing]' -e doc.md
+$ echo $?
+1
 ```
 
 ---

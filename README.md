@@ -5,171 +5,117 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/epistates/treemd/rust.yml?branch=main)](https://github.com/epistates/treemd/actions)
 
-A markdown navigator with tree-based structural navigation. Like the `tree` command, but interactive—navigate markdown documents using an expandable/collapsible heading tree with a synchronized content view.
+Read markdown by its structure. treemd shows a document's headings as a tree
+you can fold and search, with the section you're on beside it, and gives the
+shell the same view: list, extract and query any part of a document with a
+[jq](https://jqlang.github.io/jq/)-like language.
 
-![treemd screenshot showing dual-pane interface](assets/output.gif)
+![treemd showing a document's outline beside its content](assets/screenshot.png)
 
-## Table of Contents
+- **Outline navigation**: fold, filter and jump between headings; the content follows.
+- **Rich rendering**: syntax highlighting for 50+ languages, tables, task lists, callouts, images and Mermaid diagrams in terminals that support them.
+- **Interactive mode**: toggle checkboxes, edit table cells, follow links and copy any element, writing changes back to the file.
+- **Seventeen themes**, light ones included, each held to WCAG contrast, plus a no-color mode.
+- **A CLI for scripts and agents**: heading lists with line ranges, section extraction, JSON output and a query language.
+- **Remote documents**: `treemd github:owner/repo` or any markdown URL.
 
-- [Overview](#overview)
-- [Features](#features)
-  - [Interactive TUI](#interactive-tui)
-  - [CLI Mode](#cli-mode)
-- [Installation](#installation)
-- [Usage](#usage)
-  - [TUI Mode](#tui-mode-interactive)
-  - [CLI Mode](#cli-mode-non-interactive)
-  - [Query Language](#query-language)
-- [Releases](#releases)
+## Contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [The TUI](#the-tui)
+- [Themes](#themes)
+- [The CLI](#the-cli)
+- [Queries](#queries)
+- [Remote and piped documents](#remote-and-piped-documents)
 - [Configuration](#configuration)
-  - [Basic Settings](#basic-configuration)
-  - [Custom Keybindings](#custom-keybindings)
-  - [Custom Theme Colors](#custom-theme-colors)
+- [Release binaries](#release-binaries)
 - [Contributing](#contributing)
-- [Roadmap](#roadmap)
-- [Why treemd?](#why-treemd)
-- [Similar Tools](#similar-tools)
-- [License](#license)
 
-## Overview
-
-**treemd** is a modern markdown viewer that combines the structural clarity of the `tree` command with powerful interactive navigation. Whether you're exploring large documentation files, analyzing markdown structure, or reading comfortably in your terminal, treemd provides both CLI tools for scripting and a beautiful TUI for interactive exploration.
-
-Use it to:
-- **Navigate** large documents by collapsing/expanding heading sections
-- **Search** headings or full document content with highlighted matches
-- **Edit** tables, toggle checkboxes, and follow links—all without leaving the terminal
-- **Extract** specific sections or query markdown elements with a [jq](https://jqlang.github.io/jq/)-like syntax
-- **Pipe** markdown from stdin for shell-scripted workflows
-
-## Features
-
-### Interactive TUI
-
-| Feature | Description |
-|---------|-------------|
-| **Dual-pane interface** | Navigate the outline while viewing synchronized content |
-| **Interactive mode** | Navigate, edit, and interact with tables, checkboxes, links, and code blocks |
-| **Table editing** | Navigate cells with vim keys (`hjkl`), edit in-place, copy cells/rows/tables |
-| **Checkbox toggling** | Toggle task list items with instant file updates |
-| **Live editing** | Open files in your editor with auto-reload (respects `$VISUAL`/`$EDITOR`) |
-| **Link following** | Follow markdown links via visual popup—supports anchors, files, wikilinks, and URLs |
-| **Navigation history** | Go back/forward between files with full state preservation |
-| **Syntax highlighting** | 50+ languages via [syntect](https://crates.io/crates/syntect) |
-| **Vim-style navigation** | `j`/`k`, `g`/`G`, `d`/`u`, `p` (parent) |
-| **Search & filter** | Filter headings (`s`) or search the current section (`/`) with `n`/`N` navigation |
-| **Command palette** | Fuzzy-search every command with `:`—no need to memorize keys |
-| **Collapsible tree** | Expand/collapse sections with `Space`/`Enter` |
-| **Bookmarks** | Mark positions (`m`) and jump back (`'`) |
-| **Callouts** | GFM alerts and Obsidian callouts (`> [!NOTE]`, `> [!WARNING]`, …) rendered with icons and accent colors |
-| **Remote documents** | Open URLs directly: `treemd https://…` or `treemd github:owner/repo` |
-| **8 color themes** | Nord, Dracula, Solarized, Monokai, Gruvbox, Tokyo Night, Catppuccin Mocha, Ocean Dark |
-| **Customizable keybindings** | Remap any key via [config file](#custom-keybindings) |
-
-### CLI Mode
-
-| Feature | Description |
-|---------|-------------|
-| **[Query language](#query-language)** | jq-like syntax for extracting markdown elements |
-| **List headings** | Quick overview with `-l` |
-| **Tree visualization** | Hierarchical display with `--tree` |
-| **Section extraction** | Extract by heading name with `-s` |
-| **Smart filtering** | Filter by text or level (`--filter`, `-L`) |
-| **Line ranges** | Append each heading's `[start-end]` line range with `-n` |
-| **Multiple formats** | Plain text or JSON output (`-o json`) |
-| **Statistics** | Count headings by level (`--count`) |
-| **Stdin support** | Pipe markdown content (`cat doc.md \| treemd -q '.h'`) |
-
-**Pro tip:** `--tree -n` shows each section's line range, so you can read just the lines you need from a large file, or pull one out whole with `--section`. The query language brings [jq](https://jqlang.github.io/jq/)-like power to markdown extraction.
-
-## Installation
-
-### From [crates.io](https://crates.io/crates/treemd)
+## Install
 
 ```bash
-cargo install treemd
+cargo install treemd       # crates.io
+brew install treemd        # Homebrew, macOS and Linux
+pacman -S treemd           # Arch Linux (extra)
+pkgin install treemd       # NetBSD
 ```
 
-### From source
+Prebuilt binaries for Linux, macOS and Windows are on the
+[releases page](https://github.com/epistates/treemd/releases); see
+[Release binaries](#release-binaries) for verifying them. To build from source:
 
 ```bash
 git clone https://github.com/epistates/treemd
 cd treemd
-cargo install --path .
+cargo install --path . --locked
 ```
 
-### Package managers
-
-**[Homebrew](https://brew.sh)** (macOS/Linux):
-```bash
-brew install treemd
-```
-
-**[Arch Linux](https://archlinux.org/packages/extra/x86_64/treemd/)** (`extra` repo):
-```bash
-pacman -S treemd
-```
-
-**[NetBSD](https://pkgsrc.se/textproc/treemd)**:
-```bash
-pkgin install treemd
-```
-
-### Shell completions & man page
+Shell completions, which offer only markdown files and directories:
 
 ```sh
-treemd --setup-completions   # Interactive tab-completion setup (bash/zsh/fish)
-treemd --man-page > treemd.1 # Generate the man page (for packagers)
+treemd --setup-completions   # bash, zsh or fish, set up interactively
+treemd --man-page > treemd.1 # the man page, for packagers
 ```
 
-Completions are context-aware: they only offer `.md`/`.markdown` files and directories.
-
-## Usage
-
-### TUI Mode (Interactive)
+## Quick start
 
 ```sh
-treemd README.md                  # Open a file
-treemd github:rust-lang/rust      # Read a GitHub repo's README, whatever it is named
-treemd https://example.com/doc.md # Open any markdown URL
+treemd README.md              # open a file
+treemd .                      # pick a file in this directory
+treemd github:rust-lang/rust  # a GitHub repo's README, whatever it's named
+treemd -l -n README.md        # list headings with their line ranges
+treemd -s Install README.md   # print one section
+treemd -q '.code[rust]' doc.md # every Rust code block
 ```
 
-Launch the interactive interface by running treemd with a file:
+In the TUI, the footer shows the keys for whatever you're doing, `?` lists
+them all, and `:` opens a command palette that finds any command by name.
 
-```bash
-treemd README.md        # Open specific file
-treemd .                # Open file picker in current directory
-treemd docs/            # Open file picker in specified directory
-```
+## The TUI
 
-#### Keyboard Shortcuts
+The outline is on the left and the selected section on the right. `Tab`
+switches between them. Move through the outline with `j`/`k` and fold with
+`Enter`, or hide it with `w` and read the content alone.
+
+`/` searches the current section and `s` filters the outline. `f` lists the
+section's links and follows one by number. `i` steps through the section's
+elements one at a time: checkboxes, tables, links, code blocks, images and
+`<details>`. In interactive mode, `Enter` uses the element, `y` copies it and
+`e` opens your editor at its line. Table cells are edited in place, and every
+change is written back to the file. `Ctrl+z` undoes the last edit.
+
+### Keys
+
+Every key can be remapped, see [Keybindings](#keybindings).
 
 <details>
-<summary><strong>Navigation</strong></summary>
+<summary><strong>Moving around</strong></summary>
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` or `↓` / `↑` | Move down/up |
-| `g` / `G` or `Home` / `End` | Jump to top/bottom |
-| `p` | Jump to parent heading |
-| `Ctrl+e` / `Ctrl+y` | Scroll the content a line, keeping the selection |
-| `d` / `u` or `PageDown` / `PageUp` | Page down/up |
-| `Tab` / `Shift+Tab` | Switch focus between outline and content |
-| `5j` etc. | Repeat motion with a vim count prefix (digits `1`-`9` start a count, shown in the status bar) |
+| `j` / `k`, `↓` / `↑` | Next / previous heading |
+| `g` / `G`, `Home` / `End` | First / last heading |
+| `p` | Parent heading |
+| `d` / `u`, `Ctrl+d` / `Ctrl+u`, `Ctrl+f` / `Ctrl+b`, `PageDown` / `PageUp` | Page down / up |
+| `Ctrl+e` / `Ctrl+y` | Scroll the content a line |
+| `Tab` / `Shift+Tab` | Switch pane |
+| `5j`, `3k` | Repeat a move: digits start a count |
+| `m` / `'` | Set the bookmark / jump to it |
 
 </details>
 
 <details>
-<summary><strong>Tree Operations</strong></summary>
+<summary><strong>Outline</strong></summary>
 
 | Key | Action |
 |-----|--------|
-| `Enter` / `Space` | Toggle expand/collapse |
-| `h` / `l` or `←` / `→` | Collapse/expand heading |
-| `w` | Toggle outline visibility |
-| `[` / `]` | Adjust outline width (20%, 30%, 40%) |
-| `#` | Toggle heading level markers in outline |
-| `T` | Filter outline by open todos |
+| `Enter` / `Space` | Fold or unfold |
+| `h` / `l`, `←` / `→` | Fold (or go to the parent) / unfold |
+| `w` | Hide or show the outline |
+| `[` / `]` | Outline width: 20%, 30% or 40% |
+| `#` | Show or hide the `#` level markers |
+| `T` | Only headings with open todos (`Esc` clears it) |
 
 </details>
 
@@ -178,383 +124,283 @@ treemd docs/            # Open file picker in specified directory
 
 | Key | Action |
 |-----|--------|
-| `s` | Search/filter headings in outline |
 | `/` | Search the current section |
-| `Tab` (in search) | Toggle between outline and content search |
-| `n` / `N` | Next/previous match |
-| `Esc` | Exit search mode |
+| `s` | Filter the outline |
+| `Tab` | While typing, switch between the two |
+| `Enter` | Keep the search and read with the matches highlighted |
+| `n` / `N` | Next / previous match |
+| `Esc` | Clear the search |
 
 </details>
 
 <details>
-<summary><strong>Link Following</strong></summary>
+<summary><strong>Links and files</strong></summary>
 
 | Key | Action |
 |-----|--------|
-| `f` | Enter link follow mode |
-| `Tab` / `Shift+Tab` | Navigate links |
-| `1`-`9` | Jump to link by number |
-| `Enter` | Follow selected link |
-| `p` | List the parent section's links |
-| `Esc` | Exit link mode |
+| `f` | List the section's links |
+| `j` / `k`, `Tab` / `Shift+Tab` | Next / previous link |
+| `1`-`9` | Link by number |
+| `Enter` | Follow it |
+| `/` | Search the links |
+| `p` | The parent section's links |
+| `b` / `Backspace`, `F` | Back / forward through followed links and files |
+| `o` / `Ctrl+o` | Open a file |
 
-After following a link, `b` / `Backspace` and `F` go back and forward from the main view.
+In the file picker, `/` searches, `Backspace` goes up a directory and `h`
+shows hidden files.
 
 </details>
 
 <details>
-<summary><strong>Interactive Mode</strong></summary>
+<summary><strong>Interactive mode and tables</strong></summary>
 
 | Key | Action |
 |-----|--------|
-| `i` | Enter interactive mode |
-| `j` / `k` | Navigate elements |
-| `g` / `G` | First / last element |
-| `d` / `u` | Page down / up |
-| `Tab` / `Shift+Tab` | Next/previous link within element |
-| `Enter` | Activate element |
-| `Space` | Toggle checkboxes/details |
-| `y` | Copy the selected element (link target, code, table, image source) |
-| `e` | Open the editor at the element's line |
-| `Esc` | Exit interactive mode |
+| `i` | Enter or leave interactive mode |
+| `j` / `k` | Next / previous element |
+| `Tab` / `Shift+Tab` | Next / previous link inside the element |
+| `Enter` / `Space` | Use it: toggle, expand, follow, edit or view full screen |
+| `y` | Copy it: the code, the link target, the table or the image source |
+| `e` | Open the editor at its line |
+| `Ctrl+z` | Undo the last edit |
+
+On a table, `Enter` moves into its cells:
+
+| Key | Action |
+|-----|--------|
+| `h` / `j` / `k` / `l` | Move between cells |
+| `Enter` | Edit the cell |
+| `y` / `Y` / `r` | Copy the cell / the row / the table as markdown |
+| `Esc` | Back to the elements |
+
+In the full-screen image viewer, `Space` plays or pauses a GIF and `h` / `l`
+step through its frames.
 
 </details>
 
 <details>
-<summary><strong>Table Navigation</strong> (within interactive mode)</summary>
+<summary><strong>View, clipboard and the rest</strong></summary>
 
 | Key | Action |
 |-----|--------|
-| `h` / `j` / `k` / `l` | Navigate cells |
-| `y` | Copy cell |
-| `Y` | Copy row |
-| `r` | Copy table as markdown |
-| `Enter` | Edit cell |
-| `Esc` | Exit table mode |
+| `:` | Command palette |
+| `t` | Choose a theme, previewed live |
+| `r` | Show the markdown source |
+| `M` | Release the mouse, so it selects text |
+| `e` | Open the file in `$VISUAL` or `$EDITOR` |
+| `y` / `Y` | Copy the section / a link to its heading |
+| `Ctrl+l` | Redraw |
+| `Ctrl+z` | Suspend to the shell (`fg` returns) |
+| `?` | Help |
+| `q` / `Ctrl+c` | Quit, asking first if there are unsaved edits |
+
+`Esc` backs out of a search or mode. In help and the pickers, `q` closes them
+instead of quitting.
 
 </details>
 
-<details>
-<summary><strong>Image Viewer</strong> (<code>Enter</code> on an image)</summary>
+### The mouse
 
-| Key | Action |
-|-----|--------|
-| `Space` | Play or pause an animated GIF |
-| `h` / `l` or `←` / `→` | Previous / next frame |
-| `Esc` / `q` / `Ctrl+c` | Close the viewer |
+The wheel scrolls the pane under the pointer. Clicking a heading selects it, a
+second click folds or unfolds it, and clicking the content focuses it.
 
-</details>
+Because treemd captures the mouse for this, your terminal's own click-and-drag
+selection needs a modifier: most terminals (iTerm2, kitty, GNOME Terminal,
+Konsole, Windows Terminal) select natively while `Shift` is held. Or press `M`
+to release the mouse entirely, and again to take it back. To copy a whole
+section, `y` is quicker.
 
-<details>
-<summary><strong>Commands & System</strong></summary>
+### Images
 
-| Key | Action |
-|-----|--------|
-| `:` | Open command palette (fuzzy-search commands) |
-| `o` / `Ctrl+o` | Open file picker |
-| `b` / `Backspace` | Go back in file history |
-| `F` (Shift+F) | Go forward in file history |
-| `r` | Toggle raw markdown source |
-| `M` | Toggle mouse capture (turn off to select text) |
-| `e` | Edit file in `$VISUAL` or `$EDITOR` |
-| `t` | Open theme picker (live preview) |
-| `y` | Copy current section |
-| `Y` | Copy anchor link |
-| `m` | Set bookmark |
-| `'` | Jump to bookmark |
-| `?` | Toggle help overlay |
-| `q` / `Ctrl+c` | Quit (`Esc` backs out of searches/modes; in a search or prompt, `Ctrl+c` cancels it) |
-| `Ctrl+z` | Suspend to the shell (`fg` to return) |
+Images render with the terminal's graphics protocol (kitty, iTerm2 or Sixel),
+and as half blocks where there isn't one. `Enter` on one in interactive mode
+shows it full screen, and animated GIFs play. On Linux and macOS, Mermaid
+diagrams render as images too. `--no-images` or `images.enabled = false` turns
+images off.
 
-</details>
+## Themes
 
-#### Selecting and copying text
+![Nine of treemd's themes, six dark and three light](assets/themes.png)
 
-treemd captures the mouse for scroll-wheel navigation, which by default suppresses your terminal's native click-drag selection. To grab an arbitrary substring:
+Press `t` to preview every theme on the open document; `Enter` keeps one. Or
+set one by name in the config or with `--theme`:
 
-- **Hold `Shift` while dragging** — most terminals (iTerm2, kitty, GNOME Terminal, Konsole, Windows Terminal) bypass application mouse capture and select natively.
-- **Press `M`** to release mouse capture entirely, then select and copy as usual; press `M` again to restore scroll-wheel navigation.
+| Dark | Light | Other |
+|------|-------|-------|
+| `OceanDark` (default), `Nord`, `Dracula`, `Solarized`, `Monokai`, `Gruvbox`, `TokyoNight`, `CatppuccinMocha`, `OneDark`, `RosePine`, `Kanagawa`, `Everforest`, `GitHubDark` | `CatppuccinLatte`, `SolarizedLight`, `GitHubLight` | `Terminal`: your terminal's own background and 16 colors |
 
-For whole sections, `y` copies the current section straight to the clipboard without leaving treemd.
+Every theme's text meets WCAG contrast against what it's drawn on, in 24-bit
+color and in 256-color terminals, which treemd detects. Code blocks follow the
+theme unless `code_theme` names one.
 
-### CLI Mode (Non-Interactive)
+With [`NO_COLOR`](https://no-color.org) set, or `--color-mode none`, treemd
+draws without color: the selection, chips and current match in reverse video,
+other matches underlined.
 
-#### List headings
+Any color can be overridden, see [Custom colors](#custom-colors).
+
+## The CLI
+
+Any of these flags prints and exits instead of opening the TUI:
 
 ```bash
-treemd -l README.md
+treemd -l README.md                 # every heading
+treemd -l --filter usage README.md  # headings containing "usage", any case
+treemd -l -L 2 README.md            # only ## headings
+treemd --tree README.md             # the headings as a tree
+treemd -l -n README.md              # each with its [start-end] line range
+treemd -s "Installation" README.md  # one section, heading included
+treemd --at-line 120 README.md      # the heading that line 120 is under
+treemd --count README.md            # headings per level
+treemd -l -o json README.md         # the whole document as JSON
 ```
 
-#### Show heading tree
+`-s` takes a heading's full text, in any case. The line ranges from `-n` make
+treemd a good first step for an LLM or a script reading a large file: list the
+headings, then read only the lines of the section that matters.
+
+For AI coding agents, [`skills/treemd`](skills/treemd/SKILL.md) is a ready-made
+skill that teaches an agent to survey a document with treemd before reading it.
+
+## Queries
+
+`-q` runs a query in a [jq](https://jqlang.github.io/jq/)-like language over
+the document's elements. [docs/QUERY_LANGUAGE.md](docs/QUERY_LANGUAGE.md) is
+the full reference, and `treemd --query-help` the short one.
 
 ```bash
-treemd --tree README.md
+treemd -q '.h2' doc.md                          # every level-2 heading
+treemd -q '.h2[Install]' doc.md                 # whose text contains "Install"
+treemd -q '.h2["Installation"]' doc.md          # whose whole text is "Installation"
+treemd -q '.h2[-1]' doc.md                      # the last one
+treemd -q '.code[rust]' doc.md                  # Rust code blocks
+treemd -q '.h2[Install] | .code' doc.md         # code inside one section
+treemd -q '.h1 > .h2' doc.md                    # direct children
+treemd -q '.link | url' doc.md                  # every link target
+treemd -q '.h | select(contains("API")) | text' doc.md
+treemd -q '. | stats' doc.md                    # counts of everything
 ```
 
-#### Extract a section
+Selectors are `.h`, `.h1` to `.h6`, `.code`, `.link`, `.img`, `.table`,
+`.list`, `.blockquote` and more. Functions like `count`, `first`, `sort_by` and
+`join` see everything a selector returns at once, and a selector piped from a
+heading looks only inside that heading's section.
 
-```bash
-treemd -s "Installation" README.md
+`--query-output` picks `plain` (the default), `json`, `json-pretty`, `jsonl`,
+`md` or `tree`. The JSON formats always print an array, `[]` when nothing
+matches.
+
+A query that matches nothing exits 0, as in jq; add `-e` to exit 1 instead. A
+query that doesn't parse exits 3, and one that fails while running, such as
+`"a" - 1`, exits 5.
+
+## Remote and piped documents
+
+```sh
+treemd https://example.com/guide.md   # any markdown URL
+treemd github:owner/repo              # a repository's README
+curl -s https://example.com/doc.md | treemd -q '.h2'
+cat notes.md | treemd                 # the TUI reads a pipe too
 ```
 
-#### Filter and level options
-
-```bash
-treemd -l --filter "usage" README.md    # Filter by text
-treemd -l -L 2 README.md                # Only ## headings
-```
-
-#### Count and JSON output
-
-```bash
-treemd --count README.md                # Count by level
-treemd -l -o json README.md             # JSON output
-```
-
-#### Line ranges
-
-```bash
-treemd -l -n README.md                  # Each heading with its [start-end] line range
-treemd --tree -n README.md              # Same, in tree form
-```
-
-Useful for LLM-driven workflows: read the heading list first, then fetch only
-the line range for the section that matters instead of the whole file.
-
-### Query Language
-
-treemd includes a powerful [jq](https://jqlang.github.io/jq/)-like query language for extracting markdown elements. Use `-q` to execute queries and `--query-help` for full documentation.
-
-#### Element Selectors
-
-```bash
-treemd -q '.h' doc.md         # All headings
-treemd -q '.h2' doc.md        # Level 2 headings
-treemd -q '.code' doc.md      # Code blocks
-treemd -q '.link' doc.md      # Links
-treemd -q '.img' doc.md       # Images
-treemd -q '.table' doc.md     # Tables
-```
-
-#### Filters and Indexing
-
-```bash
-treemd -q '.h2[Features]' doc.md       # Text contains "Features" (any case)
-treemd -q '.h2["Installation"]' doc.md # Whole text is "Installation" (any case)
-treemd -q '.h2[0]' doc.md              # First h2
-treemd -q '.h2[-1]' doc.md             # Last h2
-treemd -q '.h2[1:3]' doc.md            # Slice
-treemd -q '.code[rust]' doc.md         # By language
-```
-
-#### Pipes and Functions
-
-```bash
-treemd -q '.h2 | text' doc.md                    # Get text (strips ##)
-treemd -q '.h2 | count' doc.md                   # Count elements
-treemd -q '.h | limit(5)' doc.md                 # First 5
-treemd -q '.h | select(contains("API"))' doc.md  # Filter
-treemd -q '.h2 | text | slugify' doc.md          # URL slug
-treemd -q '.link | url' doc.md                   # Extract URLs
-treemd -q '.h2[Install] | .code' doc.md          # Code inside one section
-```
-
-Functions like `count`, `first`, `sort_by` and `join` see everything a selector returns at once, and a selector piped from a heading looks only inside that heading's section.
-
-#### Hierarchy Operators
-
-```bash
-treemd -q '.h1 > .h2' doc.md           # Direct children
-treemd -q '.h1 >> .code' doc.md        # All descendants
-treemd -q '.h1[Features] > .h2' doc.md # Combined
-```
-
-#### Aggregation
-
-```bash
-treemd -q '. | stats' doc.md           # Document statistics
-treemd -q '. | levels' doc.md          # Heading counts by level
-treemd -q '. | langs' doc.md           # Code blocks by language
-```
-
-#### Output Formats
-
-```bash
-treemd -q '.h2' --query-output json doc.md        # JSON array
-treemd -q '.h2' --query-output json-pretty doc.md # Pretty JSON array
-treemd -q '.h2' --query-output jsonl doc.md       # JSON Lines
-```
-
-`json` and `json-pretty` always print an array, even for a single result,
-and `[]` when nothing matches.
-
-#### Exit Status
-
-A query that matches nothing exits 0, as jq does. Add `-e` to exit 1 instead,
-so a script can tell:
-
-```bash
-treemd -q '.h2[Install]' -e README.md || echo "no install section"
-```
-
-A query that does not parse exits 3, and one that fails while running (such
-as `"a" - 1`) exits 5, as in jq.
-
-#### Stdin Support
-
-```bash
-cat doc.md | treemd -q '.h2'
-curl -s https://raw.githubusercontent.com/.../README.md | treemd -q '.h'
-tree | treemd                          # Pipe tree output to TUI
-```
-
-A piped document could come from anywhere, so in the TUI its links and images
-stay inside the working directory, and it loads no image by absolute path. A
-document opened by URL reaches nothing on this machine at all. To treat piped
-documents like local files:
+A piped document could come from anywhere, so its links and images stay inside
+the working directory, and it loads no image by absolute path. A document opened
+by URL reaches nothing on this machine at all. To treat piped documents like
+local files:
 
 ```toml
 [security]
 trust_piped_documents = true
 ```
 
-Run `treemd --query-help` for complete documentation.
-
-## Releases
-
-### Pre-built Binaries
-
-Download from the [releases page](https://github.com/epistates/treemd/releases):
-
-| Platform | Archive |
-|----------|---------|
-| Linux x86_64 | `treemd-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux x86_64, static (musl, Alpine) | `treemd-x86_64-unknown-linux-musl.tar.gz` |
-| Linux ARM64 | `treemd-aarch64-unknown-linux-gnu.tar.gz` |
-| Linux ARM64, static (musl, Alpine) | `treemd-aarch64-unknown-linux-musl.tar.gz` |
-| macOS x86_64 | `treemd-x86_64-apple-darwin.tar.gz` |
-| macOS ARM64 (Apple Silicon) | `treemd-aarch64-apple-darwin.tar.gz` |
-| Windows x86_64 | `treemd-x86_64-pc-windows-msvc.exe.zip` |
-
-Each archive holds the binary, named as above without the extension, and `LICENSE`; the `.tar.gz` archives also hold the man page, `treemd.1`. `SHA256SUMS` lists the hash of every archive, and each `treemd-<target>.sha256` is the hash of the binary inside it. The archives are reproducible: the same binaries, packaged by `scripts/package-release.sh` with the same versions of tar, gzip and zip, give byte-identical archives. Each archive also has signed build provenance, checkable with `gh attestation verify <archive> --repo Epistates/treemd`. The Linux glibc builds need glibc 2.28 or newer (RHEL 8, Debian 10, Ubuntu 18.10); the musl builds need no glibc at all.
-
-Each archive also has a signed build provenance attestation, which shows it was built by this repository's release workflow from the tagged commit:
-
-```bash
-sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify treemd-x86_64-unknown-linux-gnu.tar.gz --repo Epistates/treemd
-```
-
-**macOS binaries** are signed with Developer ID and notarized by Apple.
-
-### Building from Source
-
-```bash
-cargo build --release --locked   # target/release/treemd
-```
-
-The release binaries for every platform are built by [`.github/workflows/release.yml`](.github/workflows/release.yml), which is the reference for each target's build.
-
 ## Configuration
 
-treemd stores configuration in a TOML file:
+treemd reads a TOML file, and writes it when you change the theme or the outline
+width in the TUI, keeping your comments:
 
 | Platform | Location |
 |----------|----------|
-| Linux/Unix | `~/.config/treemd/config.toml` |
+| Linux | `~/.config/treemd/config.toml` |
 | macOS | `~/.config/treemd/config.toml` if it exists, otherwise `~/Library/Application Support/treemd/config.toml` |
 | Windows | `%APPDATA%\treemd\config.toml` |
 
-The file is created automatically when you change settings (theme with `t`, outline width with `[`/`]`).
-
-### Basic Configuration
+Every setting, with its default:
 
 ```toml
 [ui]
-theme = "Nord"                  # OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha
-outline_width = 30              # 20, 30, or 40
-tree_style = "compact"          # "compact" (default, gapless box characters) or "spaced"; used by --tree
-outline_heading_markers = true  # Show #/##/### level markers in outline sidebar
+theme = "OceanDark"             # see Themes
+code_theme = "auto"             # follows the theme; or a syntect theme name
+outline_width = 30              # 20, 30 or 40
+outline_heading_markers = true  # the # markers in the outline
+tree_style = "compact"          # "compact" or "spaced", for --tree
 
 [terminal]
-color_mode = "auto"    # "auto", "rgb", or "256"
+color_mode = "auto"             # "auto", "rgb", "256" or "none"
 
 [content]
-hide_frontmatter = true  # Hide YAML frontmatter (---\n...\n---) in content view
-hide_latex = true        # Hide LaTeX math expressions ($...$, $$...$$, \begin{...})
-code_fences = "full"     # "full", "label", or "none" (see below)
-slug_style = "treemd"    # "treemd" or "github" (see below)
+hide_frontmatter = true         # hide YAML frontmatter
+hide_latex = true               # hide $...$, $$...$$ and \begin{...}
+latex_aggressive = false        # also drop every line starting with \
+code_fences = "full"            # "full", "label" or "none"
+slug_style = "treemd"           # "treemd" or "github"
+
+[images]
+enabled = true
+
+[editor]
+editor = "nvim"                 # instead of $VISUAL / $EDITOR
+
+[security]
+trust_piped_documents = false
 ```
 
-### Heading Anchors
+A keybinding that names an unknown key, action or mode is skipped and reported in
+the status bar; the rest of the file still applies.
 
-`slug_style` decides how a heading becomes an anchor: the one `Y` copies, the
-`id` and `slug` in `-l -o json`, and `.slug` and `slugify` in queries.
-`treemd`, the default, drops `_` and gives repeated headings the same anchor.
-`github` makes them the way github.com does: `snake_case` keeps its `_`, and
-the second `## Setup` is `#setup-1`. Following a link finds the heading with
-either kind of anchor, whichever is set.
+To override any of these for one run:
 
-### Code Block Appearance
+```bash
+treemd --theme Dracula README.md
+treemd --color-mode 256 README.md
+treemd --no-images README.md
+```
 
-`code_fences` controls how a fenced code block is delimited in the content pane.
-The rows are removed rather than hidden, so they take no vertical space.
+### Code blocks
 
-| Value | Result |
-|-------|--------|
-| `full` | Both fence rows, as written in the source: ` ```rust ` and ` ``` ` |
-| `label` | A dim language name above the block, and no closing row |
-| `none` | No fence rows at all |
+`code_fences` sets how a fenced block is marked: `full` shows both fence rows as
+written, `label` a dim language name above the block, and `none` nothing. The
+rows are removed, not blanked, so they take no space.
 
-With `label`, a block with no language gets no label row either. The name sits
-on its own row rather than on the first line of code, so selecting the block
-with the mouse does not drag it in.
-
-The code block background comes from the code theme by default, so it agrees
-with the syntax colors. Override or disable it:
+The block background comes from the code theme, so it agrees with the syntax
+colors. To set your own or turn it off:
 
 ```toml
 [theme]
-code_block_bg = { rgb = [40, 40, 50] }  # explicit color
-# code_block_bg = "none"                # leave code on the terminal background
+code_block_bg = { rgb = [40, 40, 50] }
+# code_block_bg = "none"
 ```
 
-The background covers the full width of the block, including padding, so short
-lines do not leave a ragged edge.
+`code_theme` takes `auto` or a built-in syntect theme: `base16-ocean.dark`,
+`base16-ocean.light`, `base16-eighties.dark`, `base16-mocha.dark`,
+`InspiredGitHub`, `Solarized (dark)` or `Solarized (light)`. For any other, put
+its `.tmTheme` file in a `code-themes` directory next to `config.toml` and use
+the file name without the extension.
 
-### Custom Keybindings
+### Heading anchors
 
-Remap any key for any mode using intuitive TOML syntax. Multi-key sequences are supported.
+`slug_style` decides how a heading becomes an anchor: the one `Y` copies, the
+`id` and `slug` in `-l -o json`, and `.slug` and `slugify` in queries. `treemd`,
+the default, drops `_` and gives repeated headings the same anchor. `github`
+makes them the way github.com does: `snake_case` keeps its `_`, and the second
+`## Setup` is `#setup-1`. Following a link finds the heading by either kind of
+anchor.
 
-```toml
-[keybindings.Normal]
-"j" = "Next"
-"k" = "Previous"
-"Ctrl+c" = "Quit"
-"g g" = "First"          # Multi-key sequence
+### Custom colors
 
-[keybindings.Interactive]
-"Escape" = "ExitInteractiveMode"
-"Tab" = "InteractiveNext"
-
-[keybindings.Search]
-"Ctrl+n" = "NextMatch"
-"Ctrl+p" = "PrevMatch"
-```
-
-Available modes: `Normal`, `Help`, `ThemePicker`, `Interactive`, `InteractiveTable`, `LinkFollow`, `LinkSearch`, `Search`, `DocSearch`, `CommandPalette`, `ConfirmDialog`, `CellEdit`, `FilePicker`, `FileSearch`, `ImageViewer`
-
-A binding that names an unknown key or action is skipped, and the rest of the file still applies; the status bar says which entries were skipped.
-
-See the built-in defaults in [`src/keybindings/defaults.rs`](src/keybindings/defaults.rs) for all available actions.
-
-### Custom Theme Colors
-
-Override any color from your base theme. Colors can be specified as:
-
-- **Named**: `"Red"`, `"Cyan"`, `"White"`, `"DarkGray"`
-- **RGB**: `{ rgb = [255, 128, 0] }`
-- **Indexed**: `{ indexed = 235 }` (256-color palette)
+Override any color of the theme you're using. A color is a name (`"Cyan"`,
+`"DarkGray"`), `{ rgb = [255, 128, 0] }`, or `{ indexed = 235 }` from the 256
+palette.
 
 ```toml
 [ui]
@@ -566,141 +412,103 @@ heading_1 = { rgb = [120, 200, 255] }
 heading_2 = "LightBlue"
 border_focused = "Cyan"
 search_match_bg = { rgb = [100, 100, 50] }
-search_match_fg = "White"
 ```
 
 <details>
-<summary><strong>All available color fields</strong></summary>
+<summary><strong>Every color field</strong></summary>
 
-```toml
-[theme]
-# Background and text
-background = { rgb = [25, 25, 35] }
-foreground = { rgb = [220, 220, 230] }
-
-# Headings (5 levels)
-heading_1 = { rgb = [120, 200, 255] }
-heading_2 = "LightBlue"
-heading_3 = { indexed = 114 }
-heading_4 = "Yellow"
-heading_5 = "Gray"
-
-# Borders and UI
-border_focused = "Cyan"
-border_unfocused = "DarkGray"
-selection_bg = { rgb = [45, 45, 60] }
-selection_fg = "White"
-
-# Status bar
-status_bar_bg = { rgb = [30, 30, 45] }
-status_bar_fg = { rgb = [200, 200, 210] }
-
-# Code
-inline_code_fg = { rgb = [255, 200, 100] }
-inline_code_bg = { rgb = [40, 40, 50] }
-code_fence = { rgb = [150, 180, 200] }
-
-# Text formatting
-bold_fg = "White"
-italic_fg = { rgb = [180, 140, 200] }
-list_bullet = "Cyan"
-
-# Blockquotes
-blockquote_border = { rgb = [100, 100, 120] }
-blockquote_fg = { rgb = [150, 150, 170] }
-
-# Search highlighting
-search_match_bg = { rgb = [100, 100, 50] }
-search_match_fg = "White"
-search_current_bg = "Yellow"
-search_current_fg = "Black"
-```
+| Area | Fields |
+|------|--------|
+| Text | `background`, `foreground`, `bold_fg`, `italic_fg`, `list_bullet` |
+| Headings | `heading_1` to `heading_5` |
+| Borders and selection | `border_focused`, `border_unfocused`, `selection_bg`, `selection_fg`, `selection_indicator_fg`, `selection_indicator_bg`, `scrollbar_fg` |
+| Bars | `title_bar_fg`, `status_bar_bg`, `status_bar_fg`, `footer_bg` |
+| Code | `inline_code_fg`, `inline_code_bg`, `code_fence`, `code_block_bg` |
+| Quotes and tables | `blockquote_border`, `blockquote_fg`, `table_border` |
+| Links | `link_fg`, `link_selected_bg`, `link_selected_fg` |
+| Search | `search_match_bg`, `search_match_fg`, `search_current_bg`, `search_current_fg` |
+| Help and popups | `help_key_bg`, `help_key_fg`, `help_desc_fg` |
 
 </details>
 
-### Custom Code Blocks Theme
+### Keybindings
 
-Customize syntax highlighting in code blocks using Sublime Text `.tmTheme` files.
+Bind any key to any action, per mode. Sequences like `g g` work.
 
 ```toml
-[ui]
-code_theme = "base16-ocean.dark"  # Default theme
+[keybindings.Normal]
+"Ctrl+n" = "Next"
+"Ctrl+p" = "Previous"
+"g g" = "First"
+
+[keybindings.Interactive]
+"x" = "InteractiveActivate"
+
+[keybindings.Search]
+"Ctrl+n" = "NextMatch"
 ```
 
-**Built-in themes:** `base16-ocean.dark`, `base16-ocean.light`, `base16-eighties.dark`, `base16-mocha.dark`, `InspiredGitHub`, `Solarized (dark)`, `Solarized (light)`
+The modes are `Normal`, `Help`, `ThemePicker`, `Interactive`,
+`InteractiveTable`, `LinkFollow`, `LinkSearch`, `Search`, `DocSearch`,
+`CommandPalette`, `ConfirmDialog`, `CellEdit`, `FilePicker`, `FileSearch` and
+`ImageViewer`. The defaults in
+[`src/keybindings/defaults.rs`](src/keybindings/defaults.rs) name every action.
 
-**Using custom themes:**
+## Release binaries
 
-1. Create the `code-themes` directory next to your `config.toml` file
+| Platform | Archive |
+|----------|---------|
+| Linux x86_64 | `treemd-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux x86_64, static (musl, Alpine) | `treemd-x86_64-unknown-linux-musl.tar.gz` |
+| Linux ARM64 | `treemd-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux ARM64, static (musl, Alpine) | `treemd-aarch64-unknown-linux-musl.tar.gz` |
+| macOS x86_64 | `treemd-x86_64-apple-darwin.tar.gz` |
+| macOS ARM64 (Apple Silicon) | `treemd-aarch64-apple-darwin.tar.gz` |
+| Windows x86_64 | `treemd-x86_64-pc-windows-msvc.exe.zip` |
 
-2. Add your `.tmTheme` files to the directory
+Each archive holds the binary and `LICENSE`, and the `.tar.gz` archives the man
+page too. The glibc builds need glibc 2.28 or newer (RHEL 8, Debian 10, Ubuntu
+18.10); the musl builds need no glibc. The macOS binaries are signed with a
+Developer ID and notarized by Apple.
 
-3. Reference the theme by name (filename without extension):
-
-   ```toml
-   [ui]
-   code_theme = "MyCustomTheme"
-   ```
-
-### CLI Overrides
-
-Override settings for a single session:
+`SHA256SUMS` lists every archive's hash, and each archive has a signed build
+provenance attestation showing it was built by this repository's release
+workflow from the tagged commit:
 
 ```bash
-treemd --theme Dracula README.md
-treemd --color-mode 256 README.md
-treemd --color-mode rgb README.md
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify treemd-x86_64-unknown-linux-gnu.tar.gz --repo Epistates/treemd
 ```
+
+The archives are reproducible: the same binaries packaged by
+[`scripts/package-release.sh`](scripts/package-release.sh) with the same tar,
+gzip and zip give byte-identical archives.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) shows how each
+target is built.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a [Pull Request](https://github.com/epistates/treemd/pulls).
+Issues and pull requests are welcome. The project uses
+[just](https://github.com/casey/just) for its checks:
 
-## Roadmap
+```bash
+just gate        # format, lints, docs and every test: what CI runs
+just deny        # licenses and advisories, with cargo-deny
+just screenshots # every screen in every theme, as SVGs in target/screenshots
+```
 
-**Completed:**
-- [x] Query language (jq-like syntax)
-- [x] Stdin/pipe support
-- [x] 8 color themes
-- [x] Configuration file
-- [x] Link following with history
-- [x] WikiLinks support
-- [x] Customizable keybindings
-- [x] Live file watching (auto-reload)
-- [x] Obsidian and GitHub callouts
+`just screenshots` is the quickest way to review a UI change across themes, a
+narrow terminal and no-color mode. [CHANGELOG.md](CHANGELOG.md) has the history.
 
-**Planned:**
-- [ ] Fuzzy search improvements
-- [ ] Multiple file tabs
-- [ ] Custom query language plugins
+## Similar tools
 
-## Why treemd?
-
-| Feature | treemd | [`less`](https://linux.die.net/man/1/less) | [`glow`](https://github.com/charmbracelet/glow) | [`bat`](https://github.com/sharkdp/bat) |
-|---------|--------|------|------|-----|
-| Tree-based navigation | Yes | No | No | No |
-| Interactive exploration | Yes | Limited | No | No |
-| Syntax highlighting | Yes | No | Yes | Yes |
-| Markdown-aware | Yes | No | Yes | No |
-| Query language | Yes | No | No | No |
-| Edit tables/checkboxes | Yes | No | No | No |
-
-**treemd** understands markdown structure. Navigate documents like a file tree, drill into sections, search content, edit tables, and follow links—all from your terminal.
-
-## Similar Tools
-
-- [`tree`](https://linux.die.net/man/1/tree) — File tree explorer (inspiration for outline navigation)
-- [`glow`](https://github.com/charmbracelet/glow) — Beautiful markdown rendering (presentation-focused)
-- [`mdcat`](https://github.com/swsnr/mdcat) — Markdown rendering to terminal
-- [`bat`](https://github.com/sharkdp/bat) — Syntax highlighting pager
-- [`less`](https://linux.die.net/man/1/less) — Classic pager
-
-treemd combines the best of these: **tree-based exploration** + interactive navigation + comfortable reading + CLI scriptability.
-
-## Acknowledgements
-
-[![Built With Ratatui](https://img.shields.io/badge/Built_With_Ratatui-000?logo=ratatui&logoColor=fff)](https://ratatui.rs/)
+- [`glow`](https://github.com/charmbracelet/glow): renders markdown beautifully, with a file browser
+- [`mdcat`](https://github.com/swsnr/mdcat): prints rendered markdown to the terminal
+- [`bat`](https://github.com/sharkdp/bat): a syntax-highlighting pager
+- [`tree`](https://linux.die.net/man/1/tree): the directory listing whose shape the outline borrows
 
 ## License
 
 [MIT](LICENSE)
+
+[![Built With Ratatui](https://img.shields.io/badge/Built_With_Ratatui-000?logo=ratatui&logoColor=fff)](https://ratatui.rs/)

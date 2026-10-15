@@ -104,6 +104,31 @@ gate: fmt-check lint lint-minimal doc-check test test-minimal test-doc
 ci: gate deny release
     @echo "All CI checks passed."
 
+# Render every screen in every theme as SVG into DIR, for reviewing UI changes
+screenshots DIR="target/screenshots":
+    TREEMD_SCREENSHOTS={{DIR}} cargo test --quiet --lib screenshots -- --ignored
+
+# Regenerate the README images from the screenshots (needs rsvg-convert and
+# ImageMagick; the labels use macOS's Menlo)
+readme-images: (screenshots "target/screenshots")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=target/screenshots
+    rsvg-convert -z 2 "$dir/OceanDark-normal.svg" -o "$dir/hero.png"
+    magick "$dir/hero.png" -strip +dither -colors 256 PNG8:assets/screenshot.png
+    tiles=()
+    for theme in Nord:Nord Dracula:Dracula Gruvbox:Gruvbox \
+        CatppuccinMocha:"Catppuccin Mocha" Kanagawa:Kanagawa RosePine:"Rose Pine" \
+        CatppuccinLatte:"Catppuccin Latte" GitHubLight:"GitHub Light" SolarizedLight:"Solarized Light"; do
+        rsvg-convert "$dir/${theme%%:*}-normal.svg" -o "$dir/${theme%%:*}.png"
+        tiles+=(-label "${theme#*:}" "$dir/${theme%%:*}.png")
+    done
+    magick montage "${tiles[@]}" -tile 3x3 -geometry 1008x612+20+12 \
+        -background '#0d1117' -fill '#c9d1d9' \
+        -font /System/Library/Fonts/Menlo.ttc -pointsize 28 "$dir/themes.png"
+    magick "$dir/themes.png" -resize 50% -strip +dither -colors 256 PNG8:assets/themes.png
+    ls -lh assets/screenshot.png assets/themes.png
+
 # Quick test of link following feature
 test-links: install
     @echo "Testing link following feature..."

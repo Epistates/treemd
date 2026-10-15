@@ -8,7 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 /// Key column width for keybindings
-const KEY_COLUMN_WIDTH: usize = 11;
+const KEY_COLUMN_WIDTH: usize = 14;
 
 #[derive(Debug, Clone, Copy)]
 pub enum HelpLine {
@@ -26,11 +26,21 @@ pub enum HelpLine {
 }
 
 impl HelpLine {
+    /// The keys for `actions`: one action's first two keys (`o C-o`), or
+    /// the first key of each of several (`[/]`).
     fn format_action_keys(
         keybindings: &Keybindings,
         mode: KeybindingMode,
         actions: &'static [Action],
     ) -> String {
+        if let [action] = actions {
+            return keybindings
+                .keys_for_action(mode, *action)
+                .into_iter()
+                .take(2)
+                .collect::<Vec<String>>()
+                .join(" ");
+        }
         actions
             .iter()
             .filter_map(|action| {
@@ -141,125 +151,66 @@ const fn blank() -> HelpLine {
 }
 
 pub const HELP_LINES: &[HelpLine] = &[
-    // Title and instructions
-    title("treemd - Keyboard Shortcuts"),
-    description("Use j/k or ↓/↑ to scroll | Press Esc or ? to close"),
+    title("treemd keys"),
+    description("Remap any key in the config."),
     blank(),
-    // Navigation section
-    section("Navigation"),
-    keybinding(Normal, &[Next], "Move down"),
-    keybinding(Normal, &[Previous], "Move up"),
-    keybinding(Normal, &[First], "Jump to top"),
-    keybinding(Normal, &[Last], "Jump to bottom"),
-    keybinding(Normal, &[JumpToParent], "Jump to parent heading"),
-    keybinding(Normal, &[PageDown], "Page down (content)"),
-    keybinding(Normal, &[PageUp], "Page up (content)"),
+    section("Moving around"),
+    keybinding(Normal, &[Next], "Down"),
+    keybinding(Normal, &[Previous], "Up"),
+    keybinding(Normal, &[First], "First"),
+    keybinding(Normal, &[Last], "Last"),
+    keybinding(Normal, &[JumpToParent], "Parent heading"),
+    keybinding(Normal, &[PageDown], "Page down"),
+    keybinding(Normal, &[PageUp], "Page up"),
+    keybinding(Normal, &[ScrollDown, ScrollUp], "Scroll a line"),
+    keybinding(Normal, &[ToggleFocus], "Switch pane"),
+    keybinding(Normal, &[ToggleFocusBack], "Switch back"),
+    prefixed_keybinding("[N]", Normal, &[Next, Previous], "Move N, as in 5j"),
     blank(),
-    // Tree Operations
-    section("Tree Operations"),
-    keybinding(Normal, &[ToggleExpand], "Toggle expand/collapse"),
-    keybinding(Normal, &[Expand], "Expand heading"),
-    keybinding(Normal, &[Collapse], "Collapse (or parent if no children)"),
-    blank(),
-    // General
-    section("General"),
-    keybinding(Normal, &[ToggleFocus], "Switch between Outline and Content"),
-    keybinding(Normal, &[EnterDocSearch], "Search document content"),
-    keybinding(Normal, &[EnterSearchMode], "Filter outline headings"),
-    keybinding(Search, &[ExitMode], "Clear search"),
-    keybinding(Search, &[ConfirmAction], "Confirm search"),
-    keybinding(
-        Normal,
-        &[NextMatch, PrevMatch],
-        "Next/previous search match",
-    ),
-    keybinding(Normal, &[OpenFilePicker], "Open file picker"),
-    keybinding(Normal, &[ToggleRawSource], "Toggle raw source view"),
-    keybinding(
-        Normal,
-        &[ToggleMouseCapture],
-        "Toggle mouse capture (off to select/copy text)",
-    ),
-    keybinding(Normal, &[ToggleHelp], "Toggle this help"),
-    keybinding(Normal, &[Quit], "Quit"),
-    blank(),
-    // UX Features
-    section("UX Features"),
-    keybinding(
-        Normal,
-        &[ToggleOutline],
-        "Toggle outline visibility (full-width content)",
-    ),
+    section("Outline"),
+    keybinding(Normal, &[ToggleExpand], "Fold or unfold"),
+    keybinding(Normal, &[Expand], "Unfold"),
+    keybinding(Normal, &[Collapse], "Fold, or to parent"),
+    keybinding(Normal, &[ToggleOutline], "Hide the outline"),
     keybinding(
         Normal,
         &[OutlineWidthDecrease, OutlineWidthIncrease],
-        "Decrease/increase outline width (20%, 30%, 40%)",
+        "Outline width",
     ),
-    keybinding(
-        Normal,
-        &[OpenCommandPalette],
-        "Open command palette (fuzzy search commands)",
-    ),
-    prefixed_keybinding(
-        "[N]",
-        Normal,
-        &[Next, Previous],
-        "Move N items (vim count prefix, e.g., 5j)",
-    ),
-    keybinding(
-        Normal,
-        &[ToggleHeadingMarkers],
-        "Toggle heading markers in outline",
-    ),
-    keybinding(Normal, &[SetBookmark], "Set bookmark (shows ⚑ indicator)"),
-    keybinding(Normal, &[JumpToBookmark], "Jump to bookmarked position"),
+    keybinding(Normal, &[ToggleHeadingMarkers], "The # markers"),
+    keybinding(Normal, &[ToggleTodoFilter], "Open todos only"),
+    keybinding(Normal, &[SetBookmark], "Bookmark"),
+    keybinding(Normal, &[JumpToBookmark], "To the bookmark"),
     blank(),
-    // Link Following
-    section("Link Following"),
-    keybinding(Normal, &[EnterLinkFollowMode], "Enter link follow mode"),
-    keybinding(
-        LinkFollow,
-        &[NextLink],
-        "Cycle through links (in link mode)",
-    ),
-    prefixed_keybinding(
-        "[1-9]",
-        LinkFollow,
-        &[],
-        "Jump to link by number (in link mode)",
-    ),
-    keybinding(
-        LinkFollow,
-        &[FollowLink],
-        "Follow selected link (in link mode)",
-    ),
-    keybinding(
-        LinkFollow,
-        &[JumpToParent],
-        "Jump to parent's links (stay in link mode)",
-    ),
-    keybinding(Normal, &[GoBack], "Go back to previous file"),
-    keybinding(Normal, &[GoForward], "Go forward in navigation history"),
+    section("Search"),
+    keybinding(Normal, &[EnterDocSearch], "Search this section"),
+    keybinding(Normal, &[EnterSearchMode], "Filter headings"),
+    keybinding(Normal, &[NextMatch, PrevMatch], "Next/prev match"),
+    keybinding(Search, &[ToggleSearchMode], "Search or filter"),
+    keybinding(Search, &[ConfirmAction], "Keep the search"),
+    keybinding(Normal, &[ExitMode], "Clear it"),
     blank(),
-    // Interactive Mode
-    section("Interactive Mode"),
-    keybinding(
-        Normal,
-        &[EnterInteractiveMode],
-        "Enter interactive mode (navigate elements)",
-    ),
+    section("Links"),
+    keybinding(Normal, &[EnterLinkFollowMode], "Section's links"),
+    keybinding(LinkFollow, &[NextLink, PreviousLink], "Next/prev link"),
+    prefixed_keybinding("[1-9]", LinkFollow, &[], "Link by number"),
+    keybinding(LinkFollow, &[FollowLink], "Follow it"),
+    keybinding(LinkFollow, &[Action::LinkSearch], "Search the links"),
+    keybinding(LinkFollow, &[JumpToParent], "Parent's links"),
+    keybinding(Normal, &[GoBack], "Previous file"),
+    keybinding(Normal, &[GoForward], "Next file"),
+    blank(),
+    section("Interactive mode"),
+    keybinding(Normal, &[EnterInteractiveMode], "Select elements"),
     keybinding(
         Interactive,
         &[InteractiveNext, InteractivePrevious],
-        "Next/previous element",
+        "Next/prev element",
     ),
-    keybinding(Interactive, &[PageUp, PageDown], "Page up/down"),
-    keybinding(
-        Interactive,
-        &[InteractiveActivate],
-        "Activate element (toggle/follow/edit)",
-    ),
-    keybinding(Interactive, &[CopyContent], "Copy element (code/cell/link)"),
+    keybinding(Interactive, &[InteractiveActivate], "Use it"),
+    keybinding(Interactive, &[CopyContent], "Copy it"),
+    keybinding(Interactive, &[OpenInEditor], "Edit in editor"),
+    keybinding(Interactive, &[UndoEdit], "Undo cell edit"),
     keybinding(
         InteractiveTable,
         &[
@@ -268,44 +219,37 @@ pub const HELP_LINES: &[HelpLine] = &[
             InteractivePrevious,
             InteractiveRight,
         ],
-        "Navigate table cells (in table mode)",
+        "Move between cells",
     ),
-    keybinding(
-        InteractiveTable,
-        &[InteractiveActivate],
-        "Edit table cell (in table mode)",
-    ),
+    keybinding(InteractiveTable, &[InteractiveActivate], "Edit the cell"),
     keybinding(
         InteractiveTable,
         &[CopyTableCell, CopyTableRow, CopyTableMarkdown],
-        "Copy cell / row / table as markdown",
-    ),
-    keybinding(InteractiveTable, &[ExitMode], "Exit table navigation"),
-    blank(),
-    // Themes & Clipboard
-    section("Themes & Clipboard"),
-    keybinding(Normal, &[ToggleThemePicker], "Toggle theme picker"),
-    keybinding(
-        Normal,
-        &[CopyContent],
-        "Copy current section content (works in all modes)",
-    ),
-    keybinding(
-        Normal,
-        &[CopyAnchor],
-        "Copy anchor link (works in all modes)",
-    ),
-    keybinding(
-        Normal,
-        &[OpenInEditor],
-        "Edit file in default editor ($VISUAL or $EDITOR)",
+        "Cell/row/table",
     ),
     blank(),
-    // Note
-    note("On Linux, install a clipboard manager (clipit, parcellite, xclip) for best results"),
+    section("Images"),
+    keybinding(Interactive, &[InteractiveActivate], "View full screen"),
+    keybinding(ImageViewer, &[TogglePlayback], "Play or pause a GIF"),
+    keybinding(ImageViewer, &[PreviousFrame, NextFrame], "Step frames"),
     blank(),
-    // Footer
-    description("Use j/k or ↓/↑ to scroll | Press Esc or ? to close"),
+    section("View"),
+    keybinding(Normal, &[ToggleThemePicker], "Choose a theme"),
+    keybinding(Normal, &[ToggleRawSource], "Markdown source"),
+    keybinding(Normal, &[ToggleMouseCapture], "Mouse selects text"),
+    keybinding(Normal, &[OpenCommandPalette], "Command palette"),
+    keybinding(Normal, &[Redraw], "Redraw"),
+    blank(),
+    section("Files and clipboard"),
+    keybinding(Normal, &[OpenFilePicker], "Open a file"),
+    keybinding(Normal, &[OpenInEditor], "Edit in editor"),
+    keybinding(Normal, &[CopyContent], "Copy the section"),
+    keybinding(Normal, &[CopyAnchor], "Copy heading link"),
+    keybinding(Normal, &[Suspend], "Suspend (fg)"),
+    keybinding(Normal, &[ToggleHelp], "This help"),
+    keybinding(Normal, &[Quit], "Quit"),
+    blank(),
+    note("Linux: a clipboard manager keeps copies after quit"),
 ];
 
 /// Build the help text with theme colors applied
@@ -314,4 +258,35 @@ pub fn build_help_text(keybindings: &Keybindings, theme: &Theme) -> Vec<Line<'st
         .iter()
         .map(|line| line.to_line(keybindings, theme))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strum::IntoEnumIterator;
+
+    /// Every action the main view binds a key to is in the help. The help
+    /// left out the todo filter, line scrolling, and Shift+Tab, among others.
+    #[test]
+    fn help_lists_every_main_view_key() {
+        let keybindings = Keybindings::default();
+        let listed: Vec<Action> = HELP_LINES
+            .iter()
+            .filter_map(|line| match line {
+                HelpLine::KeyBinding {
+                    mode: Normal,
+                    actions,
+                    ..
+                } => Some(*actions),
+                _ => None,
+            })
+            .flatten()
+            .copied()
+            .collect();
+        let missing: Vec<Action> = Action::iter()
+            .filter(|action| !keybindings.keys_for_action(Normal, *action).is_empty())
+            .filter(|action| !listed.contains(action))
+            .collect();
+        assert!(missing.is_empty(), "not in the help: {missing:?}");
+    }
 }

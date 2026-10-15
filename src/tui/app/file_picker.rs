@@ -29,10 +29,17 @@ impl App {
     }
 
     /// Get the effective file picker directory (custom or cwd)
+    /// The directory the file picker lists: the one it was moved to, else
+    /// the open file's own, else the working directory. It used to be the
+    /// working directory even with a file open elsewhere.
     pub fn effective_picker_dir(&self) -> PathBuf {
-        self.file_picker_dir
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+        self.file_picker_dir.clone().unwrap_or_else(|| {
+            self.current_file_path
+                .parent()
+                .filter(|dir| self.current_file_path.is_file() && !dir.as_os_str().is_empty())
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+        })
     }
 
     /// Navigate file picker to the given directory, clearing search and resetting selection
