@@ -1,6 +1,6 @@
 [package]
 name = "treemd"
-version = "0.9.1"
+version = "0.10.0"
 edition = "2024"
 authors = ["epistates, inc. <nick@epistates.com>"]
 description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
@@ -12,8 +12,8 @@ homepage = "https://github.com/epistates/treemd"
 documentation = "https://docs.rs/treemd"
 readme = "README.md"
 rust-version = "1.90"
-# Keep the crates.io package small — excludes the demo GIF (4.3 MB), CI
-# config, and dev tooling
+# Keep the crates.io package small: no README images, CI config or dev
+# tooling. crates.io resolves the README's image links against `repository`.
 exclude = [
     "assets/",
     ".github/",

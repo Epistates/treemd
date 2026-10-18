@@ -4,6 +4,10 @@ use supports_color::{Stream, on};
 pub enum ColorMode {
     Rgb,        // True color (16M colors)
     Indexed256, // 256-color palette
+    /// No color: the terminal's own foreground and background, with bold,
+    /// underline and reverse video marking what color marked. Chosen by
+    /// `NO_COLOR` (<https://no-color.org>) or `--color-mode none`.
+    Mono,
 }
 
 #[derive(Debug)]
@@ -49,6 +53,15 @@ impl TerminalCapabilities {
                 ColorMode::Indexed256
             };
             (false, mode)
+        };
+
+        // NO_COLOR asks for no color unless the user picks otherwise; an
+        // explicit --color-mode or config color_mode still wins.
+        let recommended_color_mode = if std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
+        {
+            ColorMode::Mono
+        } else {
+            recommended_color_mode
         };
 
         Self {
@@ -140,18 +153,19 @@ impl TerminalCapabilities {
             return None;
         }
 
+        // Stdin is read a line at a time here, before raw mode, so it is
+        // Enter that continues. Every Darwin before 26 was called Sequoia.
         Some(format!(
-            "⚠️  Terminal Compatibility Notice\n\n\
-             Apple Terminal.app on macOS {} has limited RGB color support.\n\
-             Switching to 256-color mode for better compatibility.\n\n\
-             For the best experience, consider using:\n\
-             • iTerm2 (https://iterm2.com/)\n\
-             • Kitty (https://sw.kovidgoyal.net/kitty/)\n\
-             • Alacritty (https://alacritty.org/)\n\n\
-             Press any key to continue...",
+            "Terminal compatibility\n\n\
+             Apple Terminal{} shows only 256 colors, so treemd uses its\n\
+             256-color themes there.\n\n\
+             For full color, try iTerm2 (https://iterm2.com/),\n\
+             Kitty (https://sw.kovidgoyal.net/kitty/) or\n\
+             Ghostty (https://ghostty.org/).\n\n\
+             Press Enter to continue...",
             self.macos_version
-                .map(|v| format!("Sequoia (Darwin {})", v))
-                .unwrap_or_else(|| "< 26".to_string())
+                .map(|v| format!(" (Darwin {v})"))
+                .unwrap_or_default()
         ))
     }
 }

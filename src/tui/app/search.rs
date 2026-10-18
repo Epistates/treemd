@@ -42,6 +42,16 @@ impl App {
         true
     }
 
+    /// Why `n` or `N` did nothing: no search, or one with no matches.
+    fn report_no_matches(&mut self) {
+        let message = if self.doc_search.query.is_empty() {
+            "No search yet: / searches this section".to_string()
+        } else {
+            format!("No matches for \"{}\"", self.doc_search.query)
+        };
+        self.set_status_message(&message);
+    }
+
     pub fn toggle_search(&mut self) {
         match self.outline_search {
             // If actively typing in search, toggle it off (clear and hide)
@@ -326,6 +336,7 @@ impl App {
         }
 
         if self.doc_search.matches.is_empty() {
+            self.report_no_matches();
             return;
         }
 
@@ -346,6 +357,7 @@ impl App {
         }
 
         if self.doc_search.matches.is_empty() {
+            self.report_no_matches();
             return;
         }
 

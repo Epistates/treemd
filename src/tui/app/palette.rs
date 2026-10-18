@@ -133,24 +133,6 @@ pub(super) fn contains_ignore_ascii_case(haystack: &str, needle_lower: &str) -> 
 /// All available commands
 pub const PALETTE_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand::new(
-        "Save changes",
-        &["w", "write", "save"],
-        "Save pending edits to file",
-        CommandAction::SaveFile,
-    ),
-    PaletteCommand::new(
-        "Undo edit",
-        &["u", "undo"],
-        "Undo last table cell edit",
-        CommandAction::Undo,
-    ),
-    PaletteCommand::new(
-        "Save width to config",
-        &["sw", "savewidth"],
-        "Save current outline width to config file",
-        CommandAction::SaveWidth,
-    ),
-    PaletteCommand::new(
         "Toggle outline",
         &["outline", "sidebar"],
         "Show/hide the outline sidebar",
@@ -306,6 +288,25 @@ pub const PALETTE_COMMANDS: &[PaletteCommand] = &[
         "Go forward in navigation history",
         CommandAction::Dispatch(Action::GoForward),
     ),
+    // Editing comes last: most sessions only read.
+    PaletteCommand::new(
+        "Save changes",
+        &["w", "write", "save"],
+        "Save pending edits to file",
+        CommandAction::SaveFile,
+    ),
+    PaletteCommand::new(
+        "Undo edit",
+        &["u", "undo"],
+        "Undo last table cell edit",
+        CommandAction::Undo,
+    ),
+    PaletteCommand::new(
+        "Save width to config",
+        &["sw", "savewidth"],
+        "Save current outline width to config file",
+        CommandAction::SaveWidth,
+    ),
     PaletteCommand::new(
         "Quit",
         &["q", "quit", "exit"],
@@ -420,7 +421,10 @@ impl App {
             self.command_palette.query.clear();
             self.execute_command_action(action, &query)
         } else {
+            // Enter on an empty list closed the palette and did nothing.
+            let query = std::mem::take(&mut self.command_palette.query);
             self.mode = AppMode::Normal;
+            self.set_status_message(&format!("No command matches \"{query}\""));
             ActionResult::Continue
         }
     }

@@ -2,8 +2,8 @@
 
 A jq-like query language for navigating and extracting markdown structure.
 Results print one per line. A selector that matches nothing prints nothing and
-exits `0`. A query that does not parse exits `3`, and one that fails while
-running exits `5`.
+exits `0`; `-e` makes that exit `1`. A query that does not parse exits `3`, and
+one that fails while running exits `5`.
 
 ## Element Selectors
 
@@ -77,6 +77,11 @@ lists, paragraphs and blockquotes.
 A heading's `.content` and `.md` include its subsections. `.line` is the
 heading's own line, the same number `-l -n` prints. `.children` is the array
 of headings directly under it; `.parent` is the heading above it, or `null`.
+`.slug` and `slugify` follow the `content.slug_style` config (`treemd` by
+default, or `github`, which also numbers repeated headings in `.slug`).
+
+Asking an element for a property it does not have is an error; a missing key on
+an object or front matter is `null`.
 
 ## Pipes and Streams
 
@@ -177,7 +182,7 @@ the whole document.
 | `<`, `<=`, `>`, `>=` | Compare; across types, jq's order (null < bool < number < string < array < object) |
 | `and`, `or`, `not`   | Logic; `not .level == 2` is `not (.level == 2)`             |
 | `+ - * / %`          | Arithmetic as in jq: `+` joins strings, arrays and objects, `-` removes array items, `/` splits a string. Other types are an error (exit `5`); `"x" + (.level \| tostring)` |
-| `a // b`             | `a`, or `b` when `a` is null, false, `0` or empty           |
+| `a // b`             | `a`, or `b` when `a` is null, false, `0` or empty; binds tighter than a comparison, unlike jq |
 
 ## Construction & Conditionals
 
@@ -194,7 +199,10 @@ whole queries (`.h1, .h2`); it is not allowed inside parentheses.
 
 `--query-output json` and `json-pretty` always print an array, `[]` for no
 results, even when a query returns one value. `jsonl` prints one value per
-line. Every element carries a `type` field.
+line. Every element carries a `type` field. A query that returns one array,
+such as `[.h2 | text]`, prints `[[...]]`, so take `.[0]` in `jq`.
+
+`-o` belongs to `--list` and `--tree` and is a usage error (exit `2`) with `-q`.
 
 ## Examples
 

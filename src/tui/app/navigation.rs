@@ -59,12 +59,17 @@ impl App {
         // Extract all links from the content
         self.links_in_view = extract_links(&content);
 
+        // With nothing to follow, say so and stay put. The mode used to open
+        // on an empty list, its footer offering to follow and copy nothing.
+        if self.links_in_view.is_empty() {
+            self.set_status_message("No links in this section");
+            return;
+        }
+
         // Initialize filtered indices to show all links
         self.link_picker.filtered_indices = (0..self.links_in_view.len()).collect();
         self.link_picker.query.clear();
         self.link_picker.active = false;
-
-        // Always enter mode, even if no links (so user sees "no links" message)
         self.mode = AppMode::LinkFollow;
 
         // Select first link if any exist

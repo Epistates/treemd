@@ -123,7 +123,7 @@ fn main() -> Result<()> {
     } else {
         let picker_placeholder = || {
             treemd::input::InputSource::Stdin(
-                "# Select a file\n\nPress Enter to select a markdown file.".to_string(),
+                "# Select a file\n\nPress o to open a markdown file.".to_string(),
             )
         };
         let cli_mode = !launches_tui(&args);
@@ -252,6 +252,17 @@ fn main() -> Result<()> {
 
         // Apply theme override from CLI if provided
         if let Some(ref theme_name) = args.theme {
+            // A misspelled name used to fall back to Ocean Dark in silence.
+            if theme_name.parse::<treemd::tui::theme::ThemeName>().is_err() {
+                let names: Vec<&str> = treemd::tui::theme::ThemeName::all()
+                    .map(|name| name.config_name())
+                    .collect();
+                eprintln!(
+                    "error: unknown theme '{theme_name}'; themes are {}",
+                    names.join(", ")
+                );
+                process::exit(2);
+            }
             config.ui.theme = theme_name.clone();
         }
 
@@ -266,6 +277,7 @@ fn main() -> Result<()> {
                 ColorModeArg::Auto => caps.recommended_color_mode,
                 ColorModeArg::Rgb => ColorMode::Rgb,
                 ColorModeArg::Color256 => ColorMode::Indexed256,
+                ColorModeArg::None => ColorMode::Mono,
             }
         } else {
             // Check config file setting before falling back to auto-detection
@@ -273,6 +285,7 @@ fn main() -> Result<()> {
             match config.terminal.color_mode.as_str() {
                 "rgb" => ColorMode::Rgb,
                 "256" => ColorMode::Indexed256,
+                "none" => ColorMode::Mono,
                 // "auto" or any other value falls back to detection
                 _ => caps.recommended_color_mode,
             }
