@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.10.0] - 2026-10-15
+## [0.10.0] - 2026-10-18
 
 The TUI is redesigned: seventeen themes held to WCAG contrast, nine of them new and three light, a footer that shows the keys for whatever is open, a mouse that works on the pane under it, and a no-color mode for `NO_COLOR`.
 
