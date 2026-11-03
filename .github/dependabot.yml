@@ -1,23 +1,30 @@
 version: 2
 
+# One weekly PR for every ecosystem, so a batch of dependency changes costs one
+# CI run. Pre-1.0 minor bumps are breaking (resvg 0.47 -> 0.48 swapped its whole
+# text-shaping backend), so read the PR before merging it; or treat it as the
+# signal to update everything locally and run `just ci` once.
+multi-ecosystem-groups:
+  all-deps:
+    schedule:
+      interval: weekly
+
 updates:
   - package-ecosystem: cargo
     directory: "/"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-    groups:
-      # Patch bumps are the only ones Cargo treats as compatible for both 1.0+
-      # and pre-1.0 crates, so they can land as one PR. Minor bumps stay on
-      # their own: for a pre-1.0 dependency a minor bump is a breaking change
-      # (resvg 0.47 -> 0.48 swapped its whole text-shaping backend), and it
-      # needs an isolated CI run to be worth anything.
-      cargo-patch:
-        update-types:
-          - "patch"
+    multi-ecosystem-group: all-deps
+    patterns:
+      - "*"
+    ignore:
+      # 0.2.3 reports U+FF9E and U+FF9F as width 1, so the +1 for halfwidth
+      # sound marks in terminal_width and in ratatui-core counts them twice.
+      # Drop this once ratatui adjusts.
+      - dependency-name: unicode-width
+        versions:
+          - ">= 0.2.3"
 
   - package-ecosystem: github-actions
     directory: "/"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
+    multi-ecosystem-group: all-deps
+    patterns:
+      - "*"
