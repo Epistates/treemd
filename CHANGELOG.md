@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`theme = "auto"` picks the light or dark theme from the terminal's background** (#99). treemd asks the terminal for its colors at startup, with an OSC 11 query through the `terminal-colorsaurus` crate, and uses `ui.theme_light` (default `GitHubLight`) on a light background and `ui.theme_dark` (default `OceanDark`) on a dark one. `--theme auto` does the same for one run. It is off by default, so nothing changes for anyone who does not set it. When the terminal does not answer within half a second (output not a terminal, `TERM=dumb`, GNU screen, a slow link) the dark theme is used, as before. The answer is read once at startup. Choosing a theme with `t` saves that theme in place of `auto`.
+
 ## [0.10.0] - 2026-10-18
 
 The TUI is redesigned: seventeen themes held to WCAG contrast, nine of them new and three light, a footer that shows the keys for whatever is open, a mouse that works on the pane under it, and a no-color mode for `NO_COLOR`.

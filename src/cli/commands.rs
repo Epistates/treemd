@@ -174,6 +174,10 @@ pub struct Cli {
     /// Override the saved theme preference. Available themes:
     /// OceanDark, Nord, Dracula, Solarized, Monokai, Gruvbox, TokyoNight, CatppuccinMocha, OneDark, RosePine, Kanagawa, Everforest, GitHubDark, CatppuccinLatte, SolarizedLight, GitHubLight, Terminal
     ///
+    /// `auto` asks the terminal for its background and picks `theme_light` or
+    /// `theme_dark` from the config (GitHubLight and OceanDark by default),
+    /// OceanDark if the terminal does not answer.
+    ///
     /// Example: --theme Nord
     #[arg(long = "theme", value_name = "THEME")]
     pub theme: Option<String>,
