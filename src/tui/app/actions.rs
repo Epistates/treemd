@@ -89,9 +89,7 @@ impl App {
             Quit => {
                 // If in accepted outline search state, clear search instead of quitting
                 if self.outline_search.is_on() {
-                    self.search_query.clear();
-                    self.filter_outline();
-                    self.outline_search = OutlineSearch::Off;
+                    self.clear_outline_search();
                 } else if self.has_unsaved_changes() {
                     // Prompt to save before quitting
                     self.mode = AppMode::ConfirmSaveBeforeQuit;
@@ -201,6 +199,7 @@ impl App {
             // === Outline ===
             Expand => self.expand(),
             Collapse => self.collapse(),
+            ToggleExpand if self.is_outline_popup_open() => self.close_outline_popup(true),
             ToggleExpand => self.toggle_expand(),
             ToggleFocus => self.toggle_focus(),
             ToggleFocusBack => self.toggle_focus_back(),
@@ -524,9 +523,12 @@ impl App {
 
         // Handle outline search - clear everything
         if self.outline_search.is_on() {
-            self.search_query.clear();
-            self.filter_outline();
-            self.outline_search = OutlineSearch::Off;
+            self.clear_outline_search();
+            return;
+        }
+
+        if self.is_outline_popup_open() {
+            self.close_outline_popup(false);
             return;
         }
 

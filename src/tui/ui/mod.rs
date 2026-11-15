@@ -77,7 +77,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     const MIN_TOTAL_WIDTH: u16 = MIN_OUTLINE_WIDTH + MIN_CONTENT_WIDTH;
 
     // Decide whether to show outline based on terminal width
-    let effective_show_outline = app.show_outline && content_area.width >= MIN_TOTAL_WIDTH;
+    let effective_show_outline =
+        app.show_outline && !app.outline_popup && content_area.width >= MIN_TOTAL_WIDTH;
 
     let content_chunks = if effective_show_outline {
         let content_width = 100 - app.outline_width;
@@ -104,6 +105,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else {
         // Full-width content
         render_content(frame, app, content_chunks[0]);
+    }
+
+    if app.is_outline_popup_open() {
+        render_outline_popup(frame, app, content_area);
     }
 
     // Render status bar at bottom
@@ -320,6 +325,24 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// The outline as a popup centered over the content, sized to its headings.
+fn render_outline_popup(frame: &mut Frame, app: &mut App, content_area: Rect) {
+    let rows = u16::try_from(app.outline_items.len()).unwrap_or(u16::MAX);
+    let max = util::popup_area(content_area, 60, 80, 30, 5);
+    let height = rows
+        .saturating_add(2)
+        .clamp(5, max.height.max(5))
+        .min(content_area.height);
+    let area = Rect {
+        y: content_area.y + (content_area.height - height) / 2,
+        height,
+        ..max
+    };
+    app.pane_areas.outline = Some(area);
+    frame.render_widget(Clear, area);
+    render_outline(frame, app, area);
+}
+
 fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
     use crate::tui::app::DOCUMENT_OVERVIEW;
     use util::build_highlighted_line;
@@ -428,6 +451,7 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     let view = content_view(app, &theme, text_area.width);
     app.content_height = view.rows.len();
     app.apply_element_scroll();
+    app.apply_popup_scroll();
 
     // Clamp scroll so we stop when last line reaches viewport bottom
     let max_scroll = app.max_content_scroll();
@@ -445,6 +469,20 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
         .block(block)
         .style(theme.content_style());
     frame.render_widget(paragraph, area);
+
+    // The section chosen in the outline popup, or just jumped to
+    if let Some(rows) = app.section_highlight_rows() {
+        for row in rows.start.max(start)..rows.end.min(end) {
+            let line = Rect {
+                y: text_area.y + (row - start) as u16,
+                height: 1,
+                ..text_area
+            };
+            frame
+                .buffer_mut()
+                .set_style(line, theme.section_highlight_style());
+        }
+    }
 
     // Render inline images (first image in content)
     render_inline_images(frame, app, text_area);
@@ -1214,6 +1252,13 @@ fn footer_hints(app: &App) -> Vec<Hint> {
             Keys(M::Normal, &[ExitMode], "clear"),
         ],
         M::Normal => match app.focus {
+            Focus::Outline if app.is_outline_popup_open() => vec![
+                Keys(M::Normal, &[Next, Previous], "move"),
+                Keys(M::Normal, &[ToggleExpand], "jump"),
+                Keys(M::Normal, &[Collapse, Expand], "fold"),
+                Keys(M::Normal, &[EnterSearchMode], "filter"),
+                Keys(M::Normal, &[ToggleFocus, ExitMode], "close"),
+            ],
             Focus::Outline => vec![
                 Keys(M::Normal, &[Next, Previous], "move"),
                 Keys(M::Normal, &[ToggleExpand], "fold"),
@@ -3545,6 +3590,137 @@ mod screen_tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    fn popup_app_with(md: &str) -> App {
+        let mut config = crate::Config::default();
+        config.ui.outline_popup = true;
+        App::new(
+            crate::parser::parse_markdown(md),
+            "t.md".into(),
+            std::path::PathBuf::from("<stdin>"),
+            config,
+            ColorMode::Rgb,
+            false,
+        )
+    }
+
+    /// Moving in the outline popup scrolls the whole document to the heading,
+    /// with some of what comes before it above and its section highlighted;
+    /// Enter keeps it there, highlighted for a moment longer.
+    #[test]
+    fn the_outline_popup_scrolls_to_a_heading_with_context_and_highlights_it() {
+        let mut md = String::new();
+        for section in ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"] {
+            md.push_str(&format!("# {section}\n\n"));
+            for line in 0..20 {
+                md.push_str(&format!("{section} line {line}\n\n"));
+            }
+        }
+        let mut app = popup_app_with(&md);
+        draw(&mut app, 80, 30);
+
+        app.execute_action(Action::ToggleOutline);
+        draw(&mut app, 80, 30);
+        // The popup opens on the heading at the top of the screen
+        assert_eq!(app.selected_heading_text(), Some("Alpha"));
+        app.execute_action(Action::Next);
+        app.execute_action(Action::Next);
+        assert_eq!(app.selected_heading_text(), Some("Gamma"));
+        draw(&mut app, 80, 30);
+        // While choosing, the section behind the popup is highlighted, untimed
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let preview: Vec<String> = (0..30)
+            .map(|y| {
+                (0..80)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+        let gamma = preview
+            .iter()
+            .position(|row| row.trim_start_matches('│').trim().starts_with("Gamma"))
+            .expect("Gamma behind the popup");
+        assert_eq!(
+            terminal.backend().buffer()[(2, gamma as u16)].bg,
+            app.theme.search_match_bg
+        );
+        assert_eq!(app.section_highlight_expires_in(), None);
+        // The whole document, scrolled so Gamma sits a little below the top
+        let row_of = |screen: &[String], text: &str| {
+            screen
+                .iter()
+                .position(|row| row.trim_start_matches('│').trim().starts_with(text))
+        };
+        app.execute_action(Action::ToggleExpand);
+        let screen = draw(&mut app, 80, 30);
+        let gamma = row_of(&screen, "Gamma").expect("Gamma on screen");
+        assert!(gamma > 3, "context above Gamma:\n{}", screen.join("\n"));
+        assert!(
+            screen[..gamma].iter().any(|row| row.contains("Beta line")),
+            "Beta's text above Gamma:\n{}",
+            screen.join("\n")
+        );
+
+        // Highlighted, in translucent yellow, for a moment
+        assert!(app.section_highlight_expires_in().is_some());
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let x = screen[gamma]
+            .find("Gamma")
+            .map(|b| screen[gamma][..b].chars().count())
+            .unwrap();
+        assert_eq!(
+            buffer[(x as u16, gamma as u16)].bg,
+            app.theme.search_match_bg
+        );
+    }
+
+    /// The whole section is highlighted: its text and subsections, not what
+    /// comes before it or the next heading at its level.
+    #[test]
+    fn the_outline_popup_highlights_the_whole_section() {
+        let mut app =
+            popup_app_with("# A\n\nbefore\n\n# B\n\nbody\n\n## B1\n\nsub\n\n# C\n\nafter\n");
+        draw(&mut app, 80, 30);
+        app.execute_action(Action::ToggleOutline);
+        assert_eq!(app.selected_heading_text(), Some("A"));
+        app.execute_action(Action::Next);
+        assert_eq!(app.selected_heading_text(), Some("B"));
+        draw(&mut app, 80, 30);
+        app.execute_action(Action::ToggleExpand);
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let tinted = |text: &str| {
+            let y = (0..30u16)
+                .find(|&y| {
+                    let row: String = (0..80)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect();
+                    row.trim_start_matches('│').trim().starts_with(text)
+                })
+                .unwrap_or_else(|| panic!("{text} on screen"));
+            buffer[(2, y)].bg == app.theme.search_match_bg
+        };
+        assert!(tinted("B") && tinted("body") && tinted("B1") && tinted("sub"));
+        assert!(!tinted("before") && !tinted("C") && !tinted("after"));
+    }
+
+    /// Esc leaves no section highlighted.
+    #[test]
+    fn escaping_the_outline_popup_clears_the_highlight() {
+        let mut app = popup_app_with("# A\n\na\n\n# B\n\nb\n");
+        draw(&mut app, 80, 30);
+        app.execute_action(Action::ToggleOutline);
+        app.execute_action(Action::Next);
+        draw(&mut app, 80, 30);
+        assert!(app.section_highlight_rows().is_some());
+        app.execute_action(Action::ExitMode);
+        draw(&mut app, 80, 30);
+        assert!(app.section_highlight_rows().is_none());
     }
 
     fn long_paragraph(words: usize) -> String {
