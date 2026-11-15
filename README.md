@@ -216,7 +216,8 @@ section, `y` is quicker.
 Images render with the terminal's graphics protocol (kitty, iTerm2 or Sixel),
 and as half blocks where there isn't one. `Enter` on one in interactive mode
 shows it full screen, and animated GIFs play. On Linux and macOS, Mermaid
-diagrams render as images too. `--no-images` or `images.enabled = false` turns
+diagrams render as images too, in the theme's light or dark colors, and
+scroll with the text. `--no-images` or `images.enabled = false` turns
 images off.
 
 ## Themes

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mermaid diagrams follow the theme**, drawn in dark colors on a dark theme and light on a light one, and redrawn when the theme changes between them
+
+### Fixed
+
+- **Mermaid diagrams scroll with the text.** A diagram vanished as soon as its top scrolled off, and every scroll step that changed how much of it was visible resized, re-encoded and sent it to the terminal again. A diagram is now encoded once, on the diagram thread, and placed by row: through kitty's Unicode placeholders it is sent once and moves as text, with the rows above the pane cut off
+- **Diagrams are sent compressed and no larger than the screen.** Through tmux a full-width diagram was tens of megabytes of raw pixels, which held up the UI while it was written and sometimes never appeared. Kitty's `o=z` compression is used where the terminal answers for it, and a diagram is fitted to the pane's height: a diagram that took 10.5 MB takes 0.34 MB
+
 ## [0.10.0] - 2026-10-18
 
 The TUI is redesigned: seventeen themes held to WCAG contrast, nine of them new and three light, a footer that shows the keys for whatever is open, a mouse that works on the pane under it, and a no-color mode for `NO_COLOR`.
