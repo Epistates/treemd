@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Mermaid diagrams scroll with the text.** A diagram vanished as soon as its top scrolled off, and every scroll step that changed how much of it was visible resized, re-encoded and sent it to the terminal again. A diagram is now encoded once, on the diagram thread, and placed by row: through kitty's Unicode placeholders it is sent once and moves as text, with the rows above the pane cut off
 - **Diagrams are sent compressed and no larger than the screen.** Through tmux a full-width diagram was tens of megabytes of raw pixels, which held up the UI while it was written and sometimes never appeared. Kitty's `o=z` compression is used where the terminal answers for it, and a diagram is fitted to the pane's height: a diagram that took 10.5 MB takes 0.34 MB
+- **Images stay visible inside tmux.** A diagram could stay blank, or lose most of itself while scrolling, until something made tmux redraw. tmux drops the combining characters that tell the terminal which image row a kitty placeholder cell is when it passes cells on one by one, though it keeps them in its copy of the screen. Each frame is now one synchronized update (mode 2026), at the end of which tmux redraws the pane in full, marks included; in the same setup, scrolling text also sends a quarter of the bytes it did
 
 ## [0.10.0] - 2026-10-18
 
