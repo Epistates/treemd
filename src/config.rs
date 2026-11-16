@@ -81,6 +81,11 @@ pub struct UiConfig {
     /// Show heading level markers (e.g. ##, ###) in the outline sidebar (default: true)
     #[serde(default = "default_outline_heading_markers")]
     pub outline_heading_markers: bool,
+
+    /// Show the outline as a popup over the content, opened with the outline
+    /// toggle, instead of as a sidebar (default: false)
+    #[serde(default)]
+    pub outline_popup: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -323,6 +328,7 @@ impl Default for UiConfig {
             outline_width: default_outline_width(),
             tree_style: default_tree_style(),
             outline_heading_markers: default_outline_heading_markers(),
+            outline_popup: false,
         }
     }
 }

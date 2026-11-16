@@ -78,6 +78,12 @@ The outline is on the left and the selected section on the right. `Tab`
 switches between them. Move through the outline with `j`/`k` and fold with
 `Enter`, or hide it with `w` and read the content alone.
 
+With `outline_popup = true` the content takes the full width and shows the
+whole document, and `Tab` (or `w`) opens the outline as a popup in the
+middle of the screen. Moving through it scrolls the document to each heading, with what
+comes before it still in view and the section highlighted. `Enter` stays
+there, `Esc` goes back.
+
 `/` searches the current section and `s` filters the outline. `f` lists the
 section's links and follows one by number. `i` steps through the section's
 elements one at a time: checkboxes, tables, links, code blocks, images and
@@ -333,6 +339,7 @@ theme = "OceanDark"             # see Themes
 code_theme = "auto"             # follows the theme; or a syntect theme name
 outline_width = 30              # 20, 30 or 40
 outline_heading_markers = true  # the # markers in the outline
+outline_popup = false           # the outline as a popup over the whole document
 tree_style = "compact"          # "compact" or "spaced", for --tree
 
 [terminal]

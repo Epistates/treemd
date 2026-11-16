@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The outline as a popup** (`ui.outline_popup = true`). The content takes the full width and shows the whole document; `Tab` or `w` opens the outline centered over it. Moving through the outline scrolls the document to each heading, a quarter of the screen below the top so what leads to it stays in view, and highlights its section. `Enter` stays there, the highlight lasting a moment longer; `Tab` or `Esc` goes back to where the document was. The sidebar is unchanged and stays the default
+
 ## [0.10.0] - 2026-10-18
 
 The TUI is redesigned: seventeen themes held to WCAG contrast, nine of them new and three light, a footer that shows the keys for whatever is open, a mouse that works on the pane under it, and a no-color mode for `NO_COLOR`.
