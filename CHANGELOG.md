@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The outline as a popup** (`ui.outline_popup = true`). The content takes the full width and shows the whole document; `Tab` or `w` opens the outline centered over it. Moving through the outline scrolls the document to each heading, a quarter of the screen below the top so what leads to it stays in view, and highlights its section. `Enter` stays there, the highlight lasting a moment longer; `Tab` or `Esc` goes back to where the document was. The sidebar is unchanged and stays the default
 - **Mermaid diagrams follow the theme**, drawn in dark colors on a dark theme and light on a light one, and redrawn when the theme changes between them
+- **`theme = "auto"` picks the light or dark theme from the terminal's background** (#99). treemd asks the terminal for its colors at startup, with an OSC 11 query through the `terminal-colorsaurus` crate, and uses `ui.theme_light` (default `GitHubLight`) on a light background and `ui.theme_dark` (default `OceanDark`) on a dark one. `--theme auto` does the same for one run. It is off by default, so nothing changes for anyone who does not set it. When the terminal does not answer within half a second (output not a terminal, `TERM=dumb`, GNU screen, a slow link) the dark theme is used, as before. The answer is read once at startup. Choosing a theme with `t` saves that theme in place of `auto`.
 
 ### Fixed
 

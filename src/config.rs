@@ -22,6 +22,12 @@ pub struct Config {
     #[serde(skip)]
     baseline: Option<toml::Table>,
 
+    /// Whether the terminal's background looked light, which `theme = "auto"`
+    /// follows. `None` when it has not been asked or did not answer. Never
+    /// saved: the config keeps `auto`, not the theme it came to.
+    #[serde(skip)]
+    background_is_light: Option<bool>,
+
     #[serde(default)]
     pub ui: UiConfig,
 
@@ -65,8 +71,19 @@ pub struct SecurityConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
+    /// A theme name, or `auto` to take `theme_light` or `theme_dark` from the
+    /// terminal's background.
     #[serde(default = "default_theme")]
     pub theme: String,
+
+    /// The theme `auto` picks on a light background.
+    #[serde(default = "default_theme_light")]
+    pub theme_light: String,
+
+    /// The theme `auto` picks on a dark background, and when the terminal
+    /// does not say.
+    #[serde(default = "default_theme_dark")]
+    pub theme_dark: String,
 
     #[serde(default = "default_code_theme")]
     pub code_theme: String,
@@ -324,6 +341,8 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             theme: default_theme(),
+            theme_light: default_theme_light(),
+            theme_dark: default_theme_dark(),
             code_theme: default_code_theme(),
             outline_width: default_outline_width(),
             tree_style: default_tree_style(),
@@ -350,8 +369,19 @@ impl Default for TerminalConfig {
     }
 }
 
+/// The `theme` value that follows the terminal's background.
+pub const AUTO_THEME: &str = "auto";
+
 fn default_theme() -> String {
-    "OceanDark".to_string()
+    ThemeName::OceanDark.config_name().to_string()
+}
+
+fn default_theme_light() -> String {
+    ThemeName::GitHubLight.config_name().to_string()
+}
+
+fn default_theme_dark() -> String {
+    ThemeName::OceanDark.config_name().to_string()
 }
 
 fn default_code_theme() -> String {
@@ -522,8 +552,29 @@ impl Config {
         Ok(())
     }
 
-    /// The configured theme, `OceanDark` when the name is not one.
+    /// Whether `theme` is `auto`, which follows the terminal's background.
+    pub fn theme_is_auto(&self) -> bool {
+        self.ui.theme.eq_ignore_ascii_case(AUTO_THEME)
+    }
+
+    /// Record whether the terminal's background is light, for `auto`. `None`
+    /// means the terminal did not say, which gets the dark theme.
+    pub fn set_background_is_light(&mut self, light: Option<bool>) {
+        self.background_is_light = light;
+    }
+
+    /// The configured theme, `OceanDark` when the name is not one. With
+    /// `auto`, `theme_light` on a light background (`GitHubLight` if that is
+    /// not a theme) and `theme_dark` otherwise.
     pub fn theme_name(&self) -> ThemeName {
+        if self.theme_is_auto() {
+            let (name, fallback) = if self.background_is_light == Some(true) {
+                (&self.ui.theme_light, ThemeName::GitHubLight)
+            } else {
+                (&self.ui.theme_dark, ThemeName::OceanDark)
+            };
+            return name.parse().unwrap_or(fallback);
+        }
         self.ui.theme.parse().unwrap_or(ThemeName::OceanDark)
     }
 
@@ -713,6 +764,112 @@ mod tests {
         let mut c = Config::default();
         c.ui.theme = "Nonexistent".into();
         assert_eq!(c.theme_name(), ThemeName::OceanDark);
+    }
+
+    #[test]
+    fn the_default_theme_is_not_auto() {
+        let c = Config::default();
+        assert!(!c.theme_is_auto());
+        assert_eq!(c.theme_name(), ThemeName::OceanDark);
+        // Whatever the terminal says, a named theme stays.
+        let mut c = c;
+        c.set_background_is_light(Some(true));
+        assert_eq!(c.theme_name(), ThemeName::OceanDark);
+    }
+
+    #[test]
+    fn auto_follows_the_terminal_background() {
+        let mut c = Config::default();
+        c.ui.theme = "auto".into();
+        assert!(c.theme_is_auto());
+
+        c.set_background_is_light(Some(true));
+        assert_eq!(c.theme_name(), ThemeName::GitHubLight);
+        c.set_background_is_light(Some(false));
+        assert_eq!(c.theme_name(), ThemeName::OceanDark);
+    }
+
+    /// Under tmux, over SSH, with output piped: the terminal does not answer
+    /// and the dark default stays, as it was before `auto` existed.
+    #[test]
+    fn auto_without_an_answer_is_the_dark_theme() {
+        let mut c = Config::default();
+        c.ui.theme = "auto".into();
+        assert_eq!(c.theme_name(), ThemeName::OceanDark);
+        c.set_background_is_light(None);
+        assert_eq!(c.theme_name(), ThemeName::OceanDark);
+    }
+
+    #[test]
+    fn auto_uses_the_configured_pair() {
+        let mut c = Config::default();
+        c.ui.theme = "AUTO".into();
+        c.ui.theme_light = "SolarizedLight".into();
+        c.ui.theme_dark = "Nord".into();
+
+        c.set_background_is_light(Some(true));
+        assert_eq!(c.theme_name(), ThemeName::SolarizedLight);
+        c.set_background_is_light(Some(false));
+        assert_eq!(c.theme_name(), ThemeName::Nord);
+        // No answer is the dark side of the pair, not OceanDark.
+        c.set_background_is_light(None);
+        assert_eq!(c.theme_name(), ThemeName::Nord);
+    }
+
+    #[test]
+    fn auto_with_a_misspelled_pair_uses_the_defaults() {
+        let mut c = Config::default();
+        c.ui.theme = "auto".into();
+        c.ui.theme_light = "Nope".into();
+        c.ui.theme_dark = "Nope".into();
+
+        c.set_background_is_light(Some(true));
+        assert_eq!(c.theme_name(), ThemeName::GitHubLight);
+        c.set_background_is_light(Some(false));
+        assert_eq!(c.theme_name(), ThemeName::OceanDark);
+    }
+
+    #[test]
+    fn the_default_pair_is_one_light_and_one_dark_theme() {
+        let c = Config::default();
+        assert!(c.ui.theme_light.parse::<ThemeName>().unwrap().is_light());
+        assert!(!c.ui.theme_dark.parse::<ThemeName>().unwrap().is_light());
+    }
+
+    /// A save writes what changed since the file was loaded. The theme `auto`
+    /// came to must not count, or the first save of any setting would
+    /// replace `auto` with it.
+    #[test]
+    fn saving_keeps_auto_rather_than_the_theme_it_picked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\ntheme = \"auto\"\ntheme_dark = \"Nord\"\n").unwrap();
+
+        let mut c = Config::load_from_path(&path);
+        c.set_background_is_light(Some(true));
+        assert_eq!(c.theme_name(), ThemeName::GitHubLight);
+        c.set_outline_width(33).unwrap();
+
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("theme = \"auto\""), "{saved}");
+        assert!(saved.contains("theme_dark = \"Nord\""), "{saved}");
+        assert!(!saved.contains("GitHubLight"), "{saved}");
+        assert!(!saved.contains("theme_light"), "{saved}");
+        assert!(saved.contains("outline_width = 33"), "{saved}");
+    }
+
+    #[test]
+    fn choosing_a_theme_replaces_auto() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\ntheme = \"auto\"\n").unwrap();
+
+        let mut c = Config::load_from_path(&path);
+        c.set_theme(ThemeName::Nord).unwrap();
+
+        let loaded = Config::load_from_path(&path);
+        assert!(!loaded.theme_is_auto());
+        assert_eq!(loaded.theme_name(), ThemeName::Nord);
     }
 
     // ---------- TOML round-trip ----------

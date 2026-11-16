@@ -1,4 +1,30 @@
+use std::io::IsTerminal;
+use std::time::Duration;
 use supports_color::{Stream, on};
+use terminal_colorsaurus::{QueryOptions, ThemeMode};
+
+/// How long to wait for the terminal to report its colors. A terminal that
+/// does not support the query is normally told apart sooner; this bounds the
+/// rest, such as a slow SSH link, which then gets the fallback theme.
+const BACKGROUND_QUERY_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Whether the terminal's background is light, asked of the terminal with an
+/// OSC 11 query. `None` when that cannot be told: output is not a terminal,
+/// there is no controlling terminal, the terminal (or the multiplexer or
+/// shell in between) does not answer in time, or `TERM=dumb`. Call it before
+/// the terminal goes into raw mode, since it reads the terminal's reply.
+pub fn background_is_light() -> Option<bool> {
+    if !std::io::stdout().is_terminal() {
+        return None;
+    }
+    let mut options = QueryOptions::default();
+    options.timeout = BACKGROUND_QUERY_TIMEOUT;
+    match terminal_colorsaurus::theme_mode(options) {
+        Ok(ThemeMode::Light) => Some(true),
+        Ok(ThemeMode::Dark) => Some(false),
+        Err(_) => None,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ColorMode {
