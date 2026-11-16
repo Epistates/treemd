@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-16
+
+Two opt-in additions and a Mermaid fix. `theme = "auto"` follows the terminal's light or dark background, and `ui.outline_popup = true` swaps the sidebar for a popup over the full-width document. Neither is on by default, so nothing changes until you turn it on. Mermaid diagrams now scroll with the text and stay visible in tmux.
+
 ### Added
 
 - **The outline as a popup** (`ui.outline_popup = true`). The content takes the full width and shows the whole document; `Tab` or `w` opens the outline centered over it. Moving through the outline scrolls the document to each heading, a quarter of the screen below the top so what leads to it stays in view, and highlights its section. `Enter` stays there, the highlight lasting a moment longer; `Tab` or `Esc` goes back to where the document was. The sidebar is unchanged and stays the default
@@ -18,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mermaid diagrams scroll with the text.** A diagram vanished as soon as its top scrolled off, and every scroll step that changed how much of it was visible resized, re-encoded and sent it to the terminal again. A diagram is now encoded once, on the diagram thread, and placed by row: through kitty's Unicode placeholders it is sent once and moves as text, with the rows above the pane cut off
 - **Diagrams are sent compressed and no larger than the screen.** Through tmux a full-width diagram was tens of megabytes of raw pixels, which held up the UI while it was written and sometimes never appeared. Kitty's `o=z` compression is used where the terminal answers for it, and a diagram is fitted to the pane's height: a diagram that took 10.5 MB takes 0.34 MB
 - **Images stay visible inside tmux.** A diagram could stay blank, or lose most of itself while scrolling, until something made tmux redraw. tmux drops the combining characters that tell the terminal which image row a kitty placeholder cell is when it passes cells on one by one, though it keeps them in its copy of the screen. Each frame is now one synchronized update (mode 2026), at the end of which tmux redraws the pane in full, marks included; in the same setup, scrolling text also sends a quarter of the bytes it did
+
+### Changed
+
+- **Dependencies are updated** to their latest compatible versions, including resvg 0.49. `unicode-width` stays at 0.2.2: 0.2.3 counts the half-width katakana sound marks as one column, and the layout then counts them twice
 
 ## [0.10.0] - 2026-10-18
 
