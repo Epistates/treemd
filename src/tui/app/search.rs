@@ -29,6 +29,15 @@ pub struct DocSearchState {
 }
 
 impl App {
+    /// Drop the outline search, showing the whole outline again.
+    pub(super) fn clear_outline_search(&mut self) {
+        if self.outline_search.is_on() {
+            self.search_query.clear();
+            self.filter_outline();
+            self.outline_search = OutlineSearch::Off;
+        }
+    }
+
     /// With an outline search applied, select the next match, or the
     /// previous when not `forward`, wrapping around. Whether it did.
     pub(super) fn cycle_search_results(&mut self, forward: bool) -> bool {

@@ -170,7 +170,19 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
 
         if needs_redraw {
             app.prepare_iterm_animation_frame();
-            let draw_result = terminal.draw(|frame| ui::render(frame, &mut app));
+            // Each frame is one synchronized update. Besides not tearing, it
+            // keeps images in tmux: tmux passes cells on one by one without
+            // the marks that place a kitty image's rows, and only redraws the
+            // pane in full, marks and all, when an update like this ends.
+            crossterm::queue!(
+                terminal.backend_mut(),
+                crossterm::terminal::BeginSynchronizedUpdate
+            )?;
+            let draw_result = terminal.draw(|frame| ui::render(frame, &mut app)).map(drop);
+            crossterm::execute!(
+                terminal.backend_mut(),
+                crossterm::terminal::EndSynchronizedUpdate
+            )?;
             draw_result?;
 
             let mut output = stdout();
@@ -238,6 +250,9 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         // Wake when a timed status message is due to go, so it goes then
         // rather than at the next keypress.
         if let Some(remaining) = app.status_message_expires_in() {
+            poll_timeout = poll_timeout.min(remaining.max(Duration::from_millis(1)));
+        }
+        if let Some(remaining) = app.section_highlight_expires_in() {
             poll_timeout = poll_timeout.min(remaining.max(Duration::from_millis(1)));
         }
         let event_ready = tty::poll_event(poll_timeout)?;
@@ -322,7 +337,9 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
             if app.is_image_modal_open() && app.image_modal_frame_count() > 1 {
                 needs_redraw = true;
             }
-            if app.status_message_expires_in() == Some(Duration::ZERO) {
+            if app.status_message_expires_in() == Some(Duration::ZERO)
+                || app.section_highlight_expires_in() == Some(Duration::ZERO)
+            {
                 needs_redraw = true;
             }
             continue;

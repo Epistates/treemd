@@ -27,6 +27,7 @@ mod file_picker;
 mod images;
 mod navigation;
 mod outline;
+mod outline_popup;
 mod palette;
 mod search;
 
@@ -221,6 +222,16 @@ pub struct App {
     pub search_query: String,
     pub highlighter: SyntaxHighlighter,
     pub show_outline: bool,
+    /// Whether the outline is a popup over the whole document rather than a
+    /// sidebar. `show_outline` then says whether the popup is open.
+    pub outline_popup: bool,
+    /// The row the whole document was scrolled to when the popup opened.
+    popup_return_row: usize,
+    /// Where to scroll the whole document once it is laid out after the popup closes.
+    pending_popup_scroll: Option<outline_popup::PopupScroll>,
+    /// The rows of the section chosen in the outline popup, highlighted
+    /// while it is open, or until the instant after a jump.
+    section_highlight: Option<(std::ops::Range<usize>, Option<std::time::Instant>)>,
     pub show_heading_markers: bool, // Show # prefixes in outline sidebar
     pub code_fences: crate::config::CodeFences, // How to delimit fenced code blocks
     /// Whether terminal mouse capture is active. When on, the scroll wheel drives
@@ -373,7 +384,9 @@ pub struct App {
 
     // Mermaid diagram rendering cache: source hash → rendered protocol
     #[cfg(all(feature = "mermaid", unix))]
-    pub(crate) mermaid_protocol_cache: IndexMap<u64, AsyncProtocol>,
+    /// Each diagram encoded once at its natural size, in rows, so scrolling
+    /// only moves it: kitty sends the image once and places it by text.
+    pub(crate) mermaid_protocol_cache: IndexMap<u64, ratatui_image::sliced::SlicedProtocol>,
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_render_errors: HashMap<u64, String>,
     /// Lays diagrams out off the UI thread; started by the first diagram.
@@ -384,9 +397,9 @@ pub struct App {
     pub(crate) mermaid_pending: HashSet<u64>,
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_last_render_width: u32,
-    /// Pixel dimensions (width, height) of each rendered mermaid image, keyed by source hash.
+    /// Whether diagrams were last drawn for a dark theme.
     #[cfg(all(feature = "mermaid", unix))]
-    pub mermaid_image_dims: HashMap<u64, (u32, u32)>,
+    pub mermaid_last_dark: bool,
     /// Terminal row count for each rendered mermaid image, derived from pixel height / font height.
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_placeholder_rows: HashMap<u64, usize>,
@@ -424,7 +437,7 @@ impl App {
 
         // Add document overview entry if there's preamble content or no headings
         let has_preamble = Self::has_preamble_content(&document);
-        if has_preamble || document.headings.is_empty() {
+        if has_preamble || document.headings.is_empty() || config.ui.outline_popup {
             outline_items.insert(
                 0,
                 OutlineItem {
@@ -502,7 +515,11 @@ impl App {
             tree,
             outline_state,
             outline_scroll_state: ScrollbarState::new(outline_items.len()),
-            focus: Focus::Outline,
+            focus: if config.ui.outline_popup {
+                Focus::Content
+            } else {
+                Focus::Outline
+            },
             outline_items,
             content_scroll: 0,
             content_scroll_state: ScrollbarState::new(content_lines),
@@ -521,7 +538,11 @@ impl App {
                 code_block_bg,
                 color_mode,
             ),
-            show_outline: true,
+            show_outline: !config.ui.outline_popup,
+            outline_popup: config.ui.outline_popup,
+            popup_return_row: 0,
+            pending_popup_scroll: None,
+            section_highlight: None,
             show_heading_markers: config.ui.outline_heading_markers,
             code_fences: config.content.code_fences,
             mouse_capture: true,
@@ -641,7 +662,7 @@ impl App {
             #[cfg(all(feature = "mermaid", unix))]
             mermaid_last_render_width: 0,
             #[cfg(all(feature = "mermaid", unix))]
-            mermaid_image_dims: HashMap::new(),
+            mermaid_last_dark: false,
             #[cfg(all(feature = "mermaid", unix))]
             mermaid_placeholder_rows: HashMap::new(),
             #[cfg(all(feature = "mermaid", unix))]
@@ -898,7 +919,12 @@ impl App {
         });
         let selection_changed = current_selection != self.previous_selection;
 
-        if selection_changed {
+        // In popup mode the same document stays on screen and the popup only
+        // scrolls it, so its elements need indexing only on the first frame.
+        if selection_changed && self.outline_popup && self.previous_selection.is_some() {
+            self.previous_selection = current_selection;
+            self.scroll_to_popup_selection();
+        } else if selection_changed {
             // Reset content scroll when selection changes
             self.content_scroll = 0;
             self.previous_selection = current_selection;
@@ -992,6 +1018,12 @@ impl App {
             return;
         }
 
+        // With no sidebar to move to, Tab opens and closes the popup
+        if self.outline_popup {
+            self.toggle_outline();
+            return;
+        }
+
         if self.show_outline {
             self.focus = match self.focus {
                 Focus::Outline => Focus::Content,
@@ -1008,6 +1040,11 @@ impl App {
         }
 
         // Same as toggle_focus when not in locked search state
+        if self.outline_popup {
+            self.toggle_outline();
+            return;
+        }
+
         if self.show_outline {
             self.focus = match self.focus {
                 Focus::Outline => Focus::Content,
@@ -1093,6 +1130,11 @@ impl App {
 
     /// Get the content for the currently selected section, or the full document if no heading is selected.
     fn current_section_content(&self) -> String {
+        // In popup mode the content is always the whole document: moving
+        // in the popup scrolls it instead of switching sections.
+        if self.outline_popup {
+            return self.document.content.clone();
+        }
         self.selected_heading_index()
             .and_then(|idx| self.document.extract_section_at_index(idx))
             .unwrap_or_else(|| self.document.content.clone())

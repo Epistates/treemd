@@ -1,6 +1,6 @@
 [package]
 name = "treemd"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 authors = ["epistates, inc. <nick@epistates.com>"]
 description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
@@ -104,6 +104,7 @@ notify = "8.2"
 # Open files in editor with line:column positioning
 opensesame = { version = "0.1.1", features = ["serde"] }
 github-slugger = "0.1.0"
+terminal-colorsaurus = "1.0.3"
 
 # Unix system calls for TTY handling
 [target.'cfg(unix)'.dependencies]

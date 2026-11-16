@@ -598,6 +598,15 @@ impl Theme {
         self.border_focused
     }
 
+    /// A translucent yellow behind a section, leaving its text as it is:
+    /// the one chosen in the outline popup, and for a moment after a jump.
+    pub fn section_highlight_style(&self) -> Style {
+        if self.monochrome {
+            return Style::default().add_modifier(Modifier::UNDERLINED);
+        }
+        Style::default().bg(self.search_match_bg)
+    }
+
     /// Style for search matches (non-current)
     pub fn search_match_style(&self) -> Style {
         if self.monochrome {

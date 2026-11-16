@@ -78,6 +78,12 @@ The outline is on the left and the selected section on the right. `Tab`
 switches between them. Move through the outline with `j`/`k` and fold with
 `Enter`, or hide it with `w` and read the content alone.
 
+With `outline_popup = true` the content takes the full width and shows the
+whole document, and `Tab` (or `w`) opens the outline as a popup in the
+middle of the screen. Moving through it scrolls the document to each heading, with what
+comes before it still in view and the section highlighted. `Enter` stays
+there, `Esc` goes back.
+
 `/` searches the current section and `s` filters the outline. `f` lists the
 section's links and follows one by number. `i` steps through the section's
 elements one at a time: checkboxes, tables, links, code blocks, images and
@@ -216,7 +222,8 @@ section, `y` is quicker.
 Images render with the terminal's graphics protocol (kitty, iTerm2 or Sixel),
 and as half blocks where there isn't one. `Enter` on one in interactive mode
 shows it full screen, and animated GIFs play. On Linux and macOS, Mermaid
-diagrams render as images too. `--no-images` or `images.enabled = false` turns
+diagrams render as images too, in the theme's light or dark colors, and
+scroll with the text. `--no-images` or `images.enabled = false` turns
 images off.
 
 ## Themes
@@ -233,6 +240,32 @@ set one by name in the config or with `--theme`:
 Every theme's text meets WCAG contrast against what it's drawn on, in 24-bit
 color and in 256-color terminals, which treemd detects. Code blocks follow the
 theme unless `code_theme` names one.
+
+### Following the terminal's background
+
+Set `theme = "auto"` (or run with `--theme auto`) and treemd asks the terminal
+for its background color at startup, then uses `theme_light` on a light
+background and `theme_dark` on a dark one. The defaults are `GitHubLight` and
+`OceanDark`:
+
+```toml
+[ui]
+theme = "auto"
+theme_light = "SolarizedLight"
+theme_dark = "Nord"
+```
+
+It is off unless you set it. When the terminal does not answer, treemd uses
+`theme_dark`: that happens when output is not a terminal, with `TERM=dumb`, in
+GNU screen, and over a slow connection (the question is dropped after half a
+second, so a terminal that never replies delays startup by that much). Most
+terminals answer, and a piped document (`cat doc.md | treemd`) works. Whether
+tmux does depends on its version. The answer is read once at startup, so
+changing your terminal's light or dark mode while treemd runs does not change
+its theme.
+
+Choosing a theme with `t` saves that theme in place of `auto`. Set it back to
+`auto` to follow the terminal again.
 
 With [`NO_COLOR`](https://no-color.org) set, or `--color-mode none`, treemd
 draws without color: the selection, chips and current match in reverse video,
@@ -329,10 +362,13 @@ Every setting, with its default:
 
 ```toml
 [ui]
-theme = "OceanDark"             # see Themes
+theme = "OceanDark"             # see Themes; "auto" follows the terminal's background
+theme_light = "GitHubLight"     # the theme "auto" picks on a light background
+theme_dark = "OceanDark"        # ... on a dark one, or when the terminal does not say
 code_theme = "auto"             # follows the theme; or a syntect theme name
 outline_width = 30              # 20, 30 or 40
 outline_heading_markers = true  # the # markers in the outline
+outline_popup = false           # the outline as a popup over the whole document
 tree_style = "compact"          # "compact" or "spaced", for --tree
 
 [terminal]

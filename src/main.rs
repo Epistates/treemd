@@ -253,9 +253,12 @@ fn main() -> Result<()> {
         // Apply theme override from CLI if provided
         if let Some(ref theme_name) = args.theme {
             // A misspelled name used to fall back to Ocean Dark in silence.
-            if theme_name.parse::<treemd::tui::theme::ThemeName>().is_err() {
+            if !theme_name.eq_ignore_ascii_case(treemd::config::AUTO_THEME)
+                && theme_name.parse::<treemd::tui::theme::ThemeName>().is_err()
+            {
                 let names: Vec<&str> = treemd::tui::theme::ThemeName::all()
                     .map(|name| name.config_name())
+                    .chain([treemd::config::AUTO_THEME])
                     .collect();
                 eprintln!(
                     "error: unknown theme '{theme_name}'; themes are {}",
@@ -264,6 +267,12 @@ fn main() -> Result<()> {
                 process::exit(2);
             }
             config.ui.theme = theme_name.clone();
+        }
+
+        // `auto` follows the terminal's background. Ask now, before the
+        // terminal is set up, because the reply is read from it.
+        if config.theme_is_auto() {
+            config.set_background_is_light(treemd::tui::terminal_compat::background_is_light());
         }
 
         // Detect terminal capabilities and determine color mode

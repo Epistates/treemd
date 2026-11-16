@@ -77,7 +77,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     const MIN_TOTAL_WIDTH: u16 = MIN_OUTLINE_WIDTH + MIN_CONTENT_WIDTH;
 
     // Decide whether to show outline based on terminal width
-    let effective_show_outline = app.show_outline && content_area.width >= MIN_TOTAL_WIDTH;
+    let effective_show_outline =
+        app.show_outline && !app.outline_popup && content_area.width >= MIN_TOTAL_WIDTH;
 
     let content_chunks = if effective_show_outline {
         let content_width = 100 - app.outline_width;
@@ -104,6 +105,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else {
         // Full-width content
         render_content(frame, app, content_chunks[0]);
+    }
+
+    if app.is_outline_popup_open() {
+        render_outline_popup(frame, app, content_area);
     }
 
     // Render status bar at bottom
@@ -320,6 +325,24 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// The outline as a popup centered over the content, sized to its headings.
+fn render_outline_popup(frame: &mut Frame, app: &mut App, content_area: Rect) {
+    let rows = u16::try_from(app.outline_items.len()).unwrap_or(u16::MAX);
+    let max = util::popup_area(content_area, 60, 80, 30, 5);
+    let height = rows
+        .saturating_add(2)
+        .clamp(5, max.height.max(5))
+        .min(content_area.height);
+    let area = Rect {
+        y: content_area.y + (content_area.height - height) / 2,
+        height,
+        ..max
+    };
+    app.pane_areas.outline = Some(area);
+    frame.render_widget(Clear, area);
+    render_outline(frame, app, area);
+}
+
 fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
     use crate::tui::app::DOCUMENT_OVERVIEW;
     use util::build_highlighted_line;
@@ -428,6 +451,7 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
     let view = content_view(app, &theme, text_area.width);
     app.content_height = view.rows.len();
     app.apply_element_scroll();
+    app.apply_popup_scroll();
 
     // Clamp scroll so we stop when last line reaches viewport bottom
     let max_scroll = app.max_content_scroll();
@@ -445,6 +469,20 @@ fn render_content(frame: &mut Frame, app: &mut App, area: Rect) {
         .block(block)
         .style(theme.content_style());
     frame.render_widget(paragraph, area);
+
+    // The section chosen in the outline popup, or just jumped to
+    if let Some(rows) = app.section_highlight_rows() {
+        for row in rows.start.max(start)..rows.end.min(end) {
+            let line = Rect {
+                y: text_area.y + (row - start) as u16,
+                height: 1,
+                ..text_area
+            };
+            frame
+                .buffer_mut()
+                .set_style(line, theme.section_highlight_style());
+        }
+    }
 
     // Render inline images (first image in content)
     render_inline_images(frame, app, text_area);
@@ -717,8 +755,8 @@ fn render_inline_images(frame: &mut Frame, app: &mut App, area: Rect) {
 #[cfg(all(feature = "mermaid", unix))]
 fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
     use crate::tui::app::App as MermaidApp;
-    use crate::tui::interactive::{ElementType, mermaid_placeholder_lines};
-    use ratatui_image::{Resize, StatefulImage};
+    use crate::tui::interactive::ElementType;
+    use ratatui_image::sliced::{SignedPosition, SlicedImage};
 
     if app.image_modal.path.is_some() || !app.images_enabled {
         return;
@@ -730,12 +768,6 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Use full content width for mermaid diagrams (block-level elements)
     let image_width = inner.width.max(20);
-
-    // Font cell size in pixels, used for centering calculations
-    let font_size = app.picker.as_ref().map_or((8u32, 16u32), |p| {
-        let font_size = p.font_size();
-        (font_size.width as u32, font_size.height as u32)
-    });
 
     let selected_code_id = if app.mode == crate::tui::app::AppMode::Interactive {
         app.interactive_state.current_element().and_then(|elem| {
@@ -769,112 +801,71 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    for (elem_id, line_range, source) in &mermaid_elements {
-        let (line_start, line_end) = *line_range;
+    let scroll = app.content_scroll;
+    let viewport_end = scroll + usize::from(app.content_viewport_height);
 
-        if line_end.saturating_sub(line_start) < 3 {
-            continue;
-        }
+    for (elem_id, (line_start, line_end), source) in &mermaid_elements {
+        let (line_start, line_end) = (*line_start, *line_end);
 
-        let scroll = app.content_scroll;
-        let viewport_height = app.content_viewport_height as usize;
-        let viewport_end = scroll + viewport_height;
-
-        if line_end < scroll || line_start >= viewport_end {
+        if line_end.saturating_sub(line_start) < 3
+            || line_end <= scroll
+            || line_start >= viewport_end
+        {
             continue;
         }
 
         // Trigger rendering (caches on first call)
         let rendered = app.render_mermaid_if_needed(source, image_width);
-
-        // Skip when diagram top has scrolled above the viewport — let it scroll off
-        // naturally instead of pinning at y=0 and overlapping other content.
-        if line_start < scroll {
-            continue;
-        }
-
-        let y_offset = (line_start - scroll) as u16;
-        let image_y = inner.y + y_offset;
-        if image_y >= inner.bottom() {
-            continue;
-        }
-
-        let available_height = inner.bottom().saturating_sub(image_y);
-        if available_height < 3 {
-            continue;
-        }
-
-        // Dynamic max height: use pixel-accurate rows once the image has been rendered,
-        // fall back to the source-line heuristic on first load.
-        // `stable_height` is constant during scrolling (used for centering so the
-        // x-position doesn't jitter on every frame).  `image_height` clips to what
-        // actually fits in the viewport right now.
-        let max_image_height = {
-            let hash = MermaidApp::mermaid_source_hash(source);
-            app.mermaid_placeholder_rows
-                .get(&hash)
-                .copied()
-                .unwrap_or_else(|| mermaid_placeholder_lines(source))
-        } as u16;
-        let stable_height = max_image_height.min(inner.height);
-        let image_height = available_height.min(max_image_height);
         let hash = MermaidApp::mermaid_source_hash(source);
 
-        if rendered {
-            if let Some(protocol_state) = app.mermaid_protocol_cache.get_mut(&hash) {
-                let is_selected = selected_code_id == Some(*elem_id);
+        // Rows from the pane's top to the diagram's, negative once its top
+        // has scrolled off: the part still on screen is drawn, and the
+        // image moves with the text without being encoded again.
+        let offset = line_start as isize - scroll as isize;
+        let top = i16::try_from(offset).unwrap_or(i16::MIN);
 
-                // Compute the natural displayed size in terminal cells to enable centering.
-                // Resize::Scale uses fit_area_proportionally: ratio = min(avail_w/img_w, avail_h/img_h).
-                let (centered_x, centered_width) =
-                    if let Some(&(img_w, img_h)) = app.mermaid_image_dims.get(&hash) {
-                        if img_w > 0 && img_h > 0 {
-                            let avail_w_px = inner.width as u32 * font_size.0;
-                            // Use stable_height (constant during scroll) so centering x
-                            // doesn't jitter on every frame as the image enters the viewport.
-                            let avail_h_px = stable_height as u32 * font_size.1;
-                            let w_ratio = avail_w_px as f64 / img_w as f64;
-                            let h_ratio = avail_h_px as f64 / img_h as f64;
-                            let ratio = w_ratio.min(h_ratio);
-                            let disp_w_px = (img_w as f64 * ratio).round() as u32;
-                            // Round up to cell boundary
-                            let disp_w_cols = disp_w_px.div_ceil(font_size.0) as u16;
-                            let disp_w_cols = disp_w_cols.min(inner.width);
-                            let x_offset = (inner.width.saturating_sub(disp_w_cols)) / 2;
-                            (inner.x + x_offset, disp_w_cols)
-                        } else {
-                            (inner.x, image_width.min(inner.width))
-                        }
-                    } else {
-                        (inner.x, image_width.min(inner.width))
-                    };
+        if rendered && let Some(protocol) = app.mermaid_protocol_cache.get(&hash) {
+            let size = protocol.size();
+            let width = size.width.min(inner.width);
+            let left = (inner.width - width) / 2;
+            frame.render_widget(
+                SlicedImage::new(protocol, SignedPosition::from((left as i16, top))),
+                inner,
+            );
 
-                let image_area = Rect {
-                    x: centered_x,
-                    y: image_y,
-                    width: centered_width,
-                    height: image_height,
+            if selected_code_id == Some(*elem_id) {
+                // A frame around the part of the diagram on screen
+                let first = offset.max(0) as u16;
+                let last = (offset + size.height as isize).min(inner.height as isize) as u16;
+                let border_area = Rect {
+                    x: inner.x + left,
+                    y: inner.y + first,
+                    width,
+                    height: last.saturating_sub(first),
                 };
-
-                let render_area = if is_selected {
-                    let border_style = theme.marker_style();
-
-                    let border = Block::default()
+                frame.render_widget(
+                    Block::default()
                         .borders(Borders::ALL)
-                        .border_style(border_style)
+                        .border_style(theme.marker_style())
                         .title(" ▶ Mermaid ")
-                        .title_alignment(ratatui::layout::Alignment::Left);
-
-                    frame.render_widget(border.clone(), image_area);
-                    border.inner(image_area)
-                } else {
-                    image_area
-                };
-
-                let img_widget = StatefulImage::new().resize(Resize::Scale(None));
-                frame.render_stateful_widget(img_widget, render_area, protocol_state);
+                        .title_alignment(ratatui::layout::Alignment::Left),
+                    border_area,
+                );
             }
-        } else if let Some(error) = app.mermaid_render_errors.get(&hash) {
+            continue;
+        }
+
+        // A status line where the diagram goes, while its top is on screen
+        if offset < 0 {
+            continue;
+        }
+        let line_area = Rect {
+            x: inner.x,
+            y: inner.y + offset as u16,
+            width: inner.width,
+            height: 1,
+        };
+        if let Some(error) = app.mermaid_render_errors.get(&hash) {
             let prefix = "⚠ mermaid render failed: ";
             let max_msg_len = (inner.width as usize).saturating_sub(prefix.len());
             let truncated = util::truncate_with_ellipsis(error, max_msg_len);
@@ -885,25 +876,13 @@ fn render_mermaid_images(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(Color::DarkGray),
                 ),
             ]);
-            let error_area = Rect {
-                x: inner.x,
-                y: image_y,
-                width: inner.width,
-                height: 1,
-            };
-            frame.render_widget(Paragraph::new(error_line), error_area);
+            frame.render_widget(Paragraph::new(error_line), line_area);
         } else if app.mermaid_pending.contains(&hash) {
             let pending_line = Line::from(Span::styled(
                 "⧗ rendering mermaid diagram…",
                 Style::default().fg(Color::DarkGray),
             ));
-            let pending_area = Rect {
-                x: inner.x,
-                y: image_y,
-                width: inner.width,
-                height: 1,
-            };
-            frame.render_widget(Paragraph::new(pending_line), pending_area);
+            frame.render_widget(Paragraph::new(pending_line), line_area);
         }
     }
 }
@@ -1214,6 +1193,13 @@ fn footer_hints(app: &App) -> Vec<Hint> {
             Keys(M::Normal, &[ExitMode], "clear"),
         ],
         M::Normal => match app.focus {
+            Focus::Outline if app.is_outline_popup_open() => vec![
+                Keys(M::Normal, &[Next, Previous], "move"),
+                Keys(M::Normal, &[ToggleExpand], "jump"),
+                Keys(M::Normal, &[Collapse, Expand], "fold"),
+                Keys(M::Normal, &[EnterSearchMode], "filter"),
+                Keys(M::Normal, &[ToggleFocus, ExitMode], "close"),
+            ],
             Focus::Outline => vec![
                 Keys(M::Normal, &[Next, Previous], "move"),
                 Keys(M::Normal, &[ToggleExpand], "fold"),
@@ -3545,6 +3531,137 @@ mod screen_tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    fn popup_app_with(md: &str) -> App {
+        let mut config = crate::Config::default();
+        config.ui.outline_popup = true;
+        App::new(
+            crate::parser::parse_markdown(md),
+            "t.md".into(),
+            std::path::PathBuf::from("<stdin>"),
+            config,
+            ColorMode::Rgb,
+            false,
+        )
+    }
+
+    /// Moving in the outline popup scrolls the whole document to the heading,
+    /// with some of what comes before it above and its section highlighted;
+    /// Enter keeps it there, highlighted for a moment longer.
+    #[test]
+    fn the_outline_popup_scrolls_to_a_heading_with_context_and_highlights_it() {
+        let mut md = String::new();
+        for section in ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"] {
+            md.push_str(&format!("# {section}\n\n"));
+            for line in 0..20 {
+                md.push_str(&format!("{section} line {line}\n\n"));
+            }
+        }
+        let mut app = popup_app_with(&md);
+        draw(&mut app, 80, 30);
+
+        app.execute_action(Action::ToggleOutline);
+        draw(&mut app, 80, 30);
+        // The popup opens on the heading at the top of the screen
+        assert_eq!(app.selected_heading_text(), Some("Alpha"));
+        app.execute_action(Action::Next);
+        app.execute_action(Action::Next);
+        assert_eq!(app.selected_heading_text(), Some("Gamma"));
+        draw(&mut app, 80, 30);
+        // While choosing, the section behind the popup is highlighted, untimed
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let preview: Vec<String> = (0..30)
+            .map(|y| {
+                (0..80)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+        let gamma = preview
+            .iter()
+            .position(|row| row.trim_start_matches('│').trim().starts_with("Gamma"))
+            .expect("Gamma behind the popup");
+        assert_eq!(
+            terminal.backend().buffer()[(2, gamma as u16)].bg,
+            app.theme.search_match_bg
+        );
+        assert_eq!(app.section_highlight_expires_in(), None);
+        // The whole document, scrolled so Gamma sits a little below the top
+        let row_of = |screen: &[String], text: &str| {
+            screen
+                .iter()
+                .position(|row| row.trim_start_matches('│').trim().starts_with(text))
+        };
+        app.execute_action(Action::ToggleExpand);
+        let screen = draw(&mut app, 80, 30);
+        let gamma = row_of(&screen, "Gamma").expect("Gamma on screen");
+        assert!(gamma > 3, "context above Gamma:\n{}", screen.join("\n"));
+        assert!(
+            screen[..gamma].iter().any(|row| row.contains("Beta line")),
+            "Beta's text above Gamma:\n{}",
+            screen.join("\n")
+        );
+
+        // Highlighted, in translucent yellow, for a moment
+        assert!(app.section_highlight_expires_in().is_some());
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let x = screen[gamma]
+            .find("Gamma")
+            .map(|b| screen[gamma][..b].chars().count())
+            .unwrap();
+        assert_eq!(
+            buffer[(x as u16, gamma as u16)].bg,
+            app.theme.search_match_bg
+        );
+    }
+
+    /// The whole section is highlighted: its text and subsections, not what
+    /// comes before it or the next heading at its level.
+    #[test]
+    fn the_outline_popup_highlights_the_whole_section() {
+        let mut app =
+            popup_app_with("# A\n\nbefore\n\n# B\n\nbody\n\n## B1\n\nsub\n\n# C\n\nafter\n");
+        draw(&mut app, 80, 30);
+        app.execute_action(Action::ToggleOutline);
+        assert_eq!(app.selected_heading_text(), Some("A"));
+        app.execute_action(Action::Next);
+        assert_eq!(app.selected_heading_text(), Some("B"));
+        draw(&mut app, 80, 30);
+        app.execute_action(Action::ToggleExpand);
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let tinted = |text: &str| {
+            let y = (0..30u16)
+                .find(|&y| {
+                    let row: String = (0..80)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect();
+                    row.trim_start_matches('│').trim().starts_with(text)
+                })
+                .unwrap_or_else(|| panic!("{text} on screen"));
+            buffer[(2, y)].bg == app.theme.search_match_bg
+        };
+        assert!(tinted("B") && tinted("body") && tinted("B1") && tinted("sub"));
+        assert!(!tinted("before") && !tinted("C") && !tinted("after"));
+    }
+
+    /// Esc leaves no section highlighted.
+    #[test]
+    fn escaping_the_outline_popup_clears_the_highlight() {
+        let mut app = popup_app_with("# A\n\na\n\n# B\n\nb\n");
+        draw(&mut app, 80, 30);
+        app.execute_action(Action::ToggleOutline);
+        app.execute_action(Action::Next);
+        draw(&mut app, 80, 30);
+        assert!(app.section_highlight_rows().is_some());
+        app.execute_action(Action::ExitMode);
+        draw(&mut app, 80, 30);
+        assert!(app.section_highlight_rows().is_none());
     }
 
     fn long_paragraph(words: usize) -> String {

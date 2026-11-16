@@ -22,12 +22,30 @@ const MAX_SOURCE_BYTES: usize = 32 * 1024;
 pub struct MermaidResult {
     pub hash: u64,
     pub width: u32,
-    pub image: Result<DynamicImage, String>,
+    /// Encoded for the terminal once, here on the worker, so the UI thread
+    /// only places it.
+    pub diagram: Result<ratatui_image::sliced::SlicedProtocol, String>,
+}
+
+/// How a diagram is drawn: the pane it is for and the theme it sits in.
+pub struct MermaidRequest<'a> {
+    pub hash: u64,
+    pub source: &'a str,
+    /// The pane's width in pixels.
+    pub width: u32,
+    /// The most rows it may take, so it fits on one screen.
+    pub max_rows: u16,
+    /// Draw it for a dark background.
+    pub dark: bool,
+    pub picker: &'a ratatui_image::picker::Picker,
 }
 
 struct MermaidJob {
     hash: u64,
     width: u32,
+    max_rows: u16,
+    dark: bool,
+    picker: ratatui_image::picker::Picker,
     source: String,
 }
 
@@ -60,11 +78,12 @@ impl MermaidWorker {
                     if job.width != current_width.load(std::sync::atomic::Ordering::Relaxed) {
                         continue;
                     }
-                    let image = render_mermaid_to_image(&job.source, job.width);
+                    let diagram = render_mermaid_to_image(&job.source, job.width, job.dark)
+                        .and_then(|image| encode(&job.picker, image, job.max_rows));
                     let result = MermaidResult {
                         hash: job.hash,
                         width: job.width,
-                        image,
+                        diagram,
                     };
                     if result_tx.send(result).is_err() {
                         break;
@@ -78,14 +97,17 @@ impl MermaidWorker {
         }
     }
 
-    /// Queue a diagram, identified by `hash`, for drawing at `width` pixels.
-    pub fn request(&self, hash: u64, source: &str, width: u32) {
+    /// Queue a diagram for drawing at `request.width` pixels.
+    pub fn request(&self, request: MermaidRequest) {
         self.width
-            .store(width, std::sync::atomic::Ordering::Relaxed);
+            .store(request.width, std::sync::atomic::Ordering::Relaxed);
         let _ = self.jobs.send(MermaidJob {
-            hash,
-            width,
-            source: source.to_string(),
+            hash: request.hash,
+            width: request.width,
+            max_rows: request.max_rows,
+            dark: request.dark,
+            picker: request.picker.clone(),
+            source: request.source.to_string(),
         });
     }
 
@@ -101,7 +123,11 @@ impl MermaidWorker {
 ///
 /// Both stages are third-party code that can panic on input it did not
 /// expect, so a panic becomes an error for this one diagram.
-pub fn render_mermaid_to_image(source: &str, target_width: u32) -> Result<DynamicImage, String> {
+pub fn render_mermaid_to_image(
+    source: &str,
+    target_width: u32,
+    dark: bool,
+) -> Result<DynamicImage, String> {
     if source.len() > MAX_SOURCE_BYTES {
         return Err(format!(
             "diagram is {} KB, over the {} KB limit",
@@ -110,15 +136,34 @@ pub fn render_mermaid_to_image(source: &str, target_width: u32) -> Result<Dynami
         ));
     }
     crate::tui::tty::catch_isolated(|| {
-        let svg = render_to_svg(source)?;
+        let svg = render_to_svg(source, dark)?;
         rasterize_svg(&svg, target_width)
     })
     .unwrap_or_else(|_| Err("mermaid renderer panicked".to_string()))
 }
 
+/// Encode a raster for the terminal at its natural size, made smaller if
+/// needed to fit in `max_rows`, so it is sent once and scrolls as text.
+fn encode(
+    picker: &ratatui_image::picker::Picker,
+    image: DynamicImage,
+    max_rows: u16,
+) -> Result<ratatui_image::sliced::SlicedProtocol, String> {
+    let natural = ratatui_image::Resize::natural_size(&image, picker.font_size());
+    let size = ratatui::layout::Size::new(natural.width, natural.height.min(max_rows.max(3)));
+    ratatui_image::sliced::SlicedProtocol::new(picker, image, Some(size)).map_err(|e| e.to_string())
+}
+
 /// Generate SVG from mermaid diagram source.
-fn render_to_svg(source: &str) -> Result<String, String> {
-    let opts = mermaid_rs_renderer::RenderOptions::default();
+fn render_to_svg(source: &str, dark: bool) -> Result<String, String> {
+    let opts = mermaid_rs_renderer::RenderOptions {
+        theme: if dark {
+            mermaid_rs_renderer::Theme::dark()
+        } else {
+            mermaid_rs_renderer::Theme::modern()
+        },
+        ..Default::default()
+    };
     mermaid_rs_renderer::render_with_options(source, opts)
         .map(|svg| fix_svg_font_families(&svg))
         .map_err(|e| format!("mermaid render error: {e}"))
@@ -234,7 +279,7 @@ mod tests {
     #[test]
     fn test_basic_flowchart() {
         let source = "graph TD\n    A --> B";
-        let result = render_mermaid_to_image(source, 400);
+        let result = render_mermaid_to_image(source, 400, false);
         assert!(result.is_ok(), "flowchart failed: {:?}", result.err());
         let img = result.unwrap();
         assert!(img.width() > 0);
@@ -244,7 +289,7 @@ mod tests {
     #[test]
     fn test_flowchart_keyword() {
         let source = "flowchart TD\n    A[Start] --> B{Decision?}\n    B -->|Yes| C[Ok]\n    B -->|No| D[Fix]";
-        let result = render_mermaid_to_image(source, 800);
+        let result = render_mermaid_to_image(source, 800, false);
         assert!(
             result.is_ok(),
             "flowchart keyword failed: {:?}",
@@ -280,8 +325,17 @@ mod tests {
     #[test]
     fn the_worker_returns_each_diagram_with_its_hash_and_width() {
         let worker = MermaidWorker::new();
-        worker.request(7, "graph TD\n    A --> B", 400);
-        worker.request(8, &"x".repeat(MAX_SOURCE_BYTES + 1), 400);
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let request = |hash, source| MermaidRequest {
+            hash,
+            source,
+            width: 400,
+            max_rows: 40,
+            dark: false,
+            picker: &picker,
+        };
+        worker.request(request(7, "graph TD\n    A --> B"));
+        worker.request(request(8, &"x".repeat(MAX_SOURCE_BYTES + 1)));
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut results = Vec::new();
@@ -293,9 +347,11 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert_eq!((results[0].hash, results[0].width), (7, 400));
-        assert!(results[0].image.is_ok());
+        assert!(results[0].diagram.is_ok());
         // Too large to lay out, refused rather than attempted.
-        let error = results[1].image.as_ref().unwrap_err();
+        let Err(error) = &results[1].diagram else {
+            panic!("an oversized diagram is refused");
+        };
         assert!(error.contains("limit"), "{error}");
     }
 
@@ -305,7 +361,7 @@ mod tests {
         for i in 0..60 {
             source.push_str(&format!("    N{i} --> N{}\n", i + 1));
         }
-        let img = render_mermaid_to_image(&source, 2400).expect("renders");
+        let img = render_mermaid_to_image(&source, 2400, false).expect("renders");
         let area = img.width() as f32 * img.height() as f32;
         assert!(
             area <= MAX_RASTER_PIXELS * 1.01,
@@ -319,7 +375,7 @@ mod tests {
     fn test_invalid_input() {
         // The renderer may accept some invalid inputs gracefully.
         // At minimum, it should not panic.
-        let result = render_mermaid_to_image("not a valid diagram $$$$", 400);
+        let result = render_mermaid_to_image("not a valid diagram $$$$", 400, false);
         // Either succeeds or returns an error — both are acceptable
         let _ = result;
     }

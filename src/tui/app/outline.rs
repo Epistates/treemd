@@ -103,7 +103,7 @@ impl App {
                 });
 
         let show_preamble = (!self.filter_by_todos
-            && (has_preamble || self.document.headings.is_empty()))
+            && (has_preamble || self.document.headings.is_empty() || self.outline_popup))
             || (self.filter_by_todos && preamble_has_todos);
 
         if show_preamble {
@@ -592,6 +592,14 @@ impl App {
     }
 
     pub fn toggle_outline(&mut self) {
+        if self.outline_popup {
+            if self.show_outline {
+                self.close_outline_popup(false);
+            } else {
+                self.open_outline_popup();
+            }
+            return;
+        }
         self.show_outline = !self.show_outline;
         if !self.show_outline {
             // When hiding outline, switch focus to content
