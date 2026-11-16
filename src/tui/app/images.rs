@@ -76,7 +76,13 @@ impl App {
             return Some(Picker::halfblocks());
         }
 
-        let mut picker = match Picker::from_query_stdio() {
+        // Compressed transmission: through tmux, sending the image is what
+        // takes the time, and diagrams (flat colour) shrink tens of times.
+        let options = ratatui_image::picker::cap_parser::QueryStdioOptions {
+            kitty_compression: true,
+            ..Default::default()
+        };
+        let mut picker = match Picker::from_query_stdio_with_options(options) {
             Ok(picker) => {
                 let font_size = picker.font_size();
                 // Reject malformed or implausible terminal responses before
@@ -399,10 +405,7 @@ impl App {
     /// Returns true if a cached protocol is available (either fresh or from prior render).
     #[cfg(all(feature = "mermaid", unix))]
     pub fn render_mermaid_if_needed(&mut self, source: &str, width: u16) -> bool {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        source.hash(&mut hasher);
-        let hash = hasher.finish();
+        let hash = Self::mermaid_source_hash(source);
 
         // Use picker's actual font width for accurate pixel calculation
         let font_width = self.picker.as_ref().map_or(8u16, |p| {
@@ -415,36 +418,46 @@ impl App {
         });
         let target_px = (width as u32) * (font_width as u32);
 
-        // Clear caches on render width change (re-rasterize at new size)
-        if target_px != self.mermaid_last_render_width {
+        // Clear caches on render width or theme change (re-rasterize)
+        let dark = !self.current_theme.is_light();
+        if target_px != self.mermaid_last_render_width || dark != self.mermaid_last_dark {
             self.mermaid_protocol_cache.clear();
             self.mermaid_render_errors.clear();
             // Anything still queued was for the old width, and its result is
             // dropped when it arrives.
             self.mermaid_pending.clear();
-            self.mermaid_image_dims.clear();
             self.mermaid_placeholder_rows.clear();
             self.mermaid_needs_reindex = false;
             self.mermaid_last_render_width = target_px;
+            self.mermaid_last_dark = dark;
         }
 
         // Already cached (success or failure)
         if self.mermaid_protocol_cache.contains_key(&hash) {
             return true;
         }
+        let Some(picker) = self.picker.as_ref() else {
+            return false;
+        };
         if self.mermaid_render_errors.contains_key(&hash)
             || self.mermaid_pending.contains(&hash)
-            || self.picker.is_none()
             || self.image_worker.is_none()
         {
             return false;
         }
 
-        // Laid out on the worker; the frame shows a placeholder until
-        // process_mermaid_results picks the image up.
+        // Laid out and encoded on the worker; the frame shows a placeholder
+        // until process_mermaid_results picks the diagram up.
         self.mermaid_worker
             .get_or_insert_with(crate::tui::mermaid::MermaidWorker::new)
-            .request(hash, source, target_px);
+            .request(crate::tui::mermaid::MermaidRequest {
+                hash,
+                source,
+                width: target_px,
+                max_rows: self.content_viewport_height,
+                dark,
+                picker,
+            });
         self.mermaid_pending.insert(hash);
         false
     }
@@ -466,26 +479,15 @@ impl App {
             {
                 continue;
             }
-            let img = match result.image {
-                Ok(img) => img,
+            let protocol = match result.diagram {
+                Ok(protocol) => protocol,
                 Err(e) => {
                     self.mermaid_render_errors.insert(result.hash, e);
                     continue;
                 }
             };
-            let (Some(picker), Some(worker)) = (self.picker.as_mut(), &self.image_worker) else {
-                continue;
-            };
-            let dims = (img.width(), img.height());
-            let font_h = match picker.font_size().height {
-                0 => 16u32,
-                h => u32::from(h),
-            };
-            let rows = dims.1.div_ceil(font_h) as usize;
-            let protocol = picker.new_resize_protocol(img);
-            self.mermaid_protocol_cache
-                .insert(result.hash, worker.wrap(protocol));
-            self.mermaid_image_dims.insert(result.hash, dims);
+            let rows = usize::from(protocol.size().height);
+            self.mermaid_protocol_cache.insert(result.hash, protocol);
             self.mermaid_placeholder_rows
                 .insert(result.hash, rows.max(1));
             self.mermaid_needs_reindex = true;
@@ -496,7 +498,6 @@ impl App {
             const MERMAID_CACHE_LIMIT: usize = 32;
             while self.mermaid_protocol_cache.len() > MERMAID_CACHE_LIMIT {
                 if let Some((evicted, _)) = self.mermaid_protocol_cache.shift_remove_index(0) {
-                    self.mermaid_image_dims.remove(&evicted);
                     self.mermaid_placeholder_rows.remove(&evicted);
                 }
             }
@@ -818,16 +819,6 @@ impl App {
             if result.is_some()
                 && let Some(state) = self
                     .image_protocol_cache
-                    .values_mut()
-                    .find(|state| state.matches(result.as_ref().expect("result is present")))
-            {
-                error = state.update(result.take().expect("result is present"));
-            }
-
-            #[cfg(all(feature = "mermaid", unix))]
-            if result.is_some()
-                && let Some(state) = self
-                    .mermaid_protocol_cache
                     .values_mut()
                     .find(|state| state.matches(result.as_ref().expect("result is present")))
             {

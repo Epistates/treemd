@@ -170,7 +170,19 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
 
         if needs_redraw {
             app.prepare_iterm_animation_frame();
-            let draw_result = terminal.draw(|frame| ui::render(frame, &mut app));
+            // Each frame is one synchronized update. Besides not tearing, it
+            // keeps images in tmux: tmux passes cells on one by one without
+            // the marks that place a kitty image's rows, and only redraws the
+            // pane in full, marks and all, when an update like this ends.
+            crossterm::queue!(
+                terminal.backend_mut(),
+                crossterm::terminal::BeginSynchronizedUpdate
+            )?;
+            let draw_result = terminal.draw(|frame| ui::render(frame, &mut app)).map(drop);
+            crossterm::execute!(
+                terminal.backend_mut(),
+                crossterm::terminal::EndSynchronizedUpdate
+            )?;
             draw_result?;
 
             let mut output = stdout();

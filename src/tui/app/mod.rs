@@ -384,7 +384,9 @@ pub struct App {
 
     // Mermaid diagram rendering cache: source hash → rendered protocol
     #[cfg(all(feature = "mermaid", unix))]
-    pub(crate) mermaid_protocol_cache: IndexMap<u64, AsyncProtocol>,
+    /// Each diagram encoded once at its natural size, in rows, so scrolling
+    /// only moves it: kitty sends the image once and places it by text.
+    pub(crate) mermaid_protocol_cache: IndexMap<u64, ratatui_image::sliced::SlicedProtocol>,
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_render_errors: HashMap<u64, String>,
     /// Lays diagrams out off the UI thread; started by the first diagram.
@@ -395,9 +397,9 @@ pub struct App {
     pub(crate) mermaid_pending: HashSet<u64>,
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_last_render_width: u32,
-    /// Pixel dimensions (width, height) of each rendered mermaid image, keyed by source hash.
+    /// Whether diagrams were last drawn for a dark theme.
     #[cfg(all(feature = "mermaid", unix))]
-    pub mermaid_image_dims: HashMap<u64, (u32, u32)>,
+    pub mermaid_last_dark: bool,
     /// Terminal row count for each rendered mermaid image, derived from pixel height / font height.
     #[cfg(all(feature = "mermaid", unix))]
     pub mermaid_placeholder_rows: HashMap<u64, usize>,
@@ -660,7 +662,7 @@ impl App {
             #[cfg(all(feature = "mermaid", unix))]
             mermaid_last_render_width: 0,
             #[cfg(all(feature = "mermaid", unix))]
-            mermaid_image_dims: HashMap::new(),
+            mermaid_last_dark: false,
             #[cfg(all(feature = "mermaid", unix))]
             mermaid_placeholder_rows: HashMap::new(),
             #[cfg(all(feature = "mermaid", unix))]
