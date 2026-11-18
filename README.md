@@ -4,6 +4,7 @@
 [![Documentation](https://docs.rs/treemd/badge.svg)](https://docs.rs/treemd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/epistates/treemd/rust.yml?branch=main)](https://github.com/epistates/treemd/actions)
+[![treemd on The Terminal Index](https://cli.masoko.net/badge/treemd.svg)](https://cli.masoko.net/tools/treemd/)
 
 Read markdown by its structure. treemd shows a document's headings as a tree
 you can fold and search, with the section you're on beside it, and gives the
